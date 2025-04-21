@@ -142,6 +142,9 @@ bool ReadFlowInput() {
         flowf >> flow_input.src >> flow_input.dst >> flow_input.pg >> flow_input.fsize >> flow_input.start_time;
         flow_input.idx = flow_id;
         flow_input.fsize = std::max(1u, flow_input.fsize);
+        //printf("flow %u: %u -> %u, pg: %u, fsize: %u, start_time: %.2f\n", flow_id,
+        //       flow_input.src, flow_input.dst, flow_input.pg, flow_input.fsize, flow_input.start_time);
+        fflush(stdout);
         assert(n.Get(flow_input.src)->GetNodeType() == 0 &&
                n.Get(flow_input.dst)->GetNodeType() == 0);
         return true;
@@ -249,6 +252,21 @@ void m_QP_rate_monitoring(FILE *fout_voq)
         Simulator::Schedule(NanoSeconds(server_rtt_mon_interval), &m_QP_rate_monitoring, fout_voq);  // every 10us
     }
     return;
+}
+
+void my_periodic_monitoring(Time interval) {
+    printf("Periodic monitoring at %lu\n", Simulator::Now().GetNanoSeconds());
+    //对于所有的DCI交换机，打印一些内容
+    for (const auto& node_info : Settings::nodeInfos) {
+        if (node_info.node_type == NodeInfo::NodeType::DCI_SWITCH) {
+            Ptr<Node> node = n.Get(node_info.id);
+            auto sw_node = DynamicCast<SwitchNode>(node);
+            //sw_node->m_mmu->m_wanRouting.print_status();
+        }
+    }
+    DynamicCast<SwitchNode>(n.Get(111))->m_mmu->printBufferInfo();
+    DynamicCast<SwitchNode>(n.Get(112))->m_mmu->printBufferInfo();
+    Simulator::Schedule(interval, &my_periodic_monitoring, interval);
 }
 
 void m_rx_periodic_monitoring(FILE *fout_uplink_rx,  FILE *fout_downlink_rx, FILE *fout_flow_rx) {
@@ -1245,7 +1263,7 @@ int main(int argc, char *argv[]) {
                 sw->m_mmu->ConfigHdrm(j, headroom);
             }
             sw->m_mmu->ConfigNPort(sw->GetNDevices() - 1);
-            sw->m_mmu->ConfigBufferSize(256 * 1024 * 1024);  // Magic Number
+            sw->m_mmu->ConfigBufferSize(128 * 1024 * 1024);  // Magic Number
             sw->m_mmu->node_id = sw->GetId();
             sw->m_mmu->InitSwitch();
 
@@ -1268,7 +1286,7 @@ int main(int argc, char *argv[]) {
                 sw->m_mmu->ConfigHdrm(j, 0);
             }
             sw->m_mmu->ConfigNPort(sw->GetNDevices() - 1);
-            sw->m_mmu->ConfigBufferSize(72 * 1024 * 1024);  // Magic Number
+            sw->m_mmu->ConfigBufferSize(60 * 1024 * 1024);  // Magic Number
             sw->m_mmu->node_id = sw->GetId();
             sw->m_mmu->InitSwitch();
 
@@ -1516,6 +1534,7 @@ int main(int argc, char *argv[]) {
 
     Simulator::Schedule(Seconds(flowgen_start_time), &m_rx_periodic_monitoring, uplink_rx_output,
                         downlink_rx_output, flow_rx_output);
+    Simulator::Schedule(Seconds(flowgen_start_time), &my_periodic_monitoring, MicroSeconds(1000));
     Simulator::Schedule(Seconds(flowgen_start_time), &m_QP_rate_monitoring, bps_tx_output);
 
     

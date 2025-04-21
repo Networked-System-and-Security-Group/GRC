@@ -40,7 +40,7 @@ class PfcEvent:
     type: int
 
 @dataclass
-class FlowInput:
+class FlowInfo:
     src: int
     dst: int
     fsize: int
@@ -50,9 +50,23 @@ class FlowInput:
     passed_nodes: List[int]
     std_fct: float
     fct_slowdown: Union[float, None] = field(init=False)
+    src_as: Union[float, None] = field(init=False)
+    dst_as: Union[float, None] = field(init=False)
 
     def __post_init__(self):
         self.fct_slowdown = (self.finish_time - self.start_time) / self.std_fct
+        def get_as(id):
+            if id in range(0, 16):
+                return 0
+            elif id in range(37, 53):
+                return 1
+            elif id in range(74, 90):
+                return 2
+            else:
+                print(f'Unknown AS for id {id}')
+                assert(False)
+        self.src_as = get_as(self.src)
+        self.dst_as = get_as(self.dst)
 
 def plot_cdf(data, label=None, color=None):
     """
@@ -75,9 +89,12 @@ class Analyser:
         self.id = id = str(id)
         self.dir = get_dir_by_id(self.id)
         self.flows = []
+        self.id_to_flow:dict[int, FlowInfo] = {}
         self.intra_flows = []
         self.inter_flows = []
         self.rtt_info:pd.DataFrame = None #timestamp_ns,switch_id,dst_as,next_hop,rtt1_ms,rtt2_ms,timeout_count
+        self.drop_info:pd.DataFrame = None #timestamp_ns,switch_id,next_hop,flow_id,seq_num,type
+        
 
     def plot_rtt(self, switch_id, dst_as):
         self.__read_rtt_info()
@@ -101,32 +118,6 @@ class Analyser:
         fig.tight_layout()
         save_path = op.join(op.dirname(__file__), f'figures/{self.id}-RTT{switch_id}-{dst_as}.png')
         fig.savefig(save_path, dpi=300)
-
-
-    def print_info(self):
-        print(f'===ID:{self.id}===')
-
-    def get_avg_fct(self):
-        self.__read_flow_info()
-        overall = np.average([f.fct_slowdown for f in self.flows])
-        intra = np.average([f.fct_slowdown for f in self.intra_flows])
-        inter = np.average([f.fct_slowdown for f in self.inter_flows])
-        return overall, intra, inter
-    
-    def get_p99_fct(self):
-        self.__read_flow_info()
-        overall = np.percentile([f.fct_slowdown for f in self.flows], 99)
-        intra = np.percentile([f.fct_slowdown for f in self.intra_flows], 99)
-        inter = np.percentile([f.fct_slowdown for f in self.inter_flows], 99)
-        return overall, intra, inter
-
-    def __read_flow_info(self):
-        if len(self.flows) != 0:
-            return
-        with open(op.join(self.dir, 'flow_output'), 'r') as f:
-            self.flows = [FlowInput(**item) for item in json.load(f)]
-            self.intra_flows = list(filter(lambda x : len(x.passed_nodes) <= 5, self.flows))
-            self.inter_flows = list(filter(lambda x : len(x.passed_nodes) > 5, self.flows))
     
     def plot_fct_cdf(self, save_path=''):
         """
@@ -172,10 +163,70 @@ class Analyser:
             plt.savefig(save_path, bbox_inches='tight', dpi=300)
             print(f'保存至 {op.abspath(save_path)}')
 
+    def plot_drop(self, switch_id, src_as, dst_as):
+        #绘制src_as到dst_as在switch_id上的丢包散点图
+        self.__read_drop_info()
+        drop_info = self.drop_info[(self.drop_info['switch_id'] == switch_id) 
+                                   & (self.drop_info['src_as'] == src_as) 
+                                   & (self.drop_info['dst_as'] == dst_as)]
+        if len(drop_info) == 0:
+            print(f'No drop info for switch {switch_id} and dst_as {dst_as}')
+            return
+        fig, ax = plt.subplots(figsize=(8, 5))
+        times = drop_info['timestamp_ns']
+        ax.scatter(times, np.zeros_like(times), alpha=0.6, edgecolors='w', s=50)
+        
+        ax.set_xlabel('Timestamp (ns)', fontsize=12)
+        ax.set_title(f'Drop Events for Switch {switch_id}, Src AS {src_as}, Dst AS {dst_as}', fontsize=14)
+        ax.grid(True, linestyle='--', alpha=0.7)
+        
+        fig.tight_layout()
+        save_path = op.join(op.dirname(__file__), f'figures/{self.id}-Drop{switch_id}-{src_as}-{dst_as}.png')
+        fig.savefig(save_path, dpi=300)
+        print(f'Drop scatter plot saved to {save_path}')
+        
+
+    def print_info(self):
+        print(f'===ID:{self.id}===')
+
+    def get_avg_fct(self):
+        self.__read_flow_info()
+        overall = np.average([f.fct_slowdown for f in self.flows])
+        intra = np.average([f.fct_slowdown for f in self.intra_flows])
+        inter = np.average([f.fct_slowdown for f in self.inter_flows])
+        return overall, intra, inter
+    
+    def get_p99_fct(self):
+        self.__read_flow_info()
+        overall = np.percentile([f.fct_slowdown for f in self.flows], 99)
+        intra = np.percentile([f.fct_slowdown for f in self.intra_flows], 99)
+        inter = np.percentile([f.fct_slowdown for f in self.inter_flows], 99)
+        return overall, intra, inter
+
+
+
     def __read_rtt_info(self):
         if self.rtt_info is not None:
             return
         self.rtt_info = pd.read_csv(op.join(self.dir, 'rtt_log'))
+
+    def __read_flow_info(self):
+        if len(self.flows) != 0:
+            return
+        with open(op.join(self.dir, 'flow_output'), 'r') as f:
+            self.flows = [FlowInfo(**item) for item in json.load(f)]
+            self.id_to_flow = {f.flow_id: f for f in self.flows}
+            self.intra_flows = list(filter(lambda x : len(x.passed_nodes) <= 5, self.flows))
+            self.inter_flows = list(filter(lambda x : len(x.passed_nodes) > 5, self.flows))
+
+    def __read_drop_info(self):
+        self.__read_flow_info()
+        if self.drop_info is not None:
+            return
+        self.drop_info = pd.read_csv(op.join(self.dir, 'drop_log'))
+        self.drop_info['src_as'] = self.drop_info['flow_id'].apply(lambda x: self.id_to_flow[x].src_as if x in self.id_to_flow else None)
+        self.drop_info['dst_as'] = self.drop_info['flow_id'].apply(lambda x: self.id_to_flow[x].dst_as if x in self.id_to_flow else None)
+
 
 _instances = {}
 def get_analyser(id) -> Analyser:

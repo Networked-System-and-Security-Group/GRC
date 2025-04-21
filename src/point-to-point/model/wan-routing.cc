@@ -121,6 +121,11 @@ void WanRouting::HandleAckReceived(Ptr<Packet> p, CustomHeader& ch) {
     }
     uint32_t flow_hash_value = (Hash5Tuple(ch.dip, ch.sip, ch.ack.dport, ch.ack.sport, ch.ack.pg)); // 这里ack的源和目的地要反过来
     uint64_t flow_key = static_cast<uint64_t>(ch.sip) << 32 | flow_hash_value;
+    if (m_flowletTable.find(flow_key) == m_flowletTable.end()) {
+        //printf("Switch %u, flowlet not found\n", m_switch_id);
+        m_switchSendToDevCallback(p, ch);
+        return;
+    }
     auto& flowlet_item = m_flowletTable[flow_key];
     uint32_t out_port = flowlet_item.out_port;
     auto& rtt_monitor = m_rttTable[src_as][out_port];
@@ -137,16 +142,22 @@ void WanRouting::controlplane_logic() {
     }
     for (auto& [dst_as, port_map] : m_rttTable) {
         for (auto& [port, rtt_monitor] : port_map) {
+            try{
             fprintf(logfile::rtt_log, 
                 "%" PRIu64 ",%" PRIu32 ",%" PRIu32 ",%" PRIu32 ",%.3f,%.3f,%" PRIu32 "\n",  // 格式说明符
                 Simulator::Now().GetNanoSeconds(),          // 时间戳（纳秒）
                 m_switch_id,          // 交换机ID
                 dst_as,              // AS编号
-                Settings::if2id[Settings::nodeContainer.Get(m_switch_id)][port],               // 下一跳
+                Settings::if2id.at(Settings::nodeContainer.Get(m_switch_id)).at(port),               // 下一跳
                 rtt_monitor.estimated_rtt1.GetSeconds() * 1000.0,  // RTT1（毫秒，保留3位小数）
                 rtt_monitor.estimated_rtt2.GetSeconds() * 1000.0,  // RTT2（毫秒，保留3位小数）
                 rtt_monitor.entry_timeout_count                    // 超时计数
-            );
+            );}
+            catch (const std::exception& e) {
+                std::cout<<port;
+                fflush(stdout);
+                assert(false);
+            }
             rtt_monitor.entry_timeout_count = 0;
         }
     }

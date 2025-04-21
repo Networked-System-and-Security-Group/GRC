@@ -127,6 +127,27 @@ class SwitchMmu : public Object {
     CaverRouting m_caverRouting;
     HulaRouting m_hulaRouting;
     WanRouting m_wanRouting;
+    inline void printBufferInfo() {
+        // 打印当前时间和node_id
+        fprintf(logfile::wan_log, "Current Time: %.6fs\n", Simulator::Now().GetSeconds());
+        fprintf(logfile::wan_log, "Node ID: %d\n", node_id);
+        
+        // 输出 ingress 端口使用情况
+        fprintf(logfile::wan_log, "Ingress Port Usage (m_usedIngressPortBytes):\n");
+        for (uint32_t port = 0; port < pCnt; ++port) {
+            if (m_usedIngressPortBytes[port] > 0) {
+                fprintf(logfile::wan_log, "Port %u: %u bytes\n", port, m_usedIngressPortBytes[port]);
+            }
+        }
+        
+        // 输出 egress 端口使用情况
+        fprintf(logfile::wan_log, "Egress Port Usage (m_usedEgressPortBytes):\n");
+        for (uint32_t port = 0; port < pCnt; ++port) {
+            if (m_usedEgressPortBytes[port] > 0) {
+                fprintf(logfile::wan_log, "Port %u: %u bytes\n", port, m_usedEgressPortBytes[port]);
+            }
+        }
+    }
 
    private:
     bool m_PFCenabled;

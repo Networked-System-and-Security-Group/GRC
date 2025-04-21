@@ -43,6 +43,21 @@ public:
     void SetSwitchSendCallback(SwitchSendCallback switchSendCallback);  // set callback
     void SetSwitchSendToDevCallback(
         SwitchSendToDevCallback switchSendToDevCallback);  // set callback
+    inline void print_status() {
+        fprintf(logfile::wan_log, "Time: %.2fs, Switch ID: %u\n", Simulator::Now().GetSeconds(), m_switch_id);
+
+        // Clear expired flowlet entries
+        auto it = m_flowletTable.begin();
+        while (it != m_flowletTable.end()) {
+            if (Simulator::Now() - it->second.update_time > flowlet_elapsed_time) {
+            it = m_flowletTable.erase(it);
+            } else {
+            ++it;
+            }
+        }
+
+        fprintf(logfile::wan_log, "Flowlet Table Size: %zu\n", m_flowletTable.size());
+    }
     /*-----------*/
 private:
     SwitchSendCallback m_switchSendCallback;  // bound to SwitchNode::SwitchSend (for Request/UDP)
@@ -111,7 +126,7 @@ private:
         Time create_time;
         Time update_time;
     };
-    Time flowlet_elapsed_time = MilliSeconds(5);
+    Time flowlet_elapsed_time = MilliSeconds(10);
     std::map<uint64_t, FlowletItem> m_flowletTable;
 
     /************控制平面路由选择*********/
