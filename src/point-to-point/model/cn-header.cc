@@ -31,85 +31,38 @@ namespace ns3 {
 
 NS_OBJECT_ENSURE_REGISTERED (CnHeader);
 
-CnHeader::CnHeader (const uint16_t fid, uint8_t qIndex, uint8_t ecnbits, uint16_t qfb, uint16_t total)
-  : m_fid(fid), m_qIndex(qIndex), m_qfb(qfb), m_ecnBits(ecnbits), m_total(total)
-{
-  //NS_LOG_LOGIC("CN got the flow id " << std::hex << m_fid.hi << "+" << m_fid.lo << std::dec);
-}
-
-/*
-CnHeader::CnHeader (const uint16_t fid, uint8_t qIndex, uint8_t qfb)
-	: m_fid(fid), m_qIndex(qIndex), m_qfb(qfb), m_ecnBits(0)
-{
-	//NS_LOG_LOGIC("CN got the flow id " << std::hex << m_fid.hi << "+" << m_fid.lo << std::dec);
-}
-*/
-
-CnHeader::CnHeader ()
-  : m_fid(), m_qIndex(), m_qfb(0), m_ecnBits(0)
+CnHeader::CnHeader (uint16_t pg, uint16_t sport, uint16_t dport)
+  : m_pg (pg),
+    m_sport (sport),
+    m_dport (dport)
 {}
-
+CnHeader::CnHeader ()
+  : m_pg (0),
+    m_sport (0),
+    m_dport (0)
+{}
 CnHeader::~CnHeader ()
 {}
 
-void CnHeader::SetFlow (const uint16_t fid)
-{
-  m_fid = fid;
+void CnHeader::SetPG (uint16_t pg){
+  m_pg = pg;
+}
+void CnHeader::SetDport (uint16_t dport){
+  m_dport = dport;
+}
+void CnHeader::SetSport (uint16_t sport){
+  m_sport = sport;
+}
+uint16_t CnHeader::GetPG (void) const{
+  return m_pg;
+}
+uint16_t CnHeader::GetDport (void) const{
+  return m_dport;
+}
+uint16_t CnHeader::GetSport (void) const{
+  return m_sport;
 }
 
-void CnHeader::SetQindex (const uint8_t qIndex)
-{
-	m_qIndex = qIndex;
-}
-
-void CnHeader::SetQfb (uint16_t q)
-{
-  m_qfb = q;
-}
-
-void CnHeader::SetTotal (uint16_t total)
-{
-	m_total = total;
-}
-
-void CnHeader::SetECNBits (const uint8_t ecnbits)
-{
-	m_ecnBits = ecnbits;
-}
-
-
-uint16_t CnHeader::GetFlow () const
-{
-  return m_fid;
-}
-
-uint8_t CnHeader::GetQindex () const
-{
-	return m_qIndex;
-}
-
-uint16_t CnHeader::GetQfb () const
-{
-  return m_qfb;
-}
-
-uint16_t CnHeader::GetTotal() const
-{
-	return m_total;
-}
-
-uint8_t CnHeader::GetECNBits() const
-{
-	return m_ecnBits;
-}
-
-void CnHeader::SetSeq (const uint32_t seq){
-	m_seq = seq;
-}
-
-uint32_t CnHeader::GetSeq () const{
-	return m_seq;
-}
 TypeId 
 CnHeader::GetTypeId (void)
 {
@@ -124,14 +77,10 @@ CnHeader::GetInstanceTypeId (void) const
 {
   return GetTypeId ();
 }
-void CnHeader::Print (std::ostream &os) const
-{
-  //m_fid.Print(os);
-  os << " qFb=" << (unsigned) m_qfb << "/" << (unsigned) m_total;
-}
+
 uint32_t CnHeader::GetSerializedSize (void)  const
 {
-  return 8;
+  return 6;
 }
 void CnHeader::Serialize (Buffer::Iterator start)  const
 {
@@ -141,11 +90,10 @@ void CnHeader::Serialize (Buffer::Iterator start)  const
   //uint32_t lobyte = (m_qIndex &  0x00FFFFFFLLU) | (static_cast<uint32_t>(m_qfb)<<24);
   //start.WriteU64 (hibyte);
   //start.WriteU64 (lobyte);
-  start.WriteU8(m_qIndex);
-  start.WriteU16(m_fid);
-  start.WriteU8(m_ecnBits);
-  start.WriteU16(m_qfb);
-  start.WriteU16(m_total);
+  Buffer::Iterator i = start;
+  i.WriteU16(m_dport);
+  i.WriteU16(m_sport);
+  i.WriteU16(m_pg);
   //NS_LOG_LOGIC("CN Seriealized as " << std::hex << hibyte << "+" << lobyte << std::dec);
 }
 
@@ -159,19 +107,18 @@ uint32_t CnHeader::Deserialize (Buffer::Iterator start)
   //m_fid.lo = lobyte & 0x00FFFFFFFFFFFFFFLLU;
   
   //uint32_t lobyte = start.ReadU32();
-  
+  Buffer::Iterator i = start;
 
-  m_qIndex = start.ReadU8();
-  m_fid = start.ReadU16();
-  m_ecnBits = start.ReadU8();
-  m_qfb = start.ReadU16();
-  m_total = start.ReadU16();
+  m_dport = i.ReadU16();
+  m_sport = i.ReadU16();
+  m_pg = i.ReadU16();
 
   //m_qfb = static_cast<uint8_t>(lobyte>>24);
   //m_qIndex = lobyte & 0x00FFFFFFLLU;
 
   return GetSerializedSize ();
 }
-
+void CnHeader::Print (std::ostream &os) const
+{}
 
 }; // namespace ns3

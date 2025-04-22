@@ -3,6 +3,7 @@
 
 #include <ns3/node.h>
 #include <ns3/random-variable-stream.h>
+#include <ns3/settings.h>
 
 #include <list>
 #include <unordered_map>
@@ -128,24 +129,13 @@ class SwitchMmu : public Object {
     HulaRouting m_hulaRouting;
     WanRouting m_wanRouting;
     inline void printBufferInfo() {
-        // 打印当前时间和node_id
-        fprintf(logfile::wan_log, "Current Time: %.6fs\n", Simulator::Now().GetSeconds());
-        fprintf(logfile::wan_log, "Node ID: %d\n", node_id);
-        
-        // 输出 ingress 端口使用情况
-        fprintf(logfile::wan_log, "Ingress Port Usage (m_usedIngressPortBytes):\n");
-        for (uint32_t port = 0; port < pCnt; ++port) {
-            if (m_usedIngressPortBytes[port] > 0) {
-                fprintf(logfile::wan_log, "Port %u: %u bytes\n", port, m_usedIngressPortBytes[port]);
-            }
-        }
-        
-        // 输出 egress 端口使用情况
-        fprintf(logfile::wan_log, "Egress Port Usage (m_usedEgressPortBytes):\n");
-        for (uint32_t port = 0; port < pCnt; ++port) {
-            if (m_usedEgressPortBytes[port] > 0) {
-                fprintf(logfile::wan_log, "Port %u: %u bytes\n", port, m_usedEgressPortBytes[port]);
-            }
+        for (uint32_t port = 0; port < Settings::nodeContainer.Get(node_id)->GetNDevices(); ++port) {
+            fprintf(logfile::buffer_monitor, "%ld,%u,%u,%u,%u\n", 
+                Simulator::Now().GetNanoSeconds(), 
+                node_id, 
+                Settings::if2id[Settings::nodeContainer.Get(node_id)][port], 
+                m_usedIngressPortBytes[port], 
+                m_usedEgressPortBytes[port]);
         }
     }
 

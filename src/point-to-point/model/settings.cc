@@ -81,71 +81,39 @@ std::map<Ptr<Node>, std::map<Ptr<Node>, uint64_t>> Settings::pairBw;
 std::map<Ptr<Node>, std::map<Ptr<Node>, uint64_t>> Settings::pairBdp;
 std::map<Ptr<Node>, std::map<Ptr<Node>, uint64_t>> Settings::pairRtt;
 
-std::unordered_map<uint64_t, std::unordered_map<uint32_t, Time>> Settings::flowRecorder;
-std::unordered_map<uint64_t, Settings::LinkRecord> Settings::linkRecorder; 
+std::unordered_map<uint64_t, std::unordered_map<uint32_t, uint32_t>> flowCounter;
 void Settings::record_flow_distribution(Ptr<Packet> p, CustomHeader &ch, Ptr<Node> srcNode, uint32_t outDev) {
-    return;
     if (ch.l3Prot != 0x11) {
         return;
     }
     uint32_t srcId = srcNode->GetId();
     uint32_t dstId = if2id[srcNode][outDev];
-    uint64_t linkKey = (static_cast<uint64_t>(srcId) << 32) | static_cast<uint64_t>(dstId);
-    if (dstId == Settings::hostIp2IdMap[ch.dip]) {
+    if (dstId == Settings::hostIp2IdMap[ch.dip]) {//最后一跳不进行记录
+        return;
+    }
+    if (srcId != 111 && dstId != 111) {
         return;
     }
     uint32_t flowId = Settings::get_flowid(p);
-    //printf("[%ld]%u -> %u, Flow:%u, Seq:%u\n", Simulator::Now().GetNanoSeconds(), srcId, dstId, flowId, ch.udp.seq);
-    //flowRecorder[linkKey][flowId] = Simulator::Now();
-    linkRecorder[linkKey].total_size += p->GetSize();
-    linkRecorder[linkKey].flowRecorder.emplace(flowId, ch.udp.seq);
-    linkRecorder[linkKey].flowRecorder[flowId].seq_end = ch.udp.seq + p->GetSize() - ch.GetSerializedSize();
+    flowCounter[(static_cast<uint64_t>(srcId) << 32) | dstId][flowId]+=p->GetSize();
 }
 
 uint32_t Settings::dropped_flow_id = -1;
 
 
-void Settings::print_flow_distribution(FILE *out, Time nextTime) {
-    return;
-    for (auto& [linkKey, linkRecord] : linkRecorder) {
-        uint32_t srcId = static_cast<uint32_t>(linkKey >> 32);
-        uint32_t dstId = static_cast<uint32_t>(linkKey & 0xFFFFFFFF);
-        fprintf(out, "%ld#%u->%u:%u#", Simulator::Now().GetNanoSeconds(), srcId, dstId, linkRecord.total_size);
-        for (auto& [flowId, flowRecord] : linkRecord.flowRecorder) {
-            fprintf(out, "%u:%u-%u, ", flowId, flowRecord.seq_start, flowRecord.seq_end);
+void Settings::print_flow_distribution(Time interval) {
+    for (auto it = flowCounter.begin(); it != flowCounter.end(); ++it) {
+        uint32_t src = it->first >> 32;
+        uint32_t dst = it->first & 0xFFFFFFFF;
+        for (auto flowIt = it->second.begin(); flowIt != it->second.end(); ++flowIt) {
+            uint32_t flowId = flowIt->first;
+            uint32_t size = flowIt->second;
+            fprintf(logfile::link_utilization, "%lu,%u,%u,%u,%u\n", Simulator::Now().GetNanoSeconds(), src, dst, flowId, size);
         }
-        fprintf(out, "\n");
     }
-    fprintf(out, "\n");
-    linkRecorder.clear();
-    /*fprintf(out, "#####Time[%ld]#####\n", Simulator::Now().GetNanoSeconds());
-
-    for (auto linkEntry = flowRecorder.begin(); linkEntry != flowRecorder.end(); ++linkEntry) {
-        uint64_t linkKey = linkEntry->first;
-        auto& flowMap = linkEntry->second;
-        uint32_t srcId = static_cast<uint32_t>(linkKey >> 32);
-        uint32_t dstId = static_cast<uint32_t>(linkKey & 0xFFFFFFFF);
-        //去除不活跃的流
-        for (auto flowEntry = flowMap.begin(); flowEntry != flowMap.end();) {
-            Time flowTime = flowEntry->second;
-            if (Simulator::Now() - flowTime > nextTime) {
-                flowEntry = flowMap.erase(flowEntry); 
-                continue;
-            }
-            ++flowEntry;
-        }
-
-        fprintf(out, "Link: srcId=%u, dstId=%u, flowNum=%zu, active flow:", srcId, dstId, flowMap.size());
-
-        for (auto flowEntry = flowMap.begin(); flowEntry != flowMap.end();) {
-            uint32_t flowId = flowEntry->first;
-            fprintf(out, "%d, ", flowId);
-            ++flowEntry;
-        }
-        fprintf(out, "\n");
-    }
-    fprintf(out, "\n");*/
-    Simulator::Schedule(nextTime, &Settings::print_flow_distribution, out, nextTime);
+    flowCounter.clear();
+    fflush(logfile::link_utilization);
+    Simulator::Schedule(interval, &Settings::print_flow_distribution, interval);
 }
 
 
@@ -189,7 +157,7 @@ namespace logfile {
     FILE* conn_output = nullptr;
     FILE* global_CE_map_output = nullptr;
     FILE* all_links_output = nullptr;
-    FILE* flow_distribution_output = nullptr;
+    FILE* link_utilization = nullptr;
     FILE* ideal_ce_output = nullptr;
     FILE* pathCE_mon_output = nullptr;
     FILE* pathCE_exclude_last_hop_mon_output = nullptr;
@@ -197,6 +165,7 @@ namespace logfile {
     FILE* wan_log = nullptr;
     FILE* rtt_log = nullptr;
     FILE* drop_log = nullptr;
+    FILE* buffer_monitor = nullptr;
     
     
 
@@ -222,6 +191,10 @@ namespace logfile {
         fprintf(rtt_log, "timestamp_ns,switch_id,dst_as,next_hop,rtt1_ms,rtt2_ms,timeout_count\n");
         OPEN_FILE(drop_log);
         fprintf(drop_log, "timestamp_ns,switch_id,next_hop,flow_id,seq_num,type\n");
+        OPEN_FILE(link_utilization);
+        fprintf(link_utilization, "timestamp_ns,src_id,dst_id,flow_id,bytes\n");
+        OPEN_FILE(buffer_monitor);
+        fprintf(buffer_monitor, "timestamp_ns,switch_id,next_hop,ingress_bytes,egress_bytes\n");
 
         OPEN_EMPTY_FILE(cnp_output);
         OPEN_EMPTY_FILE(voq_output);
@@ -235,7 +208,6 @@ namespace logfile {
         OPEN_EMPTY_FILE(conn_output);
         OPEN_EMPTY_FILE(global_CE_map_output);
         OPEN_EMPTY_FILE(all_links_output);
-        OPEN_EMPTY_FILE(flow_distribution_output);
         OPEN_EMPTY_FILE(ideal_ce_output);
         OPEN_EMPTY_FILE(pathCE_mon_output);
         OPEN_EMPTY_FILE(pathCE_exclude_last_hop_mon_output);

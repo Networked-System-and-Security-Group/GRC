@@ -57,6 +57,7 @@ void WanRouting::RouteInput(Ptr<Packet> p, CustomHeader& ch) {
 
 void WanRouting::HandleUdpReceived(Ptr<Packet> p, CustomHeader& ch) {
     // 处理UDP数据包
+    // 报文过滤
     uint32_t dst_as = Settings::nodeInfos[Settings::hostIp2IdMap[ch.dip]].as_id;
     uint32_t cur_as = Settings::nodeInfos[m_switch_id].as_id;
     if (dst_as == cur_as) {
@@ -64,6 +65,7 @@ void WanRouting::HandleUdpReceived(Ptr<Packet> p, CustomHeader& ch) {
         return;
     }
 
+    // 获取出端口
     uint32_t flow_hash_value = (Hash5Tuple(ch.sip, ch.dip, ch.udp.sport, ch.udp.dport, ch.udp.pg));
     uint64_t flow_key = static_cast<uint64_t>(ch.dip) << 32 | flow_hash_value;
     auto& flowlet_item = m_flowletTable[flow_key];
@@ -75,6 +77,7 @@ void WanRouting::HandleUdpReceived(Ptr<Packet> p, CustomHeader& ch) {
     flowlet_item.update_time = Simulator::Now();
     uint32_t out_port = flowlet_item.out_port;
 
+    // RTT过滤
     FlowIDNUMTag fit;
     assert(p->PeekPacketTag(fit));
     bool ack_req = (bool)fit.GetAckReq();
@@ -163,7 +166,7 @@ void WanRouting::controlplane_logic() {
     }
 }
 
-void WanRouting::send_cnp(CustomHeader &ch) {/*
+void WanRouting::send_cnp(CustomHeader &ch) {
     CnHeader seqh;
     seqh.SetPG(0);
     seqh.SetSport(ch.udp.dport);
@@ -190,7 +193,7 @@ void WanRouting::send_cnp(CustomHeader &ch) {/*
     // send
     CustomHeader ch2(CustomHeader::L2_Header | CustomHeader::L3_Header | CustomHeader::L4_Header);
     newp->PeekHeader(ch2);
-    m_switchSendToDevCallback(newp, ch2);*/
+    m_switchSendToDevCallback(newp, ch2);
 }
 
 uint32_t WanRouting::Hash5Tuple(uint32_t sip, uint32_t dip, uint16_t sport, uint16_t dport, uint16_t pg) {

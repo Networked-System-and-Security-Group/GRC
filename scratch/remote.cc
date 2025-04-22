@@ -255,7 +255,7 @@ void m_QP_rate_monitoring(FILE *fout_voq)
 }
 
 void my_periodic_monitoring(Time interval) {
-    printf("Periodic monitoring at %lu\n", Simulator::Now().GetNanoSeconds());
+    printf("Periodic monitoring at %lu, %u flows finished\n", Simulator::Now().GetNanoSeconds(), Settings::cnt_finished_flows);
     //对于所有的DCI交换机，打印一些内容
     for (const auto& node_info : Settings::nodeInfos) {
         if (node_info.node_type == NodeInfo::NodeType::DCI_SWITCH) {
@@ -265,7 +265,7 @@ void my_periodic_monitoring(Time interval) {
         }
     }
     DynamicCast<SwitchNode>(n.Get(111))->m_mmu->printBufferInfo();
-    DynamicCast<SwitchNode>(n.Get(112))->m_mmu->printBufferInfo();
+    fflush(logfile::buffer_monitor);
     Simulator::Schedule(interval, &my_periodic_monitoring, interval);
 }
 
@@ -322,9 +322,7 @@ void m_rx_periodic_monitoring(FILE *fout_uplink_rx,  FILE *fout_downlink_rx, FIL
     return;
 }
 
-void flow_distribution_monitoring(Time start_time, FILE* fout_flow_distribution) {
-    Simulator::Schedule(start_time, &Settings::print_flow_distribution, fout_flow_distribution, MicroSeconds(50));
-}
+
 
 /**
  * @brief When one RDMA is finished, so does (1) QP, (2) RxQP, (3) write it on file fct.txt.
@@ -345,7 +343,7 @@ void qp_finish(FILE *fout, Ptr<RdmaQueuePair> q) {
     Ptr<Node> dstNode = n.Get(did);
     Ptr<RdmaDriver> rdma = dstNode->GetObject<RdmaDriver>();
     rdma->m_rdma->DeleteRxQp(q->sip.Get(), q->sport, q->dport, q->m_pg);
-    printf("Flow %u Finished!\n", q->m_flow_id);
+    //printf("Flow %u Finished!\n", q->m_flow_id);
     // fprintf(fout, "%lu QP complete\n", Simulator::Now().GetTimeStep());
     //fprintf(fout, "%u %u %u %lu %lu %lu %lu\n", q->m_flow_id, Settings::ip_to_node_id(q->sip),
     //        Settings::ip_to_node_id(q->dip), q->m_size,
@@ -1001,11 +999,6 @@ int main(int argc, char *argv[]) {
                 conf >> v;
                 sample_feedback = v;
                 std::cerr << "SAMPLE_FEEDBACK\t\t\t\t" << sample_feedback << '\n';
-            } else if (key.compare("LOAD") == 0) {
-                double v;
-                conf >> v;
-                load = v;
-                std::cerr << "LOAD\t\t\t" << load << "\n";
             } else if (key.compare("ENABLE_IRN") == 0) {
                 bool v;
                 conf >> v;
@@ -1286,7 +1279,7 @@ int main(int argc, char *argv[]) {
                 sw->m_mmu->ConfigHdrm(j, 0);
             }
             sw->m_mmu->ConfigNPort(sw->GetNDevices() - 1);
-            sw->m_mmu->ConfigBufferSize(60 * 1024 * 1024);  // Magic Number
+            sw->m_mmu->ConfigBufferSize(24 * 1024 * 1024);  // Magic Number
             sw->m_mmu->node_id = sw->GetId();
             sw->m_mmu->InitSwitch();
 
@@ -1544,7 +1537,7 @@ int main(int argc, char *argv[]) {
     flowMonitor->Start(Seconds(flowgen_start_time));
     flowMonitor->Stop(Seconds(flowgen_stop_time + 10.0));
 
-    flow_distribution_monitoring(Seconds(flowgen_start_time), flow_distribution_output);
+    Simulator::Schedule(Seconds(flowgen_start_time), &Settings::print_flow_distribution, MicroSeconds(200));
 
     topof.close();
     std::cout << "============DC Switch===========\n";

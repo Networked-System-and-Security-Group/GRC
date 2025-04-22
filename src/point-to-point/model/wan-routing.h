@@ -76,6 +76,8 @@ private:
         Time estimated_rtt2 = MicroSeconds(0);
         Time last_update_time = MicroSeconds(0);
         uint32_t entry_timeout_count = 0;
+
+        
         struct Entry {
             uint16_t hashed_seq = 0;
             Time timestamp;

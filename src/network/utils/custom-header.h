@@ -111,11 +111,9 @@ public:
 	  } udp;
 	  // CnHeader
 	  struct {
-		  uint16_t fid;
-		  uint8_t qIndex;
-		  uint16_t qfb;
-		  uint8_t ecnBits;
-		  uint16_t total;
+		  uint16_t sport;        //!< Source port
+      uint16_t dport;   //!< Destination port
+      uint16_t pg;
 	  } cnp;
 	  // qbbHeader
 	  struct {

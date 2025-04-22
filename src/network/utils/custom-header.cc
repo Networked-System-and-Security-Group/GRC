@@ -97,7 +97,7 @@ uint32_t CustomHeader::GetSerializedSize (void) const{
 		else if (l3Prot == 0xFC || l3Prot == 0xFD)
 			len += GetAckSerializedSize();
 		else if (l3Prot == 0xFF)
-			len += 8;
+			len += 6;
 		else if (l3Prot == 0xFE)
 			len += 9;
 		else if (l3Prot == 0xFB)
@@ -165,11 +165,9 @@ void CustomHeader::Serialize (Buffer::Iterator start) const{
 		  i.WriteHtonU16 (udp.pg);
 		  udp.ih.Serialize(i);
 	  }else if (l3Prot == 0xFF){ // CNP
-		  i.WriteU8(cnp.qIndex);
-		  i.WriteU16(cnp.fid);
-		  i.WriteU8(cnp.ecnBits);
-		  i.WriteU16(cnp.qfb);
-		  i.WriteU16(cnp.total);
+		  i.WriteU16(cnp.sport);
+		  i.WriteU16(cnp.dport);
+		  i.WriteU16(cnp.pg);
 	  }else if (l3Prot == 0xFC || l3Prot == 0xFD){ // ACK or NACK
 		  i.WriteU16(ack.sport);
 		  i.WriteU16(ack.dport);
@@ -304,12 +302,10 @@ CustomHeader::Deserialize (Buffer::Iterator start)
 
 		  l4Size = GetUdpHeaderSize();
 	  }else if (l3Prot == 0xFF){
-		  cnp.qIndex = i.ReadU8();
-		  cnp.fid = i.ReadU16();
-		  cnp.ecnBits = i.ReadU8();
-		  cnp.qfb = i.ReadU16();
-		  cnp.total = i.ReadU16();
-		  l4Size = 8;
+		  cnp.sport = i.ReadU16();
+		  cnp.dport = i.ReadU16();
+		  cnp.pg = i.ReadU16();
+		  l4Size = 6;
 	  }else if (l3Prot == 0xFC || l3Prot == 0xFD){ // ACK or NACK
 		  ack.sport = i.ReadU16();
 		  ack.dport = i.ReadU16();

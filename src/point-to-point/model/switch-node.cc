@@ -383,7 +383,7 @@ void SwitchNode::SendToDevContinue(Ptr<Packet> p, CustomHeader &ch) {
 int SwitchNode::GetOutDev(Ptr<Packet> p, CustomHeader &ch) {
     // look up entries
     if (Settings::nodeInfos[m_id].node_type == NodeInfo::NodeType::DC_SWITCH) {
-        //如果是DC内的交换机，如果是目的地在同一AS内，直接查找路由表。否则，查找网关交换机ip
+        //如果是DC内的交换机，如果是目的地在同一AS内，直接查找路由表
         auto entry = m_rtTable.find(ch.dip);
         assert(entry != m_rtTable.end());
         const auto &nexthops = entry->second;

@@ -401,51 +401,20 @@ int RdmaHw::ReceiveUdp(Ptr<Packet> p, CustomHeader &ch) {
     return 0;
 }
 
-//这一块不知道被谁搞得乱七八糟
-//我要将它回退到HPCC的版本 25.4.9
+
 int RdmaHw::ReceiveCnp(Ptr<Packet> p, CustomHeader &ch) {
-    std::cerr << "ReceiveCnp is called. Exit this program." << std::endl;
-    exit(1);
-    // QCN on NIC
-    // This is a Congestion signal
-    // Then, extract data from the congestion packet.
-    // We assume, without verify, the packet is destinated to me
-    uint32_t qIndex = ch.cnp.qIndex;
-    if (qIndex == 1) {  // DCTCP
-        std::cout << "TCP--ignore\n";
-        return 0;
-    }
-    NS_ASSERT(ch.cnp.fid == ch.udp.dport);
-    uint16_t udpport = ch.cnp.fid;  // corresponds to the sport (CNP's dport)
-    uint16_t sport = ch.udp.sport;  // corresponds to the dport (CNP's sport)
-    uint8_t ecnbits = ch.cnp.ecnBits;
-    uint16_t qfb = ch.cnp.qfb;
-    uint16_t total = ch.cnp.total;
 
-    uint32_t i;
-    // get qp
-    uint64_t key = GetQpKey(ch.sip, udpport, sport, qIndex);
-    Ptr<RdmaQueuePair> qp = GetQp(key);
-    // get nic
-    uint32_t nic_idx = GetNicIdxOfQp(qp);
-    Ptr<QbbNetDevice> dev = m_nic[nic_idx].dev;
-
-    if (qp->m_rate == 0)  // lazy initialization
-    {
-        qp->m_rate = dev->GetDataRate();
-        if (m_cc_mode == 1) {
-            qp->mlx.m_targetRate = dev->GetDataRate();
-        } else if (m_cc_mode == 3) {
-            qp->hp.m_curRate = dev->GetDataRate();
-            if (m_multipleRate) {
-                for (uint32_t i = 0; i < IntHeader::maxHop; i++)
-                    qp->hp.hopState[i].Rc = dev->GetDataRate();
-            }
-        } else if (m_cc_mode == 7) {
-            qp->tmly.m_curRate = dev->GetDataRate();
-        }
-    }
-    return 0;
+	Ptr<RdmaQueuePair> qp = GetQp(ch.sip, ch.cnp.dport, ch.cnp.pg);
+	printf("Receive CNP, FlowId: %u\n", qp->m_flow_id);
+	if (m_cc_mode == 1){ // mlx version
+		if (qp == NULL){
+			std::cout << "ERROR: QCN NIC cannot find the flow\n";
+			return 0;
+		} else {
+			cnp_received_mlx(qp);
+		}
+	}
+	return 0;
 }
 
 int RdmaHw::ReceiveAck(Ptr<Packet> p, CustomHeader &ch) {

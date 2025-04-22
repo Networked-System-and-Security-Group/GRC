@@ -72,7 +72,6 @@ LINK_DOWN 0 0 0
 KMAX_MAP {kmax_map}
 KMIN_MAP {kmin_map}
 PMAX_MAP {pmax_map}
-LOAD {load}
 RANDOM_SEED {random_seed}
 TIME {time}
 """
@@ -144,11 +143,9 @@ def main():
     parser.add_argument('--irn', dest='irn', action='store',
                         type=int, default=0, help="enable IRN (default: 0)")
     parser.add_argument('--simul_time', dest='simul_time', action='store',
-                        default='0.03', help="traffic time to simulate (up to 3 seconds) (default: 0.1)")
+                        default='0.05', help="traffic time to simulate (up to 3 seconds) (default: 0.1)")
     parser.add_argument('--buffer', dest="buffer", action='store',
                         default='9', help="the switch buffer size (MB) (default: 9)")
-    parser.add_argument('--netload', dest='netload', action='store', type=int,
-                        default=10, help="Network load at NIC to generate traffic (default: 40.0)")
     parser.add_argument('--bw', dest="bw", action='store',
                         default='100', help="the NIC bandwidth (Gbps) (default: 100)")
     parser.add_argument('--topo', dest='topo', action='store',
@@ -159,9 +156,11 @@ def main():
                         type=int, default=0, help="enforce to use window scheme (default: 0)")
     parser.add_argument('--sw_monitoring_interval', dest='sw_monitoring_interval', action='store',
                         type=int, default=10000, help="interval of sampling statistics for queue status (default: 10000ns)")
-    parser.add_argument('--my_flow', type=str, default='wan_traffic', help="use my own flow, if '', use default flow")
+    parser.add_argument('--my_flow', type=str, default='', help="use my own flow, if '', use default flow")
     parser.add_argument('--debug', type=bool, default=False, help="debug")
     parser.add_argument('--stdout', type=bool, default=False, help="stdout")
+    parser.add_argument('--inter_load_all', type=int, default=60, help="不同DC之间之间通信的负载，单位Gbps")
+    parser.add_argument('--intra_load', type=int, default=30, help="单个host在DC内之间通信的负载")
 
     args = parser.parse_args()
 
@@ -196,17 +195,15 @@ def main():
     flowgen_stop_time = flowgen_start_time + \
         float(args.simul_time)  # default: 2.0
     sw_monitoring_interval = int(args.sw_monitoring_interval)
+
     my_flow = args.my_flow
     debug = args.debug
     stdout = args.stdout
+    intra_load = args.intra_load
+    inter_load_all = args.inter_load_all
 
     # get over-subscription ratio from topoogy name
 
-    netload = args.netload
-    oversub = 1
-    assert (int(args.netload) % oversub == 0)
-    hostload = int(args.netload) / oversub
-    assert (hostload > 0)
 
     # Sanity checks
     if enabled_irn == 1 and enabled_pfc == 1:
@@ -218,40 +215,18 @@ def main():
     if float(args.simul_time) < 0.005:
         raise Exception("CONFIG ERROR : Runtime must be larger than 5ms (= warmup interval).")
 
-    # sniff number of servers
-    with open("config/{topo}.txt".format(topo=args.topo), 'r') as f_topo:
-        topo_json = json.load(f_topo)
-        n_host = sum(len(as_item['hosts']) for as_item in topo_json['as_topologies'])
-        print(f'{n_host=}')
-
-    assert (hostload >= 0 and hostload < 100)
     if my_flow == '':
-        flow = "L_{load:.2f}_CDF_{cdf}_N_{n_host}_T_{time}ms_B_{bw}_flow".format(
-            load=hostload, cdf=args.cdf, n_host=n_host, time=int(float(args.simul_time)*1000), bw=bw)
+        flow = f"WAN_{cdf}_{intra_load}_{inter_load_all}"
     else:
         flow = my_flow
 
     # check the file exists
     if (exists(os.getcwd() + "/config/" + flow + ".txt")):
-        print("Input traffic file with load:{load:.2f}, cdf:{cdf}, n_host:{n_host} already exists".format(
-            load=hostload, cdf=cdf, n_host=n_host))
+        print(f"The file {flow} exists, so skip generating the traffic file...")
+        pass
     else:  # make the input traffic file
-        print("Generate a input traffic file...")
-        print("python ./traffic_gen/traffic_gen.py -c {cdf} -n {n_host} -l {load} -b {bw} -t {time} -o {output}".format(
-            cdf=os.getcwd() + "/../traffic_gen/" + args.cdf + ".txt",
-            n_host=n_host,
-            load=hostload / 100.0,
-            bw=args.bw + "G",
-            time=args.simul_time,
-            output=os.getcwd() + "/config/" + flow + ".txt"))
-
-        os.system("python ./traffic_gen/traffic_gen.py -c {cdf} -n {n_host} -l {load} -b {bw} -t {time} -o {output}".format(
-            cdf=os.getcwd() + "/traffic_gen/" + args.cdf + ".txt",
-            n_host=n_host,
-            load=hostload / 100.0,
-            bw=args.bw + "G",
-            time=args.simul_time,
-            output=os.getcwd() + "/config/" + flow + ".txt"))
+        print(f"Generate a input traffic file {flow}...")
+        os.system(f'python3 config/wan_traffic_gen.py --duration {args.simul_time} --inter_load_all {inter_load_all} --intra_load {intra_load} --cdf {cdf} --output {flow}.txt')
 
     # sanity check - bandwidth
     #with open("config/{topo}.txt".format(topo=args.topo), 'r') as f_topo:
@@ -292,25 +267,6 @@ def main():
         if enforce_win == 1:
             print("### INFO: Enforced to use window scheme! ###")
 
-    # record to history
-    simulday = datetime.now().strftime("%m/%d/%y")
-    with open("./mix/.history", "a") as history:
-        history.write("{simulday},{config_ID},{cc_mode},{lb_mode},{pfc},{irn},{has_win},{var_win},{topo},{bw},{cdf},{load},{time}\n".format(
-            simulday=simulday,
-            config_ID=config_ID,
-            cc_mode=cc_mode,
-            lb_mode=lb_mode,
-            pfc=enabled_pfc,
-            irn=enabled_irn,
-            has_win=has_win,
-            var_win=var_win,
-            topo=topo,
-            bw=bw,
-            cdf=cdf,
-            load=netload,
-            time=args.simul_time,
-        ))
-
     # 1 BDP calculation
     #if topo2bdp.get(topo) == None:
     #    print("ERROR - topology is not registered in run.py!!", flush=True)
@@ -342,7 +298,7 @@ def main():
         config = config_template.format(id=config_ID, topo=topo, flow=flow,
                                         qlen_mon_start=qlen_mon_start, qlen_mon_end=qlen_mon_end, flowgen_start_time=flowgen_start_time,
                                         flowgen_stop_time=flowgen_stop_time, sw_monitoring_interval=sw_monitoring_interval,
-                                        load=netload, buffer_size=buffer, lb_mode=lb_mode, 
+                                        buffer_size=buffer, lb_mode=lb_mode, 
                                         enabled_pfc=enabled_pfc, enabled_irn=enabled_irn,
                                         cc_mode=cc_mode,
                                         ai=ai, hai=hai, dctcp_ai=dctcp_ai,
@@ -360,13 +316,6 @@ def main():
     output_log = config_name.replace(".txt", ".log")
     run_command = "./waf --run 'scratch/remote {config_name}' > {output_log} 2>&1".format(
         config_name=config_name, output_log=output_log)
-    with open("./mix/.history", "a") as history:
-        history.write(run_command + "\n")
-        history.write(
-            "./waf --run 'scratch/network-load-balance' --command-template='gdb --args %s {config_name}'\n".format(
-                config_name=config_name)
-        )
-        history.write("\n")
 
     print(run_command)
     if debug:
