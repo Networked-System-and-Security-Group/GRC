@@ -77,13 +77,13 @@ void WanRouting::HandleUdpReceived(Ptr<Packet> p, CustomHeader& ch) {
     flowlet_item.update_time = Simulator::Now();
     uint32_t out_port = flowlet_item.out_port;
 
+    auto& rtt_monitor = m_rttTable[dst_as][out_port];
     // RTT过滤
     FlowIDNUMTag fit;
     assert(p->PeekPacketTag(fit));
     bool ack_req = (bool)fit.GetAckReq();
     if (ack_req) {
-        auto& rtt_monitor = m_rttTable[dst_as][out_port];
-        auto& entries = rtt_monitor.table[(flow_hash_value >> 3) % 8];
+        auto& entries = rtt_monitor.rtt_table[(flow_hash_value >> 3) % 8];
         uint16_t hashed_seq = Hash5tupleSeq(ch.sip, ch.dip, ch.udp.sport, ch.udp.dport, ch.udp.pg, ch.udp.seq + p->GetSize() - ch.GetSerializedSize());
         uint32_t e_index1 = hashed_seq % 16;
         uint32_t e_index2 = (e_index1 + 1) % 16;
@@ -111,7 +111,42 @@ void WanRouting::HandleUdpReceived(Ptr<Packet> p, CustomHeader& ch) {
         //printf("Switch %u, Seq %u udp passed, bucket:%u, index:%u\n", 
         //    m_switch_id, ch.udp.seq + p->GetSize() - ch.GetSerializedSize(), flow_hash_value, hashed_seq);
     }
-    m_switchSendCallback(p, ch, out_port, ch.udp.pg);  // 示例调用
+    // 更新速率
+    double cc_delta_t = (Simulator::Now() - rtt_monitor.cc_last_update).GetSeconds();
+    double w = 1 - cc_delta_t / rtt_monitor.cc_tau.GetSeconds();
+    w = std::max(0.0, w);
+    rtt_monitor.cur_rate *= w;
+    rtt_monitor.cur_rate += p->GetSize();
+    rtt_monitor.cc_last_update = Simulator::Now();
+    // 检查CNP是否更新
+    int64_t normalize_cur_rate = rtt_monitor.get_normalize_cur_rate();
+    rtt_monitor.accumulated_cnp_bytes += (normalize_cur_rate - rtt_monitor.base_rate) * cc_delta_t;
+    if (rtt_monitor.accumulated_cnp_bytes > rtt_monitor.cnp_gen_threshold) {
+        printf("[%ld]Send Cnp, Switch %u, accumulate_bytes %ld, cur_rate:%ld\n", 
+            Simulator::Now().GetNanoSeconds(), m_switch_id, rtt_monitor.accumulated_cnp_bytes, rtt_monitor.get_normalize_cur_rate());
+        rtt_monitor.accumulated_cnp_bytes -= rtt_monitor.bytes_per_cnp;
+        send_cnp(p, ch);
+    }
+    //if (rtt_monitor.accumulated_cnp_bytes > rtt_monitor.bytes_per_cnp) {
+    //    rtt_monitor.cnp_quota++;
+    //    rtt_monitor.accumulated_cnp_bytes -= rtt_monitor.bytes_per_cnp;
+    //} else if (rtt_monitor.accumulated_cnp_bytes < -rtt_monitor.bytes_per_cnp) {
+    //    rtt_monitor.accumulated_cnp_bytes += rtt_monitor.bytes_per_cnp;
+    //    if (rtt_monitor.cnp_quota != 0) {
+    //        rtt_monitor.cnp_quota--;
+    //    }
+    //}
+
+    //尝试下发cnp
+    //if (rtt_monitor.cnp_quota > 0 && 
+    //    Simulator::Now() - rtt_monitor.cnp_send_time[flow_hash_value % 128] > rtt_monitor.cnp_cd) {
+    //    printf("Send Cnp, Switch %u, cur_bytes %ld, cnp_quota %u, cur_rate:%ld\n", 
+    //        m_switch_id, rtt_monitor.accumulated_cnp_bytes, rtt_monitor.cnp_quota, rtt_monitor.get_normalize_cur_rate());
+    //    send_cnp(p, ch);
+    //    rtt_monitor.cnp_send_time[flow_hash_value % 128] = Simulator::Now();
+    //    rtt_monitor.cnp_quota--;
+    //}
+    m_switchSendCallback(p, ch, out_port, ch.udp.pg);
     return;
 }
 
@@ -145,7 +180,7 @@ void WanRouting::controlplane_logic() {
     }
     for (auto& [dst_as, port_map] : m_rttTable) {
         for (auto& [port, rtt_monitor] : port_map) {
-            try{
+            //logging
             fprintf(logfile::rtt_log, 
                 "%" PRIu64 ",%" PRIu32 ",%" PRIu32 ",%" PRIu32 ",%.3f,%.3f,%" PRIu32 "\n",  // 格式说明符
                 Simulator::Now().GetNanoSeconds(),          // 时间戳（纳秒）
@@ -155,20 +190,21 @@ void WanRouting::controlplane_logic() {
                 rtt_monitor.estimated_rtt1.GetSeconds() * 1000.0,  // RTT1（毫秒，保留3位小数）
                 rtt_monitor.estimated_rtt2.GetSeconds() * 1000.0,  // RTT2（毫秒，保留3位小数）
                 rtt_monitor.entry_timeout_count                    // 超时计数
-            );}
-            catch (const std::exception& e) {
-                std::cout<<port;
-                fflush(stdout);
-                assert(false);
-            }
+            );
             rtt_monitor.entry_timeout_count = 0;
+            fprintf(logfile::rate_monitor, "%lu,%u,%u,%lu,%lu\n", 
+                Simulator::Now().GetNanoSeconds(), 
+                Settings::nodeInfos[m_switch_id].as_id, dst_as, 
+                rtt_monitor.get_normalize_cur_rate(), rtt_monitor.base_rate);
+            //速率调整
         }
     }
+    fflush(logfile::rate_monitor);
 }
 
-void WanRouting::send_cnp(CustomHeader &ch) {
+void WanRouting::send_cnp(Ptr<Packet> p, CustomHeader &ch) {
     CnHeader seqh;
-    seqh.SetPG(0);
+    seqh.SetPG(ch.udp.pg);
     seqh.SetSport(ch.udp.dport);
     seqh.SetDport(ch.udp.sport);
 
@@ -193,6 +229,11 @@ void WanRouting::send_cnp(CustomHeader &ch) {
     // send
     CustomHeader ch2(CustomHeader::L2_Header | CustomHeader::L3_Header | CustomHeader::L4_Header);
     newp->PeekHeader(ch2);
+
+    FlowIDNUMTag fit;
+    if (p->PeekPacketTag(fit)) {
+        newp->AddPacketTag(fit);
+    }
     m_switchSendToDevCallback(newp, ch2);
 }
 

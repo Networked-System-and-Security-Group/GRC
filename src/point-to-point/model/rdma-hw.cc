@@ -221,6 +221,7 @@ void RdmaHw::AddQueuePair(uint64_t size, uint16_t pg, Ipv4Address sip, Ipv4Addre
     m_nic[nic_idx].qpGrp->AddQp(qp);
     uint64_t key = GetQpKey(dip.Get(), sport, dport, pg);
     m_qpMap[key] = qp;
+    //printf("%u insert qp with key %lx\n", m_node->GetId(), key);
 
     // set init variables
     DataRate m_bps = m_nic[nic_idx].dev->GetDataRate();
@@ -403,9 +404,12 @@ int RdmaHw::ReceiveUdp(Ptr<Packet> p, CustomHeader &ch) {
 
 
 int RdmaHw::ReceiveCnp(Ptr<Packet> p, CustomHeader &ch) {
-
-	Ptr<RdmaQueuePair> qp = GetQp(ch.sip, ch.cnp.dport, ch.cnp.pg);
-	printf("Receive CNP, FlowId: %u\n", qp->m_flow_id);
+    uint64_t key = GetQpKey(ch.sip, ch.cnp.dport, ch.cnp.sport, ch.cnp.pg);
+    //printf("%u receive cnp %lx, QPNum=%u\n", m_node->GetId(), key, m_qpMap.size());
+    fflush(stdout);
+	Ptr<RdmaQueuePair> qp = GetQp(key);
+	assert(qp != NULL);
+    //printf("Receive CNP, FlowId: %u\n", qp->m_flow_id);
 	if (m_cc_mode == 1){ // mlx version
 		if (qp == NULL){
 			std::cout << "ERROR: QCN NIC cannot find the flow\n";

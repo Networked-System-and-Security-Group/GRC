@@ -245,6 +245,7 @@ namespace logfile {
     extern FILE* drop_log;
     extern FILE* link_utilization;
     extern FILE* buffer_monitor;
+    extern FILE* rate_monitor;
 
     extern FILE* cnp_output;
     extern FILE* voq_output;
@@ -254,7 +255,7 @@ namespace logfile {
     extern FILE* uplink_rx_output;
     extern FILE* downlink_rx_output;
     extern FILE* flow_rx_output;
-    extern FILE* bps_tx_output;
+    extern FILE* qp_rate_log;
     extern FILE* conn_output;
     extern FILE* global_CE_map_output;
     extern FILE* all_links_output;

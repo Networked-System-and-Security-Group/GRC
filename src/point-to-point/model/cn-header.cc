@@ -91,8 +91,8 @@ void CnHeader::Serialize (Buffer::Iterator start)  const
   //start.WriteU64 (hibyte);
   //start.WriteU64 (lobyte);
   Buffer::Iterator i = start;
-  i.WriteU16(m_dport);
   i.WriteU16(m_sport);
+  i.WriteU16(m_dport);
   i.WriteU16(m_pg);
   //NS_LOG_LOGIC("CN Seriealized as " << std::hex << hibyte << "+" << lobyte << std::dec);
 }
@@ -109,8 +109,8 @@ uint32_t CnHeader::Deserialize (Buffer::Iterator start)
   //uint32_t lobyte = start.ReadU32();
   Buffer::Iterator i = start;
 
-  m_dport = i.ReadU16();
   m_sport = i.ReadU16();
+  m_dport = i.ReadU16();
   m_pg = i.ReadU16();
 
   //m_qfb = static_cast<uint8_t>(lobyte>>24);

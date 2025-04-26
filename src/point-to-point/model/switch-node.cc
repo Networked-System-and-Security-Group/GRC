@@ -104,6 +104,8 @@ uint32_t SwitchNode::DoLbFlowECMP(Ptr<const Packet> p, const CustomHeader &ch,
         buf.u32[2] = ch.udp.sport | ((uint32_t)ch.udp.dport << 16);
     else if (ch.l3Prot == 0xFC || ch.l3Prot == 0xFD)  // ACK or NACK
         buf.u32[2] = ch.ack.sport | ((uint32_t)ch.ack.dport << 16);
+    else if (ch.l3Prot == 0xFF)
+        buf.u32[2] = ch.cnp.sport | ((uint32_t)ch.cnp.dport << 16);
     else {
         std::cout << "[ERROR] Sw(" << m_id << ")," << PARSE_FIVE_TUPLE(ch)
                   << "Cannot support other protoocls than TCP/UDP (l3Prot:" << ch.l3Prot << ")"

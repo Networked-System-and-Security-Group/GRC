@@ -61,7 +61,7 @@ double flowgen_start_time = 2.0, flowgen_stop_time = 2.5, simulator_extra_time =
 uint64_t qlen_mon_start;               // ns
 uint64_t qlen_mon_end;                 // ns
 uint32_t switch_mon_interval = 10000;  // ns
-uint32_t server_rtt_mon_interval = 10000;
+uint32_t server_rtt_mon_interval = 100000;  //ns
 uint64_t cnp_mon_start;                // ns
 uint64_t cnp_monitor_bucket = 100000;  // ns
 uint64_t irn_mon_start;                // ns
@@ -223,34 +223,26 @@ void cnp_freq_monitoring(FILE *fout, Ptr<RdmaHw> rdmahw) {
     Simulator::Schedule(NanoSeconds(cnp_monitor_bucket), &cnp_freq_monitoring, fout, rdmahw);
 }
 
-void m_QP_rate_monitoring(FILE *fout_voq)
+void m_QP_rate_monitoring()
 {
     uint64_t now = Simulator::Now().GetNanoSeconds();
     for (uint32_t i = 0; i < Settings::node_num; i++) {
         if (n.Get(i)->GetNodeType() == 0) {  // is server
+            //printf("Got server %u\n", i);
             Ptr<Node> server = n.Get(i);
             Ptr<RdmaDriver> rdmaDriver = server->GetObject<RdmaDriver>();
             Ptr<RdmaHw> rdmaHw = rdmaDriver->m_rdma;
             // monitor total/active QP number <time, serverId, #ExistingQP, #ActiveQP>
-            uint64_t nQP = rdmaHw->m_qpMap.size();
-            uint64_t nActiveQP = 0;
             for (auto qp : rdmaHw->m_qpMap) {
-                Ipv4Address src = qp.second->sip;
-                Ipv4Address dst = qp.second->dip;
-                uint16_t sport = qp.second->sport;
-                uint16_t dport = qp.second->dport;
                 uint32_t flowid = qp.second->m_flow_id;
                 DataRate m_rate = qp.second->m_rate;
                 uint64_t m_bps = m_rate.GetBitRate();
                 // std::cout << "bps: " << now << flowid << m_bps << std::endl;
-                fprintf(fout_voq, "%lu,%u,%lu\n", now, flowid, m_bps);
+                fprintf(qp_rate_log, "%lu,%u,%lu\n", now, flowid, m_bps / 8);
             }
         }
     }
-    if (Simulator::Now() < Seconds(flowgen_stop_time + 0.05)) {
-        // recursive callback
-        Simulator::Schedule(NanoSeconds(server_rtt_mon_interval), &m_QP_rate_monitoring, fout_voq);  // every 10us
-    }
+    Simulator::Schedule(NanoSeconds(server_rtt_mon_interval), &m_QP_rate_monitoring);  // every 10us
     return;
 }
 
@@ -643,7 +635,7 @@ void init_nodeinfo_links() {
 
     // 使用 as_topologies 数组的大小代替冗余字段 num_as
     int num_as = j["as_topologies"].size();
-    int node_num = 0;
+    uint32_t& node_num = Settings::node_num;
 
     // 遍历每个 AS 的拓扑信息
     for (int as_index = 0; as_index < num_as; ++as_index) {
@@ -1528,7 +1520,7 @@ int main(int argc, char *argv[]) {
     Simulator::Schedule(Seconds(flowgen_start_time), &m_rx_periodic_monitoring, uplink_rx_output,
                         downlink_rx_output, flow_rx_output);
     Simulator::Schedule(Seconds(flowgen_start_time), &my_periodic_monitoring, MicroSeconds(1000));
-    Simulator::Schedule(Seconds(flowgen_start_time), &m_QP_rate_monitoring, bps_tx_output);
+    Simulator::Schedule(Seconds(flowgen_start_time), &m_QP_rate_monitoring);
 
     
     Ptr<FlowMonitor> flowMonitor;
@@ -1537,7 +1529,7 @@ int main(int argc, char *argv[]) {
     flowMonitor->Start(Seconds(flowgen_start_time));
     flowMonitor->Stop(Seconds(flowgen_stop_time + 10.0));
 
-    Simulator::Schedule(Seconds(flowgen_start_time), &Settings::print_flow_distribution, MicroSeconds(200));
+    Simulator::Schedule(Seconds(flowgen_start_time), &Settings::print_flow_distribution, MicroSeconds(500));
 
     topof.close();
     std::cout << "============DC Switch===========\n";

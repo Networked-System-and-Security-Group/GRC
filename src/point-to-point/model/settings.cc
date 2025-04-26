@@ -153,7 +153,7 @@ namespace logfile {
     FILE* uplink_rx_output = nullptr;
     FILE* downlink_rx_output = nullptr;
     FILE* flow_rx_output = nullptr;
-    FILE* bps_tx_output = nullptr;
+    FILE* qp_rate_log = nullptr;
     FILE* conn_output = nullptr;
     FILE* global_CE_map_output = nullptr;
     FILE* all_links_output = nullptr;
@@ -166,6 +166,7 @@ namespace logfile {
     FILE* rtt_log = nullptr;
     FILE* drop_log = nullptr;
     FILE* buffer_monitor = nullptr;
+    FILE* rate_monitor = nullptr;
     
     
 
@@ -195,6 +196,10 @@ namespace logfile {
         fprintf(link_utilization, "timestamp_ns,src_id,dst_id,flow_id,bytes\n");
         OPEN_FILE(buffer_monitor);
         fprintf(buffer_monitor, "timestamp_ns,switch_id,next_hop,ingress_bytes,egress_bytes\n");
+        OPEN_FILE(rate_monitor);
+        fprintf(rate_monitor, "timestamp_ns,src_as,dst_as,real_rate,base_rate\n");
+        OPEN_FILE(qp_rate_log);
+        fprintf(qp_rate_log, "timestamp_ns,flow_id,rate\n");
 
         OPEN_EMPTY_FILE(cnp_output);
         OPEN_EMPTY_FILE(voq_output);
@@ -204,7 +209,6 @@ namespace logfile {
         OPEN_EMPTY_FILE(uplink_rx_output);
         OPEN_EMPTY_FILE(downlink_rx_output);
         OPEN_EMPTY_FILE(flow_rx_output);
-        OPEN_EMPTY_FILE(bps_tx_output);
         OPEN_EMPTY_FILE(conn_output);
         OPEN_EMPTY_FILE(global_CE_map_output);
         OPEN_EMPTY_FILE(all_links_output);
