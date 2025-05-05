@@ -894,9 +894,6 @@ void RdmaHw::UpdateAlphaMlx(Ptr<RdmaQueuePair> q) {
     } else {                                                // no cnp -> decrease
         q->mlx.m_alpha = (1 - m_g) * q->mlx.m_alpha;        // binary feedback
     }
-#if PRINT_LOG
-// printf("%.6lf\n", q->mlx.m_alpha);
-#endif
     q->mlx.m_alpha_cnp_arrived = false;  // clear the CNP_arrived bit
     ScheduleUpdateAlphaMlx(q);
 }

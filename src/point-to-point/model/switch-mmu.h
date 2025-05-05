@@ -135,7 +135,7 @@ class SwitchMmu : public Object {
                 node_id, 
                 Settings::if2id[Settings::nodeContainer.Get(node_id)][port], 
                 m_usedIngressPortBytes[port], 
-                m_usedEgressPortBytes[port]);
+                m_usedEgressBytes[port][0] + m_usedEgressBytes[port][3]);
         }
     }
 
@@ -156,10 +156,13 @@ class SwitchMmu : public Object {
     uint32_t m_usedIngressSPBytes[4];  // 服务池（Service Pool）的入端口已用缓冲区字节数。
     uint32_t m_usedIngressPGHeadroomBytes[pCnt][qCnt];
 
+    //暂时废弃
     uint32_t m_usedEgressQMinBytes[pCnt][qCnt];
     uint32_t m_usedEgressQSharedBytes[pCnt][qCnt];
     uint32_t m_usedEgressPortBytes[pCnt];
     uint32_t m_usedEgressSPBytes[4];
+
+    uint32_t m_usedEgressBytes[pCnt][qCnt];  // 使用的出端口的
 
     // ingress params
     uint32_t m_buffer_cell_limit_sp;  // ingress sp buffer threshold p.120

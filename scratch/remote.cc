@@ -238,7 +238,7 @@ void m_QP_rate_monitoring()
                 DataRate m_rate = qp.second->m_rate;
                 uint64_t m_bps = m_rate.GetBitRate();
                 // std::cout << "bps: " << now << flowid << m_bps << std::endl;
-                fprintf(qp_rate_log, "%lu,%u,%lu\n", now, flowid, m_bps / 8);
+                fprintf(qp_rate_log, "%lu,%u,%lu,%lf,%lu\n", now, flowid, m_bps / 8, qp.second->mlx.m_alpha, qp.second->mlx.m_targetRate.GetBitRate() / 8);
             }
         }
     }
@@ -254,67 +254,13 @@ void my_periodic_monitoring(Time interval) {
             Ptr<Node> node = n.Get(node_info.id);
             auto sw_node = DynamicCast<SwitchNode>(node);
             //sw_node->m_mmu->m_wanRouting.print_status();
+        } else if (node_info.node_type == NodeInfo::NodeType::WAN_SWITCH) {
+            DynamicCast<SwitchNode>(n.Get(node_info.id))->m_mmu->printBufferInfo();
         }
     }
-    DynamicCast<SwitchNode>(n.Get(111))->m_mmu->printBufferInfo();
     fflush(logfile::buffer_monitor);
     Simulator::Schedule(interval, &my_periodic_monitoring, interval);
 }
-
-void m_rx_periodic_monitoring(FILE *fout_uplink_rx,  FILE *fout_downlink_rx, FILE *fout_flow_rx) {
-    uint64_t now = Simulator::Now().GetNanoSeconds();
-    for (const auto &tor2If : torId2UplinkIf) {  // for each TOR switches
-        Ptr<Node> node = n.Get(tor2If.first);    // tor id
-        auto swNode = DynamicCast<SwitchNode>(node);
-        assert(swNode->m_isToR == true);  // sanity check
-
-        // common: monitor TOR's uplink to measure load balancing performance
-        for (const auto &iface : tor2If.second) {
-            // monitor uplink txBytes <time, ToRId, OutDev, Bytes>
-            uint64_t uplink_txbyte = swNode->GetRxBytesOutDev(iface);
-            fprintf(fout_uplink_rx, "%lu,%u,%u,%lu\n", now, tor2If.first, if2id[swNode][iface], uplink_txbyte);
-        }
-    }
-    for (const auto &tor2If : torId2DownlinkIf) {  // for each TOR switches
-        Ptr<Node> node = n.Get(tor2If.first);    // tor id
-        auto swNode = DynamicCast<SwitchNode>(node);
-        assert(swNode->m_isToR == true);  // sanity check
-
-        // common: monitor TOR's downlink to measure load balancing performance
-        for (const auto &iface : tor2If.second) {
-            // monitor downlink txBytes <time, ToRId, OutDev, Bytes>
-            uint64_t downlink_txbyte = swNode->GetRxBytesOutDev(iface);
-            fprintf(fout_downlink_rx, "%lu,%u,%u,%lu\n", now, tor2If.first, if2id[swNode][iface], downlink_txbyte);
-        }
-    }
-    for (size_t ToRId = 0; ToRId < Settings::node_num; ToRId++) {
-        Ptr<Node> node = n.Get(ToRId);
-        if (node->GetNodeType() == 1) {  // switches
-            auto swNode = DynamicCast<SwitchNode>(n.Get(ToRId));
-            if (swNode->m_isToR == true){
-                // sanity check
-                std::unordered_map<uint32_t, uint64_t> flow_BYtes = swNode->GetFlowBytes();
-                for (auto it = flow_BYtes.begin(); it != flow_BYtes.end(); ++it) {
-                    uint32_t flow_id = it->first;
-                    uint32_t src_id = Settings::flowInfos[flow_id].src;
-                    uint32_t src_ip = Settings::hostId2IpMap[src_id];
-                    auto find_ip = swNode->m_isToR_hostIP.find(src_ip);
-                    if (find_ip != swNode->m_isToR_hostIP.end()) {
-                        //fprintf(fout_flow_rx, "%lu,%u,%lu\n", now, it->first, it->second);
-                    }
-                }
-            }
-        }
-    }
-    if (Simulator::Now() < Seconds(flowgen_stop_time + 0.05)) {
-        // recursive callback
-        Simulator::Schedule(NanoSeconds(switch_mon_interval), &m_rx_periodic_monitoring, 
-                            fout_uplink_rx, fout_downlink_rx, fout_flow_rx);  // every 10us
-    }
-    return;
-}
-
-
 
 /**
  * @brief When one RDMA is finished, so does (1) QP, (2) RxQP, (3) write it on file fct.txt.
@@ -1001,7 +947,12 @@ int main(int argc, char *argv[]) {
                 conf >> v;
                 random_seed = v;
                 std::cerr << "RANDOM_SEED\t\t\t" << random_seed << "\n";
-            }
+            } else if (key.compare("WAN_CC_MODE") == 0) {
+                int v;
+                conf >> v;
+                Settings::wan_cc_mode = static_cast<Settings::WanCCMode>(v);
+                std::cerr << "WAN_CC_MODE\t\t\t" << v << "\n";
+            } 
 
             fflush(stdout);
         }
@@ -1426,7 +1377,7 @@ int main(int argc, char *argv[]) {
                 uint32_t dci1 = Settings::asId2DciId[as1];
                 uint32_t dci2 = Settings::asId2DciId[as2];
                 uint64_t rtt = (pairDelay[n.Get(i)][n.Get(dci1)] + static_cast<uint64_t>(as_delay[as1][as2]) + pairDelay[n.Get(dci2)][n.Get(j)]) * 2;
-                uint64_t bdp = rtt * 100000000000lu;
+                uint64_t bdp = rtt / 8 * 100;
                 pairBdp[n.Get(i)][n.Get(j)] = bdp;
                 pairBdp[n.Get(j)][n.Get(i)] = bdp;
                 pairRtt[n.Get(i)][n.Get(j)] = rtt;
@@ -1434,8 +1385,9 @@ int main(int argc, char *argv[]) {
                 if (rtt < server_rtt_mon_interval) server_rtt_mon_interval = rtt;
                 if (bdp > maxBdp) maxBdp = bdp;
                 if (rtt > maxRtt) maxRtt = rtt;
-
             }
+            printf("pair %u %u: rtt %lu bdp %lu\n", i, j, pairRtt[n.Get(i)][n.Get(j)],
+                   pairBdp[n.Get(i)][n.Get(j)]);
         }
     }
     std::cout << "server_rtt_mon_interval: " << server_rtt_mon_interval << std::endl;
@@ -1517,8 +1469,6 @@ int main(int argc, char *argv[]) {
         }
     }
 
-    Simulator::Schedule(Seconds(flowgen_start_time), &m_rx_periodic_monitoring, uplink_rx_output,
-                        downlink_rx_output, flow_rx_output);
     Simulator::Schedule(Seconds(flowgen_start_time), &my_periodic_monitoring, MicroSeconds(1000));
     Simulator::Schedule(Seconds(flowgen_start_time), &m_QP_rate_monitoring);
 

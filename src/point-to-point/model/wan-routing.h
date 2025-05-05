@@ -69,32 +69,46 @@ private:
     void HandleAckReceived(Ptr<Packet> p, CustomHeader& ch);
 
     /************数据平面延迟检测*********/
+    void periodic_decrease_bytes();
+    double bytes_decrease_coefficient = 0.25;
+    Time bytes_decreace_interval = MicroSeconds(25);
     struct RttMonitor {
         //RTT检测
         Time tau1 = MicroSeconds(1000);
         Time tau2 = MicroSeconds(5000);
-        Time estimated_rtt1 = MicroSeconds(0);
-        Time estimated_rtt2 = MicroSeconds(0);
+        Time sensitive_rtt = MicroSeconds(0);
+        Time stable_rtt2 = MicroSeconds(0);
         Time last_update_time = MicroSeconds(0);
         uint32_t entry_timeout_count = 0;
         struct RttEntry {
             uint16_t hashed_seq = 0;
             Time timestamp;
         } rtt_table[8][16];
+        Time min_rtt = Seconds(0.1);
 
-        //速率检测
+        //速率检测        
+        //controlplane para
+        Time last_decrease_time = Seconds(0);
+        Time last_congestion_time = Seconds(0);
+        std::vector<uint64_t> send_bytes_history;
+        int64_t max_rate = 200 / 8 * 1e9;
+        int64_t start_rate = max_rate * 0.45; 
+        Time decrease_threshold = MicroSeconds(800); //速率下降的RTT差值阈值
+        Time increase_threshold = MicroSeconds(200); //速率上升的RTT差值阈值
+
+
+        //dataplane para
         Time cc_tau = MicroSeconds(200);        //更新速率计算的tau值
         Time cc_last_update = Simulator::Now(); //上一次更新速率的时间
         int64_t cur_rate = 0;                  //当前速率
         int64_t accumulated_cnp_bytes = 0;     //cnp累积的字节数,可能是正数也可能是负数
-        int64_t bytes_per_cnp = 50000;         //多少字节生成一个cnp
-        int64_t cnp_gen_threshold = 500000;
-        //uint32_t cnp_quota = 0;
         
-        int64_t base_rate = 5 * 1e9;//每秒发送的基准字节数，从12.5GB/s开始
-        //cnp管理
-        //Time cnp_cd = MicroSeconds(50);
-        //Time cnp_send_time[128] = {Seconds(0)};
+        int64_t cnp_gen_threshold = 300 * 1000;
+        Time last_cnp_send_time = MicroSeconds(0);
+        Time cnp_gen_interval = MicroSeconds(30); //生成cnp的时间间隔
+        int64_t base_rate = start_rate;//每秒发送的基准字节数，从10GB/s开始
+        uint64_t total_send_bytes = 0;
+
 
         inline int64_t get_normalize_cur_rate() const {
             return cur_rate / cc_tau.GetSeconds();
@@ -114,16 +128,17 @@ private:
         inline void try_update_rtt(uint32_t bucket, uint32_t index, uint16_t hashed_seq) {
             //printf("%u %u\n", rtt_table[bucket][index].hashed_seq, hashed_seq);
             if (rtt_table[bucket][index].hashed_seq == hashed_seq) {
+                //找到匹配的AckReq报文
                 Time rtt = Simulator::Now() - rtt_table[bucket][index].timestamp;
                 Time delta_t = Simulator::Now() - last_update_time;
                 last_update_time = Simulator::Now();
                 double weight1 = std::min(delta_t.GetSeconds() / tau1.GetSeconds(), 1.0);
                 double weight2 = std::min(delta_t.GetSeconds() / tau2.GetSeconds(), 1.0);
-                estimated_rtt1 = Seconds((1 - weight1) * estimated_rtt1.GetSeconds() + weight1 * rtt.GetSeconds());
-                estimated_rtt2 = Seconds((1 - weight2) * estimated_rtt2.GetSeconds() + weight2 * rtt.GetSeconds());
+                sensitive_rtt = Seconds((1 - weight1) * sensitive_rtt.GetSeconds() + weight1 * rtt.GetSeconds());
+                stable_rtt2 = Seconds((1 - weight2) * stable_rtt2.GetSeconds() + weight2 * rtt.GetSeconds());
                 rtt_table[bucket][index].hashed_seq = 0;
-                //printf("RTT1: %lf, RTT2: %lf\n", estimated_rtt1.GetSeconds() * 1000, estimated_rtt2.GetSeconds() * 1000);
-            } else if (rtt_table[bucket][index].timestamp.GetInteger() + estimated_rtt1.GetInteger() * 8 < Simulator::Now().GetInteger() && estimated_rtt1 != MicroSeconds(0)) {
+                //printf("RTT1: %lf, RTT2: %lf\n", sensitive_rtt.GetSeconds() * 1000, stable_rtt2.GetSeconds() * 1000);
+            } else if (rtt_table[bucket][index].timestamp.GetInteger() + sensitive_rtt.GetInteger() * 8 < Simulator::Now().GetInteger() && sensitive_rtt != MicroSeconds(0)) {
                 rtt_table[bucket][index].hashed_seq = 0;
                 entry_timeout_count++;
             }
@@ -177,7 +192,7 @@ private:
             }
         }
     };
-    Time controller_active_interval = MicroSeconds(500);
+    Time controller_active_interval = MicroSeconds(1000);
     std::map<uint32_t, ControllerPathSelector> dst2path_selector;
     void controlplane_logic();
 

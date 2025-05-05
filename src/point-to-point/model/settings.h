@@ -181,6 +181,10 @@ class Settings {
     /* load balancer */
     // 0: flow ECMP, 2: DRILL, 3: Conga, 4: ConWeave
     static uint32_t lb_mode;
+    static enum WanCCMode{
+        NONE = 0,
+        WAN_OPT = 1
+    } wan_cc_mode;
 
     // for common setting
     static uint32_t packet_payload;
@@ -246,6 +250,8 @@ namespace logfile {
     extern FILE* link_utilization;
     extern FILE* buffer_monitor;
     extern FILE* rate_monitor;
+    extern FILE* cnp_log;
+    extern FILE* accumulated_bytes_log;
 
     extern FILE* cnp_output;
     extern FILE* voq_output;

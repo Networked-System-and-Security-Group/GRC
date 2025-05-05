@@ -87,6 +87,7 @@ void SwitchMmu::InitSwitch(void) {
             m_usedIngressPGHeadroomBytes[i][j] = 0;
             m_usedEgressQMinBytes[i][j] = 0;
             m_usedEgressQSharedBytes[i][j] = 0;
+            m_usedEgressBytes[i][j] = 0;
         }
     }
     for (int i = 0; i < 4; i++) {
@@ -177,9 +178,9 @@ bool SwitchMmu::CheckIngressAdmission(uint32_t port, uint32_t qIndex, uint32_t p
 
 bool SwitchMmu::CheckEgressAdmission(uint32_t port, uint32_t qIndex, uint32_t psize) {
     NS_ASSERT(m_pg_shared_alpha_cell_egress > 0);
-
+    return true;
     // PFC OFF Nothing 
-    bool threshold = true;
+    /*bool threshold = true;
     if (m_usedEgressSPBytes[GetEgressSP(port, qIndex)] + psize >
         m_op_buffer_shared_limit_cell)  // exceed the sp limit
     {
@@ -219,7 +220,7 @@ bool SwitchMmu::CheckEgressAdmission(uint32_t port, uint32_t qIndex, uint32_t ps
         threshold = false;
         // drop because it exceeds threshold
     }
-    return threshold;
+    return threshold;*/
 }
 void SwitchMmu::UpdateIngressAdmission(uint32_t port, uint32_t qIndex, uint32_t psize) {
     m_usedTotalBytes += psize;  // count total buffer usage
@@ -234,35 +235,36 @@ void SwitchMmu::UpdateIngressAdmission(uint32_t port, uint32_t qIndex, uint32_t 
 }
 
 void SwitchMmu::UpdateEgressAdmission(uint32_t port, uint32_t qIndex, uint32_t psize) {
-    if (m_usedEgressQMinBytes[port][qIndex] + psize < m_q_min_cell)  // guaranteed
-    {
-        m_usedEgressQMinBytes[port][qIndex] += psize;
-        m_usedEgressPortBytes[port] = m_usedEgressPortBytes[port] + psize;
-        return;
-    } else {
-        /*
-        2 case
-        First, when there is left space in q_min_cell, and we should use remaining space in
-        q_min_cell and add rest to the shared_pool Second, just adding to shared pool
-        */
-        if (m_usedEgressQMinBytes[port][qIndex] != m_q_min_cell) {
-            m_usedEgressQSharedBytes[port][qIndex] = m_usedEgressQSharedBytes[port][qIndex] +
-                                                     psize + m_usedEgressQMinBytes[port][qIndex] -
-                                                     m_q_min_cell;
-            m_usedEgressPortBytes[port] =
-                m_usedEgressPortBytes[port] +
-                psize;  //+ m_usedEgressQMinBytes[port][qIndex] - m_q_min_cell ;
-            m_usedEgressSPBytes[GetEgressSP(port, qIndex)] =
-                m_usedEgressSPBytes[GetEgressSP(port, qIndex)] + psize +
-                m_usedEgressQMinBytes[port][qIndex] - m_q_min_cell;
-            m_usedEgressQMinBytes[port][qIndex] = m_q_min_cell;
-
-        } else {
-            m_usedEgressQSharedBytes[port][qIndex] += psize;
-            m_usedEgressPortBytes[port] += psize;
-            m_usedEgressSPBytes[GetEgressSP(port, qIndex)] += psize;
-        }
-    }
+    m_usedEgressBytes[port][qIndex] += psize;  // count total buffer usage
+    //if (m_usedEgressQMinBytes[port][qIndex] + psize < m_q_min_cell)  // guaranteed
+    //{
+    //    m_usedEgressQMinBytes[port][qIndex] += psize;
+    //    m_usedEgressPortBytes[port] = m_usedEgressPortBytes[port] + psize;
+    //    return;
+    //} else {
+    //    /*
+    //    2 case
+    //    First, when there is left space in q_min_cell, and we should use remaining space in
+    //    q_min_cell and add rest to the shared_pool Second, just adding to shared pool
+    //    */
+    //    if (m_usedEgressQMinBytes[port][qIndex] != m_q_min_cell) {
+    //        m_usedEgressQSharedBytes[port][qIndex] = m_usedEgressQSharedBytes[port][qIndex] +
+    //                                                 psize + m_usedEgressQMinBytes[port][qIndex] -
+    //                                                 m_q_min_cell;
+    //        m_usedEgressPortBytes[port] =
+    //            m_usedEgressPortBytes[port] +
+    //            psize;  //+ m_usedEgressQMinBytes[port][qIndex] - m_q_min_cell ;
+    //        m_usedEgressSPBytes[GetEgressSP(port, qIndex)] =
+    //            m_usedEgressSPBytes[GetEgressSP(port, qIndex)] + psize +
+    //            m_usedEgressQMinBytes[port][qIndex] - m_q_min_cell;
+    //        m_usedEgressQMinBytes[port][qIndex] = m_q_min_cell;
+//
+    //    } else {
+    //        m_usedEgressQSharedBytes[port][qIndex] += psize;
+    //        m_usedEgressPortBytes[port] += psize;
+    //        m_usedEgressSPBytes[GetEgressSP(port, qIndex)] += psize;
+    //    }
+    //}
 }
 void SwitchMmu::RemoveFromIngressAdmission(uint32_t port, uint32_t qIndex, uint32_t psize) {
     if (m_usedTotalBytes < psize) {
@@ -295,48 +297,49 @@ void SwitchMmu::RemoveFromIngressAdmission(uint32_t port, uint32_t qIndex, uint3
         m_usedIngressPGHeadroomBytes[port][qIndex] = 0;
 }
 void SwitchMmu::RemoveFromEgressAdmission(uint32_t port, uint32_t qIndex, uint32_t psize) {
+    m_usedEgressBytes[port][qIndex] -= psize;
     //维护m_usedEgressQMinBytes[port][qIndex], m_usedEgressQSharedBytes[port][qIndex], m_usedEgressSPBytes
-    if (m_usedEgressQMinBytes[port][qIndex] < m_q_min_cell)  // guaranteed
-    {
-        if (m_usedEgressQMinBytes[port][qIndex] < psize) {
-            std::cerr << "STOP overflow\n";
-        }
-        m_usedEgressQMinBytes[port][qIndex] -= psize;
-        m_usedEgressPortBytes[port] -= psize;
-        return;
-    } else {
-        /*
-        2 case
-        First, when packet was using both qminbytes and qsharedbytes we should substract from each
-        one Second, just subtracting shared pool
-        */
-
-        // first case
-        if (m_usedEgressQMinBytes[port][qIndex] == m_q_min_cell &&
-            m_usedEgressQSharedBytes[port][qIndex] < psize) {
-            m_usedEgressQMinBytes[port][qIndex] = m_usedEgressQMinBytes[port][qIndex] +
-                                                  m_usedEgressQSharedBytes[port][qIndex] - psize;
-            m_usedEgressSPBytes[GetEgressSP(port, qIndex)] =
-                m_usedEgressSPBytes[GetEgressSP(port, qIndex)] -
-                m_usedEgressQSharedBytes[port][qIndex];
-            m_usedEgressQSharedBytes[port][qIndex] = 0;
-            if (m_usedEgressPortBytes[port] < psize) {
-                std::cerr << "STOP overflow\n";
-            }
-            m_usedEgressPortBytes[port] -= psize;
-
-        } else {
-            if (m_usedEgressQSharedBytes[port][qIndex] < psize ||
-                m_usedEgressPortBytes[port] < psize ||
-                m_usedEgressSPBytes[GetEgressSP(port, qIndex)] < psize) {
-                std::cerr << "STOP overflow\n";
-            }
-            m_usedEgressQSharedBytes[port][qIndex] -= psize;
-            m_usedEgressPortBytes[port] -= psize;
-            m_usedEgressSPBytes[GetEgressSP(port, qIndex)] -= psize;
-        }
-        return;
-    }
+    //if (m_usedEgressQMinBytes[port][qIndex] < m_q_min_cell)  // guaranteed
+    //{
+    //    if (m_usedEgressQMinBytes[port][qIndex] < psize) {
+    //        std::cerr << "STOP overflow\n";
+    //    }
+    //    m_usedEgressQMinBytes[port][qIndex] -= psize;
+    //    m_usedEgressPortBytes[port] -= psize;
+    //    return;
+    //} else {
+    //    /*
+    //    2 case
+    //    First, when packet was using both qminbytes and qsharedbytes we should substract from each
+    //    one Second, just subtracting shared pool
+    //    */
+//
+    //    // first case
+    //    if (m_usedEgressQMinBytes[port][qIndex] == m_q_min_cell &&
+    //        m_usedEgressQSharedBytes[port][qIndex] < psize) {
+    //        m_usedEgressQMinBytes[port][qIndex] = m_usedEgressQMinBytes[port][qIndex] +
+    //                                              m_usedEgressQSharedBytes[port][qIndex] - psize;
+    //        m_usedEgressSPBytes[GetEgressSP(port, qIndex)] =
+    //            m_usedEgressSPBytes[GetEgressSP(port, qIndex)] -
+    //            m_usedEgressQSharedBytes[port][qIndex];
+    //        m_usedEgressQSharedBytes[port][qIndex] = 0;
+    //        if (m_usedEgressPortBytes[port] < psize) {
+    //            std::cerr << "STOP overflow\n";
+    //        }
+    //        m_usedEgressPortBytes[port] -= psize;
+//
+    //    } else {
+    //        if (m_usedEgressQSharedBytes[port][qIndex] < psize ||
+    //            m_usedEgressPortBytes[port] < psize ||
+    //            m_usedEgressSPBytes[GetEgressSP(port, qIndex)] < psize) {
+    //            std::cerr << "STOP overflow\n";
+    //        }
+    //        m_usedEgressQSharedBytes[port][qIndex] -= psize;
+    //        m_usedEgressPortBytes[port] -= psize;
+    //        m_usedEgressSPBytes[GetEgressSP(port, qIndex)] -= psize;
+    //    }
+    //    return;
+    //}
 }
 
 void SwitchMmu::GetPauseClasses(uint32_t port, uint32_t qIndex, bool pClasses[]) {
@@ -431,16 +434,23 @@ uint32_t SwitchMmu::GetusedEgressQSharedBytes(uint32_t port, uint32_t qIndex){
 bool SwitchMmu::ShouldSendCN(uint32_t ifindex, uint32_t qIndex) {
     if (qIndex == 0)  // qidx=0 as highest priority
         return false;
-
-    if (m_usedEgressQSharedBytes[ifindex][qIndex] > kmax[ifindex]) {
+    if (m_usedEgressBytes[ifindex][qIndex] > kmax[ifindex])
         return true;
-    } else if (m_usedEgressQSharedBytes[ifindex][qIndex] > kmin[ifindex] &&
-               kmin[ifindex] != kmax[ifindex]) {
-        double p = 1.0 * (m_usedEgressQSharedBytes[ifindex][qIndex] - kmin[ifindex]) /
-                   (kmax[ifindex] - kmin[ifindex]) * pmax[ifindex];
-        if (m_uniform_random_var.GetValue(0, 1) < p) return true;
+    if (m_usedEgressBytes[ifindex][qIndex] > kmin[ifindex]){
+        double p = pmax[ifindex] * double(m_usedEgressBytes[ifindex][qIndex] - kmin[ifindex]) / (kmax[ifindex] - kmin[ifindex]);
+        if (m_uniform_random_var.GetValue(0, 1) < p)
+            return true;
     }
     return false;
+    //if (m_usedEgressQSharedBytes[ifindex][qIndex] > kmax[ifindex]) {
+    //    return true;
+    //} else if (m_usedEgressQSharedBytes[ifindex][qIndex] > kmin[ifindex] &&
+    //           kmin[ifindex] != kmax[ifindex]) {
+    //    double p = 1.0 * (m_usedEgressQSharedBytes[ifindex][qIndex] - kmin[ifindex]) /
+    //               (kmax[ifindex] - kmin[ifindex]) * pmax[ifindex];
+    //    if (m_uniform_random_var.GetValue(0, 1) < p) return true;
+    //}
+    //return false;
 }
 
 void SwitchMmu::SetBroadcomParams(

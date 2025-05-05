@@ -42,6 +42,7 @@ uint32_t Settings::get_flowid(Ptr<Packet> p) {
 
 /* others */
 uint32_t Settings::lb_mode = 0;
+Settings::WanCCMode Settings::wan_cc_mode = Settings::NONE;
 
 std::map<uint32_t, uint32_t> Settings::hostIp2IdMap;
 std::map<uint32_t, uint32_t> Settings::hostId2IpMap;
@@ -167,7 +168,9 @@ namespace logfile {
     FILE* drop_log = nullptr;
     FILE* buffer_monitor = nullptr;
     FILE* rate_monitor = nullptr;
-    
+    FILE* cnp_log = nullptr;
+    FILE* accumulated_bytes_log = nullptr;
+
     
 
     // 初始化函数实现
@@ -199,7 +202,11 @@ namespace logfile {
         OPEN_FILE(rate_monitor);
         fprintf(rate_monitor, "timestamp_ns,src_as,dst_as,real_rate,base_rate\n");
         OPEN_FILE(qp_rate_log);
-        fprintf(qp_rate_log, "timestamp_ns,flow_id,rate\n");
+        fprintf(qp_rate_log, "timestamp_ns,flow_id,rate,alpha,target_rate\n");
+        OPEN_FILE(cnp_log);
+        fprintf(cnp_log, "timestamp_ns,switch_id,flow_id\n");
+        OPEN_FILE(accumulated_bytes_log);
+        fprintf(accumulated_bytes_log, "timestamp_ns,switch_id,dst_as,accumulated_bytes\n");
 
         OPEN_EMPTY_FILE(cnp_output);
         OPEN_EMPTY_FILE(voq_output);

@@ -74,6 +74,7 @@ KMIN_MAP {kmin_map}
 PMAX_MAP {pmax_map}
 RANDOM_SEED {random_seed}
 TIME {time}
+WAN_CC_MODE {wan_cc_mode}
 """
 
 
@@ -161,6 +162,7 @@ def main():
     parser.add_argument('--stdout', type=bool, default=False, help="stdout")
     parser.add_argument('--inter_load_all', type=int, default=60, help="不同DC之间之间通信的负载，单位Gbps")
     parser.add_argument('--intra_load', type=int, default=30, help="单个host在DC内之间通信的负载")
+    parser.add_argument('--wan_cc_mode', type=int, default=1, help="DC间拥塞控制方案")
 
     args = parser.parse_args()
 
@@ -201,6 +203,7 @@ def main():
     stdout = args.stdout
     intra_load = args.intra_load
     inter_load_all = args.inter_load_all
+    wan_cc_mode = args.wan_cc_mode
 
     # get over-subscription ratio from topoogy name
 
@@ -304,7 +307,28 @@ def main():
                                         ai=ai, hai=hai, dctcp_ai=dctcp_ai,
                                         has_win=has_win, var_win=var_win,
                                         fast_react=fast_react, mi=mi, int_multi=int_multi, ewma_gain=ewma_gain,
-                                        kmax_map=kmax_map, kmin_map=kmin_map, pmax_map=pmax_map, random_seed=1, time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"), )
+                                        kmax_map=kmax_map, kmin_map=kmin_map, pmax_map=pmax_map, random_seed=1, time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"), 
+                                        wan_cc_mode=wan_cc_mode)
+    elif cc_mode == 7:
+        ai = 10 * bw / 10
+        hai = 50 * bw / 10
+        dctcp_ai = 1000
+        fast_react = 0
+        mi = 0
+        int_multi = 1
+        ewma_gain = 0.00390625
+
+        config = config_template.format(id=config_ID, topo=topo, flow=flow,
+                                        qlen_mon_start=qlen_mon_start, qlen_mon_end=qlen_mon_end, flowgen_start_time=flowgen_start_time,
+                                        flowgen_stop_time=flowgen_stop_time, sw_monitoring_interval=sw_monitoring_interval,
+                                        buffer_size=buffer, lb_mode=lb_mode, 
+                                        enabled_pfc=enabled_pfc, enabled_irn=enabled_irn,
+                                        cc_mode=cc_mode,
+                                        ai=ai, hai=hai, dctcp_ai=dctcp_ai,
+                                        has_win=has_win, var_win=var_win,
+                                        fast_react=fast_react, mi=mi, int_multi=int_multi, ewma_gain=ewma_gain,
+                                        kmax_map=kmax_map, kmin_map=kmin_map, pmax_map=pmax_map, random_seed=1, time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"), 
+                                        wan_cc_mode=wan_cc_mode)
     else:
         print("unknown cc:{}".format(args.cc))
 
@@ -324,23 +348,7 @@ def main():
         if stdout:
             os.system(f"./waf --run 'scratch/remote {config_name}'")
         else:
-            os.system(f"./waf --run 'scratch/remote {config_name}' > {output_log} 2>&1")
-
-    ####################################################
-    #                 Analyze the output FCT           #
-    ####################################################
-    # NOTE: collect data except warm-up and cold-finish period
-    fct_analysis_time_limit_begin = int(
-        flowgen_start_time * 1e9) + int(0.005 * 1e9)  # warmup
-    fct_analysistime_limit_end = int(
-        flowgen_stop_time * 1e9) + int(0.05 * 1e9)  # extra term
-    quit(0)
-    print("Analyzing output FCT...")
-    print("python3 fctAnalysis.py -id {config_ID} -dir {dir} -bdp {bdp} -sT {fct_analysis_time_limit_begin} -fT {fct_analysistime_limit_end} > /dev/null 2>&1".format(
-        config_ID=config_ID, dir=os.getcwd(), bdp=bdp, fct_analysis_time_limit_begin=fct_analysis_time_limit_begin, fct_analysistime_limit_end=fct_analysistime_limit_end))
-    os.system("python3 fctAnalysis.py -id {config_ID} -dir {dir} -bdp {bdp} -sT {fct_analysis_time_limit_begin} -fT {fct_analysistime_limit_end} > /dev/null 2>&1".format(
-        config_ID=config_ID, dir=os.getcwd(), bdp=bdp, fct_analysis_time_limit_begin=fct_analysis_time_limit_begin, fct_analysistime_limit_end=fct_analysistime_limit_end))
-
+            os.system(f"./waf --run 'scratch/remote {config_name}' > {output_log} 2>&1 &")
 
 if __name__ == "__main__":
     main()
