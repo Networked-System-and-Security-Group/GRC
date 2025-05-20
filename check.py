@@ -33,10 +33,43 @@ def check_folders_for_log(n=5):
                     print(f"{os.path.basename(folder)}: \tNot finished.\t{log_content.count('已导入') * 1000}")                    
         else:
             print(f"{os.path.basename(folder)}: \tconfig.log file not found.")
+    # 使用 ps aux | grep scratch/remote 检查所有相关进程
+    processes = os.popen("ps aux | grep scratch/remote | grep -v grep").read().strip().split('\n')
+    for process in processes:
+        if 'python2' in process or 'grep' in process:
+            continue
+        pid = process.split()[1]
+        experiment_name = process.split()[-1]
+        print(f"Process ID: {pid}, Experiment Name: {experiment_name}")
+
+def convert_str_to_id(config_ids_str: str) -> list[int]:
+    ids = []
+    for part in config_ids_str.split(','):
+        if '-' in part:
+            a, b = map(int, part.split('-'))
+            ids.extend(range(a, b+1))
+        else:
+            ids.append(int(part))
+    return ids
+
+def kill_process_by_id(config_ids_str: str):
+    ids = convert_str_to_id(config_ids_str)
+    processes = os.popen("ps aux | grep scratch/remote | grep -v grep").read().strip().split('\n')
+    for process in processes:
+        if 'python2' in process or 'grep' in process:
+            continue
+        pid = process.split()[1]
+        experiment_name = process.split()[-1]
+        if any(f'[{id}]' in experiment_name for id in ids):
+            print(f"Process ID: {pid}, Experiment Name: {experiment_name}")
+            os.system(f"kill -9 {pid}")
 
 if __name__ == "__main__":
     command = sys.argv[1]
-    if len(sys.argv) == 2:
-        check_folders_for_log(int(sys.argv[1]))
-    else:
-        check_folders_for_log()
+    if command == 'state':
+        if len(sys.argv) == 3:
+            check_folders_for_log(int(sys.argv[2]))
+        else:
+            check_folders_for_log()
+    elif command == 'kill':
+        kill_process_by_id(sys.argv[2])

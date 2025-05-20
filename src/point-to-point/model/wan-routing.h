@@ -71,30 +71,35 @@ private:
     /************数据平面延迟检测*********/
     void periodic_decrease_bytes();
     double bytes_decrease_coefficient = 0.25;
-    Time bytes_decreace_interval = MicroSeconds(25);
+    Time bytes_decreace_interval = MicroSeconds(50);
     struct RttMonitor {
         //RTT检测
         Time tau1 = MicroSeconds(1000);
-        Time tau2 = MicroSeconds(5000);
         Time sensitive_rtt = MicroSeconds(0);
-        Time stable_rtt2 = MicroSeconds(0);
         Time last_update_time = MicroSeconds(0);
         uint32_t entry_timeout_count = 0;
         struct RttEntry {
-            uint16_t hashed_seq = 0;
+            uint32_t hashed_seq = 0;
             Time timestamp;
         } rtt_table[8][16];
-        Time min_rtt = Seconds(0.1);
 
         //速率检测        
         //controlplane para
-        Time last_decrease_time = Seconds(0);
-        Time last_congestion_time = Seconds(0);
+        const Time min_rtt = Seconds(4.08 * 1e-3);
+        const double alpha = 0.5;
+        const double beta = 0.2;
+        const int64_t ai = max_rate / 20;//addition increase
+        const Time t_high = Seconds(4.4 * 1e-3);
+        const Time t_low = Seconds(4.05 * 1e-3);
+        const Time t_ref = Seconds(4.1 * 1e-3);
+        Time rtt_diff = Seconds(0);
+        Time prev_rtt = Seconds(4.08 * 1e-3);
+        Time last_thigh_triggered = Seconds(0);
+        void update_base_rate();
+        const int64_t max_rate = 400 / 8 * 1e9;
+        const int64_t start_rate = max_rate * 0.45; 
         std::vector<uint64_t> send_bytes_history;
-        int64_t max_rate = 200 / 8 * 1e9;
-        int64_t start_rate = max_rate * 0.45; 
-        Time decrease_threshold = MicroSeconds(800); //速率下降的RTT差值阈值
-        Time increase_threshold = MicroSeconds(200); //速率上升的RTT差值阈值
+
 
 
         //dataplane para
@@ -114,7 +119,7 @@ private:
             return cur_rate / cc_tau.GetSeconds();
         }
 
-        inline void try_record_rtt(uint32_t hashed_flow, uint16_t hashed_seq) {
+        inline void try_record_rtt(uint32_t hashed_flow, uint32_t hashed_seq) {
             uint32_t bucket = (hashed_flow >> 3) % 8;
             uint32_t e_index1 = hashed_seq % 16;
             uint32_t e_index2 = (e_index1 + 1) % 16;
@@ -125,7 +130,7 @@ private:
             try_update_rtt(bucket, e_index3, hashed_seq);
         }
         private:
-        inline void try_update_rtt(uint32_t bucket, uint32_t index, uint16_t hashed_seq) {
+        inline void try_update_rtt(uint32_t bucket, uint32_t index, uint32_t hashed_seq) {
             //printf("%u %u\n", rtt_table[bucket][index].hashed_seq, hashed_seq);
             if (rtt_table[bucket][index].hashed_seq == hashed_seq) {
                 //找到匹配的AckReq报文
@@ -133,12 +138,10 @@ private:
                 Time delta_t = Simulator::Now() - last_update_time;
                 last_update_time = Simulator::Now();
                 double weight1 = std::min(delta_t.GetSeconds() / tau1.GetSeconds(), 1.0);
-                double weight2 = std::min(delta_t.GetSeconds() / tau2.GetSeconds(), 1.0);
                 sensitive_rtt = Seconds((1 - weight1) * sensitive_rtt.GetSeconds() + weight1 * rtt.GetSeconds());
-                stable_rtt2 = Seconds((1 - weight2) * stable_rtt2.GetSeconds() + weight2 * rtt.GetSeconds());
                 rtt_table[bucket][index].hashed_seq = 0;
-                //printf("RTT1: %lf, RTT2: %lf\n", sensitive_rtt.GetSeconds() * 1000, stable_rtt2.GetSeconds() * 1000);
-            } else if (rtt_table[bucket][index].timestamp.GetInteger() + sensitive_rtt.GetInteger() * 8 < Simulator::Now().GetInteger() && sensitive_rtt != MicroSeconds(0)) {
+            } else if (Simulator::Now() - rtt_table[bucket][index].timestamp.GetInteger() > MilliSeconds(7)) {
+                //没找到匹配的报文，尝试去除该项
                 rtt_table[bucket][index].hashed_seq = 0;
                 entry_timeout_count++;
             }
@@ -146,7 +149,7 @@ private:
     };
     std::map<uint32_t, std::map<uint32_t, RttMonitor>> m_rttTable;  // (dst_as, outport) -> rtt monitor
     uint32_t Hash5Tuple(uint32_t sip, uint32_t dip, uint16_t sport, uint16_t dport, uint16_t pg);
-    uint16_t Hash5tupleSeq(uint32_t sip, uint32_t dip, uint16_t sport, uint16_t dport, uint16_t pg, uint32_t seq);
+    uint32_t Hash5tupleSeq(uint32_t sip, uint32_t dip, uint16_t sport, uint16_t dport, uint16_t pg, uint32_t seq);
     static uint32_t ECMPHash(const uint8_t *key, size_t len, uint32_t seed);
     /************数据平面路由查找*********/
     struct RoutingTable {

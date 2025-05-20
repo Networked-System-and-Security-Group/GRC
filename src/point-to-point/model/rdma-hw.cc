@@ -203,7 +203,7 @@ void RdmaHw::AddQueuePair(uint64_t size, uint16_t pg, Ipv4Address sip, Ipv4Addre
     if (Settings::nodeInfos[flow_info.src].as_id == Settings::nodeInfos[flow_info.dst].as_id) {
         qp->SetTimeout(m_waitAckTimeout);
     } else {
-        qp->SetTimeout(MilliSeconds(8)); //Magic Number
+        qp->SetTimeout(MilliSeconds(10)); //Magic Number
     }
 
     if (m_irn) {
@@ -340,10 +340,10 @@ int RdmaHw::ReceiveUdp(Ptr<Packet> p, CustomHeader &ch) {
     bool cnp_check = false;
     int x = ReceiverCheckSeq(ch.udp.seq, rxQp, payload_size, cnp_check);
     if (x == 2 || x == 4) {
-        printf("[%ld]Out of order，Flow:%u, 期待Seq：%u，当前Seq:%u\n", Simulator::Now().GetNanoSeconds(), flow_id, rxQp->ReceiverNextExpectedSeq, ch.udp.seq);
-        fflush(stdout);
+        //printf("[%ld]Out of order，Flow:%u, 期待Seq：%u，当前Seq:%u\n", Simulator::Now().GetNanoSeconds(), flow_id, rxQp->ReceiverNextExpectedSeq, ch.udp.seq);
+        //fflush(stdout);
     }
-    rxQp->send_cnp = (ecnbits || cnp_check);
+    rxQp->send_cnp = ((ecnbits || cnp_check) && Simulator::Now() - rxQp->last_cnp_send_time > MicroSeconds(10));
     //printf("Receive a udp\n");
     if (ack_req || x == 2 || x == 6) {  // generate ACK or NACK
         qbbHeader seqh;
@@ -370,6 +370,7 @@ int RdmaHw::ReceiveUdp(Ptr<Packet> p, CustomHeader &ch) {
             if (cnp_check) cnp_by_ooo++;
             seqh.SetCnp();
             rxQp->send_cnp = false;
+            rxQp->last_cnp_send_time = Simulator::Now();
         }
 
         Ptr<Packet> newp =
@@ -380,6 +381,10 @@ int RdmaHw::ReceiveUdp(Ptr<Packet> p, CustomHeader &ch) {
         head.SetDestination(Ipv4Address(ch.sip));
         head.SetSource(Ipv4Address(ch.dip));
         head.SetProtocol(x == 1 ? 0xFC : 0xFD);  // ack=0xFC nack=0xFD
+        //if (x != 1) {
+        //    printf("[%ld]Send NACK, FlowId:%u, Expect:%u, PacketSeq:%u\n",
+        //           Simulator::Now().GetNanoSeconds(), flow_id, rxQp->ReceiverNextExpectedSeq, ch.udp.seq);
+        //}
         head.SetTtl(64);
         head.SetPayloadSize(newp->GetSize());
         head.SetIdentification(rxQp->m_ipid++);
@@ -405,7 +410,6 @@ int RdmaHw::ReceiveUdp(Ptr<Packet> p, CustomHeader &ch) {
 
 int RdmaHw::ReceiveCnp(Ptr<Packet> p, CustomHeader &ch) {
     uint64_t key = GetQpKey(ch.sip, ch.cnp.dport, ch.cnp.sport, ch.cnp.pg);
-    //printf("%u receive cnp %lx, QPNum=%u\n", m_node->GetId(), key, m_qpMap.size());
     fflush(stdout);
 	Ptr<RdmaQueuePair> qp = GetQp(key);
 	assert(qp != NULL);
@@ -434,6 +438,11 @@ int RdmaHw::ReceiveAck(Ptr<Packet> p, CustomHeader &ch) {
     uint32_t nic_idx = GetNicIdxOfQp(qp);
     Ptr<QbbNetDevice> dev = m_nic[nic_idx].dev;
 
+    if (ch.l3Prot == 0xFD) {
+        //printf("[%lu]Receive Nack, FlowId:%u, %lu->%lu, PacketSeq:%u\n",
+        //    Simulator::Now().GetNanoSeconds(), Settings::get_flowid(p), qp->snd_nxt,
+        //    qp->snd_una, seq);
+    }
     if (m_ack_interval == 0)
         std::cout << "ERROR: shouldn't receive ack\n";
     else {
@@ -512,7 +521,7 @@ int RdmaHw::ReceiveAck(Ptr<Packet> p, CustomHeader &ch) {
         }
 
     } else if (ch.l3Prot == 0xFD) {
-        printf("Received a NACK! flow_id:%u, qp_seq_nxt:%lu, qp_seq_unk:%lu\n",Settings::get_flowid(p), qp->snd_nxt, qp->snd_una);
+        //printf("Received a NACK! flow_id:%u, qp_seq_nxt:%lu, qp_seq_unk:%lu\n",Settings::get_flowid(p), qp->snd_nxt, qp->snd_una);
         RecoverQueue(qp); //注意！！这里好像有问题，recover之后确认了ack之后才进行恢复，似乎是无效恢复
     }   // NACK
 
@@ -552,7 +561,7 @@ int RdmaHw::Receive(Ptr<Packet> p, CustomHeader &ch) {
     //     << "l3Prot:" << std::hex  << ch.l3Prot << ",at" << std::dec << Simulator::Now() << std::endl;
     uint32_t flow_id = Settings::get_flowid(p);
     if (Settings::flowInfos[flow_id].finish_time != 0) {//如果这条流已经完成传输，这可能是残存在拓扑中的包，直接丢弃
-        printf("Received a packet of finished flow, FlowId:%u, Seq:%u\n", flow_id, ch.udp.seq);
+        //printf("Received a packet of finished flow, FlowId:%u, Seq:%u\n", flow_id, ch.udp.seq);
         return 1;
     }
     if (ch.l3Prot == 0x11) {  // UDP
@@ -687,7 +696,9 @@ uint16_t RdmaHw::EtherToPpp(uint16_t proto) {
     return 0;
 }
 
-void RdmaHw::RecoverQueue(Ptr<RdmaQueuePair> qp) { qp->snd_nxt = qp->snd_una; }
+void RdmaHw::RecoverQueue(Ptr<RdmaQueuePair> qp) { 
+    qp->snd_nxt = qp->snd_una; 
+}
 
 void RdmaHw::QpComplete(Ptr<RdmaQueuePair> qp) {
     NS_ASSERT(!m_qpCompleteCallback.IsNull());
@@ -766,6 +777,9 @@ Ptr<Packet> RdmaHw::GetNxtPacket(Ptr<RdmaQueuePair> qp) {
     PppHeader ppp;
     ppp.SetProtocol(0x0021);  // EtherToPpp(0x800), see point-to-point-net-device.cc
     p->AddHeader(ppp);
+    //if (qp->m_flow_id == 90) {
+    //    printf("Generate a packet, FlowId:%u, Seq:%u\n", qp->m_flow_id, seq);
+    //}
 
     bool ack_req = (seq + payload_size >= qp->m_size) || (seq % m_ack_interval == 0 && seq != 0);
     // attach Stat Tag
@@ -851,9 +865,13 @@ void RdmaHw::HandleTimeout(Ptr<RdmaQueuePair> qp, Time rto) {
     acc_timeout_count[qp->m_flow_id]++;
 
     if (qp->irn.m_enabled) qp->irn.m_recovery = true;
+    if (m_cc_mode == 1){ // mlx version
+        cnp_received_mlx(qp); //当超时发生的时候，等效于接收到CNP？
+	}
+    printf("[%ld]Retransmission Timeout! FlowId:%u, %lu->%lu, fsize:%lu, Rate:%lu, Alpha:%lf\n", 
+        Simulator::Now().GetNanoSeconds(), qp->m_flow_id, qp->snd_nxt, qp->snd_una,
+        qp->m_size, qp->m_rate.GetBitRate(), qp->mlx.m_alpha);
     RecoverQueue(qp);
-    printf("[%ld]Retransmition Timeout! FlowId:%u, seq:%lu, RTO:%ld\n", 
-        Simulator::Now().GetNanoSeconds(), qp->m_flow_id, qp->snd_nxt, rto.GetNanoSeconds());
     //Settings::flowInfos[qp->m_flow_id].print();
     //printf("\n");
     dev->TriggerTransmit();
@@ -905,8 +923,11 @@ void RdmaHw::ScheduleUpdateAlphaMlx(Ptr<RdmaQueuePair> q) {
 void RdmaHw::cnp_received_mlx(Ptr<RdmaQueuePair> q) {
     q->mlx.m_alpha_cnp_arrived = true;     // set CNP_arrived bit for alpha update
     q->mlx.m_decrease_cnp_arrived = true;  // set CNP_arrived bit for rate decrease
+    //printf("[%lu]Receive cnp, flow:%u\n", Simulator::Now().GetNanoSeconds(), q->m_flow_id);
     //std::cout << "ID: " << m_node->GetId() << ",Receive cnp " << q->m_flow_id <<  ",m_first_cnp:" <<q->mlx.m_first_cnp << ",at" << Simulator::Now() << std::endl;
-    if (q->mlx.m_first_cnp) {
+    Time interval = Simulator::Now() - q->mlx.last_cnp_time;
+    q->mlx.last_cnp_time = Simulator::Now();
+    if (q->mlx.m_first_cnp || interval > MilliSeconds(7)) {
         // init alpha
         q->mlx.m_alpha = 1;
         q->mlx.m_alpha_cnp_arrived = false;

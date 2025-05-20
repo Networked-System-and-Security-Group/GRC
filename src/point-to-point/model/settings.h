@@ -183,7 +183,8 @@ class Settings {
     static uint32_t lb_mode;
     static enum WanCCMode{
         NONE = 0,
-        WAN_OPT = 1
+        WAN_OPT = 1,
+        WITH_ECN = 2,
     } wan_cc_mode;
 
     // for common setting

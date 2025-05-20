@@ -30,7 +30,7 @@ class SwitchNode : public Node {
     uint64_t m_rxBytes[pCnt];  // counter of rx bytes, for HPCC
     std::unordered_map<uint32_t, uint64_t> flow_bytes; 
     bool isESW = false;
-   protected:
+    
     bool m_ecnEnabled;
     bool m_pfcEnabled;
     uint32_t m_ccMode;

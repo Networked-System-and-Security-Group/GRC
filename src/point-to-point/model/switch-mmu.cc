@@ -156,14 +156,14 @@ bool SwitchMmu::CheckIngressAdmission(uint32_t port, uint32_t qIndex, uint32_t p
 
     if (m_usedTotalBytes + psize > m_maxBufferBytes)  // buffer full, usually should not reach here.
     {
-        std::cerr << "WARNING: Drop because ingress buffer full\n";
+        //std::cerr << "WARNING: Drop because ingress buffer full\n";
         return false;
     }
     if (m_usedIngressPGBytes[port][qIndex] + psize > m_pg_min_cell &&
         m_usedIngressPortBytes[port] + psize > m_port_min_cell) { // exceed guaranteed, use share buffer
         if (m_usedIngressSPBytes[GetIngressSP(port, qIndex)] > m_buffer_cell_limit_sp) {  // check if headroom is already being used
             if (m_usedIngressPGHeadroomBytes[port][qIndex] + psize > m_pg_hdrm_limit[port]) { // exceed headroom space
-                std::cout << "pfc event:" << std::endl;
+                //std::cout << "pfc event:" << std::endl;
                 if (m_PFCenabled) {
                     std::cerr << "WARNING: Drop because ingress headroom full:"
                               << m_usedIngressPGHeadroomBytes[port][qIndex] << "\t"

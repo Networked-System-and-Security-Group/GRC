@@ -438,18 +438,11 @@ void SwitchNode::DoSwitchSend(Ptr<Packet> p, CustomHeader &ch, uint32_t outDev, 
                 m_mmu->UpdateIngressAdmission(inDev, qIndex, p->GetSize());
                 m_mmu->UpdateEgressAdmission(outDev, qIndex, p->GetSize());
             } else { /** DROP: At Ingress */
-#if (0)
-                /** NOTE: logging dropped pkts */
-                std::cout << "LostPkt ingress - Sw(" << m_id << ")," << PARSE_FIVE_TUPLE(ch)
-                          << "L3Prot:" << ch.l3Prot
-                          << ",Size:" << p->GetSize()
-                          << ",At " << Simulator::Now() << std::endl;
-#endif
                 if (ch.l3Prot == 0x11) {
-                    printf("An UDP packet dropped because ingress admission check false: Node:%u, Flow:%u, Seq=%u\n", 
-                        m_id, 
-                        Settings::get_flowid(p),
-                        ch.udp.seq);
+                    //printf("An UDP packet dropped because ingress admission check false: Node:%u, Flow:%u, Seq=%u\n", 
+                    //    m_id, 
+                    //    Settings::get_flowid(p),
+                    //    ch.udp.seq);
                 }
                 Settings::dropped_pkt_sw_ingress++;
                 fprintf(logfile::drop_log, "%lu,%u,%u,%u,%u,%u\n", 
@@ -462,12 +455,6 @@ void SwitchNode::DoSwitchSend(Ptr<Packet> p, CustomHeader &ch, uint32_t outDev, 
                 return;  // drop
             }
         } else { /** DROP: At Egress */
-#if (0)
-            /** NOTE: logging dropped pkts */
-            std::cout << "LostPkt egress - Sw(" << m_id << ")," << PARSE_FIVE_TUPLE(ch)
-                      << "L3Prot:" << ch.l3Prot << ",Size:" << p->GetSize() << ",At "
-                      << Simulator::Now() << std::endl;
-#endif                
             if (ch.l3Prot == 0x11) {
                 printf("An UDP packet dropped because egress admission check false: Node:%u, Flow:%u, Seq=%u\n", 
                     this->m_id,
@@ -514,6 +501,11 @@ void SwitchNode::SwitchNotifyDequeue(uint32_t ifIndex, uint32_t qIndex, Ptr<Pack
                 h.SetEcn((Ipv4Header::EcnType)0x03);
                 p->AddHeader(h);
                 p->AddHeader(ppp);
+                //printf("[%ld]ECN mark: Node:%u->%u, Flow:%u\n", 
+                //    Simulator::Now().GetNanoSeconds(),
+                //    m_id, 
+                //    Settings::if2id[this][ifIndex],
+                //    Settings::get_flowid(p));
             }
         }
         // NOTE: ConWeave's probe/reply does not need to pass inDev interface

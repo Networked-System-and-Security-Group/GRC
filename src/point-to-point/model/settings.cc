@@ -192,7 +192,7 @@ namespace logfile {
         OPEN_FILE(flow_output);
         OPEN_FILE(wan_log);
         OPEN_FILE(rtt_log);
-        fprintf(rtt_log, "timestamp_ns,switch_id,dst_as,next_hop,rtt1_ms,rtt2_ms,timeout_count\n");
+        fprintf(rtt_log, "timestamp_ns,switch_id,dst_as,next_hop,rtt1_ms,timeout_count\n");
         OPEN_FILE(drop_log);
         fprintf(drop_log, "timestamp_ns,switch_id,next_hop,flow_id,seq_num,type\n");
         OPEN_FILE(link_utilization);

@@ -93,8 +93,6 @@ unordered_map<uint64_t, uint32_t> rate2kmax, rate2kmin;
 unordered_map<uint64_t, double> rate2pmax;
 
 // config of link-down scenario, ACK priority, and buffer
-uint64_t link_down_time = 0;
-uint32_t link_down_A = 0, link_down_B = 0;
 uint32_t buffer_size = 0;  // 0 to set buffer size automatically
 
 // Added from Here
@@ -237,8 +235,11 @@ void m_QP_rate_monitoring()
                 uint32_t flowid = qp.second->m_flow_id;
                 DataRate m_rate = qp.second->m_rate;
                 uint64_t m_bps = m_rate.GetBitRate();
+                auto& flowInfo = Settings::flowInfos[flowid];
+                if (Settings::nodeInfos[flowInfo.src].as_id != Settings::nodeInfos[flowInfo.dst].as_id) {
+                    fprintf(qp_rate_log, "%lu,%u,%lu,%lf,%lu\n", now, flowid, m_bps / 8, qp.second->mlx.m_alpha, qp.second->mlx.m_targetRate.GetBitRate() / 8);
+                }
                 // std::cout << "bps: " << now << flowid << m_bps << std::endl;
-                fprintf(qp_rate_log, "%lu,%u,%lu,%lf,%lu\n", now, flowid, m_bps / 8, qp.second->mlx.m_alpha, qp.second->mlx.m_targetRate.GetBitRate() / 8);
             }
         }
     }
@@ -247,14 +248,20 @@ void m_QP_rate_monitoring()
 }
 
 void my_periodic_monitoring(Time interval) {
-    printf("Periodic monitoring at %lu, %u flows finished\n", Simulator::Now().GetNanoSeconds(), Settings::cnt_finished_flows);
+    printf("Periodic monitoring at %lu, %lu flows finished, %ld flows activing\n", 
+        Simulator::Now().GetNanoSeconds(), Settings::cnt_finished_flows, Settings::flowInfos.size() - Settings::cnt_finished_flows);
+    printf("DropInfo: %u %u\n", Settings::dropped_pkt_sw_ingress, Settings::dropped_pkt_sw_egress);
+    Settings::dropped_pkt_sw_ingress = 0;
+    Settings::dropped_pkt_sw_egress = 0;
     //对于所有的DCI交换机，打印一些内容
     for (const auto& node_info : Settings::nodeInfos) {
         if (node_info.node_type == NodeInfo::NodeType::DCI_SWITCH) {
             Ptr<Node> node = n.Get(node_info.id);
             auto sw_node = DynamicCast<SwitchNode>(node);
             //sw_node->m_mmu->m_wanRouting.print_status();
-        } else if (node_info.node_type == NodeInfo::NodeType::WAN_SWITCH) {
+        } 
+        if (node_info.node_type == NodeInfo::NodeType::WAN_SWITCH
+                    || node_info.node_type == NodeInfo::NodeType::DCI_SWITCH) {
             DynamicCast<SwitchNode>(n.Get(node_info.id))->m_mmu->printBufferInfo();
         }
     }
@@ -319,7 +326,7 @@ void output_flow_info() {
     
     json jsonArray = json::array();
     
-    for (const auto& flow : Settings::flowInfos) {
+    for (auto& flow : Settings::flowInfos) {
         // 只包含指定的字段
         uint64_t base_rtt = pairRtt[n.Get(flow.src)][n.Get(flow.dst)];
         uint64_t b = 100000000000lu;// pairBw[n.Get(sid)][n.Get(did)];
@@ -329,6 +336,10 @@ void output_flow_info() {
                              IntHeader::GetStaticSize());  // translate to the minimum bytes required
                                                            // (with header but no INT)
         uint64_t standalone_fct = base_rtt + total_bytes * 8000000000lu / b;
+        if (flow.finish_time == 0) {
+            flow.finish_time = Simulator::Now().GetSeconds();
+            printf("FlowId:%u Not Finish!\n", flow.idx);
+        }
         json flowJson = {
             {"flow_id", flow.idx},
             {"src", flow.src},
@@ -363,7 +374,7 @@ void output_flow_info() {
  */
 void stop_simulation_middle() {
     uint32_t target_flow_num = flow_num - 0;  // can be lower than flownum
-    if (Settings::cnt_finished_flows >= target_flow_num) {
+    if (Settings::cnt_finished_flows >= target_flow_num || Simulator::Now() > Seconds(2.2)) {
         std::cout << "\n*** Simulator is enforced to be finished, finished so far: "
                   << Settings::cnt_finished_flows << "/ total: " << target_flow_num
                   << ", Time:" << Simulator::Now() << std::endl;
@@ -878,10 +889,6 @@ int main(int argc, char *argv[]) {
             } else if (key.compare("DCTCP_RATE_AI") == 0) {
                 conf >> dctcp_rate_ai;
                 std::cerr << "DCTCP_RATE_AI\t\t\t\t" << dctcp_rate_ai << "\n";
-            } else if (key.compare("LINK_DOWN") == 0) {
-                conf >> link_down_time >> link_down_A >> link_down_B;
-                std::cerr << "LINK_DOWN\t\t\t\t" << link_down_time << ' ' << link_down_A << ' '
-                          << link_down_B << '\n';
             } else if (key.compare("KMAX_MAP") == 0) {
                 int n_k;
                 conf >> n_k;
@@ -1038,7 +1045,7 @@ int main(int argc, char *argv[]) {
             }
             case NodeInfo::NodeType::WAN_SWITCH: {
                 Ptr<SwitchNode> sw = CreateObject<SwitchNode>();
-                sw->SetAttribute("EcnEnabled", BooleanValue(false));
+                sw->SetAttribute("EcnEnabled", BooleanValue(Settings::wan_cc_mode == Settings::WanCCMode::WITH_ECN));
                 sw->SetAttribute("PfcEnabled", BooleanValue(false));
                 n.Add(sw);
                 break;
@@ -1199,7 +1206,7 @@ int main(int argc, char *argv[]) {
                 sw->m_mmu->ConfigHdrm(j, headroom);
             }
             sw->m_mmu->ConfigNPort(sw->GetNDevices() - 1);
-            sw->m_mmu->ConfigBufferSize(128 * 1024 * 1024);  // Magic Number
+            sw->m_mmu->ConfigBufferSize(96 * 1024 * 1024);  // Magic Number
             sw->m_mmu->node_id = sw->GetId();
             sw->m_mmu->InitSwitch();
 
@@ -1222,7 +1229,7 @@ int main(int argc, char *argv[]) {
                 sw->m_mmu->ConfigHdrm(j, 0);
             }
             sw->m_mmu->ConfigNPort(sw->GetNDevices() - 1);
-            sw->m_mmu->ConfigBufferSize(24 * 1024 * 1024);  // Magic Number
+            sw->m_mmu->ConfigBufferSize(28 * 1024 * 1024);  // Magic Number
             sw->m_mmu->node_id = sw->GetId();
             sw->m_mmu->InitSwitch();
 
@@ -1386,8 +1393,8 @@ int main(int argc, char *argv[]) {
                 if (bdp > maxBdp) maxBdp = bdp;
                 if (rtt > maxRtt) maxRtt = rtt;
             }
-            printf("pair %u %u: rtt %lu bdp %lu\n", i, j, pairRtt[n.Get(i)][n.Get(j)],
-                   pairBdp[n.Get(i)][n.Get(j)]);
+            //printf("pair %u %u: rtt %lu bdp %lu\n", i, j, pairRtt[n.Get(i)][n.Get(j)],
+            //       pairBdp[n.Get(i)][n.Get(j)]);
         }
     }
     std::cout << "server_rtt_mon_interval: " << server_rtt_mon_interval << std::endl;
@@ -1437,11 +1444,6 @@ int main(int argc, char *argv[]) {
     }
 
 
-    // schedule link down
-    if (link_down_time > 0) {
-        Simulator::Schedule(Seconds(flowgen_start_time) + MicroSeconds(link_down_time),
-                            &TakeDownLink, n, n.Get(link_down_A), n.Get(link_down_B));
-    }
 
     // update torId2UplinkIf, torId2DownlinkIf
     for (size_t ToRId = 0; ToRId < Settings::node_num; ToRId++) {

@@ -85,7 +85,7 @@ void WanRouting::HandleUdpReceived(Ptr<Packet> p, CustomHeader& ch) {
     bool ack_req = (bool)fit.GetAckReq();
     if (ack_req) {
         auto& entries = rtt_monitor.rtt_table[(flow_hash_value >> 3) % 8];
-        uint16_t hashed_seq = Hash5tupleSeq(ch.sip, ch.dip, ch.udp.sport, ch.udp.dport, ch.udp.pg, ch.udp.seq + p->GetSize() - ch.GetSerializedSize());
+        uint32_t hashed_seq = Hash5tupleSeq(ch.sip, ch.dip, ch.udp.sport, ch.udp.dport, ch.udp.pg, ch.udp.seq + p->GetSize() - ch.GetSerializedSize());
         uint32_t e_index1 = hashed_seq % 16;
         uint32_t e_index2 = (e_index1 + 1) % 16;
         uint32_t e_index3 = (e_index1 + 2) % 16;
@@ -109,8 +109,6 @@ void WanRouting::HandleUdpReceived(Ptr<Packet> p, CustomHeader& ch) {
                 entries[e_index2].timestamp = now;
             }
         }
-        //printf("Switch %u, Seq %u udp passed, bucket:%u, index:%u\n", 
-        //    m_switch_id, ch.udp.seq + p->GetSize() - ch.GetSerializedSize(), flow_hash_value, hashed_seq);
     }
     // 更新速率
     double cc_delta_t = (Simulator::Now() - rtt_monitor.cc_last_update).GetSeconds();
@@ -128,9 +126,6 @@ void WanRouting::HandleUdpReceived(Ptr<Packet> p, CustomHeader& ch) {
     if (rtt_monitor.accumulated_cnp_bytes > rtt_monitor.cnp_gen_threshold
         && Simulator::Now() - rtt_monitor.last_cnp_send_time > rtt_monitor.cnp_gen_interval * (1.0 * rtt_monitor.cnp_gen_threshold / rtt_monitor.accumulated_cnp_bytes)
         && Settings::wan_cc_mode == Settings::WanCCMode::WAN_OPT) {
-        //printf("[%ld]Send Cnp, Switch %u, accumulate_bytes %ld, cur_rate:%ld\n", 
-        //    Simulator::Now().GetNanoSeconds(), m_switch_id, rtt_monitor.accumulated_cnp_bytes, rtt_monitor.get_normalize_cur_rate());
-        //rtt_monitor.accumulated_cnp_bytes -= rtt_monitor.bytes_per_cnp;
         rtt_monitor.last_cnp_send_time = Simulator::Now();
         send_cnp(p, ch);
     }
@@ -156,7 +151,7 @@ void WanRouting::HandleAckReceived(Ptr<Packet> p, CustomHeader& ch) {
     auto& flowlet_item = m_flowletTable[flow_key];
     uint32_t out_port = flowlet_item.out_port;
     auto& rtt_monitor = m_rttTable[src_as][out_port];
-    uint16_t hashed_seq = Hash5tupleSeq(ch.dip, ch.sip, ch.ack.dport, ch.ack.sport, ch.ack.pg, ch.ack.seq);
+    uint32_t hashed_seq = Hash5tupleSeq(ch.dip, ch.sip, ch.ack.dport, ch.ack.sport, ch.ack.pg, ch.ack.seq);
     rtt_monitor.try_record_rtt(flow_hash_value, hashed_seq);
     //printf("Switch %u, Seq %u ack passed, bucket:%u, index:%u\n", m_switch_id, ch.ack.seq, flow_hash_value, hashed_seq);
     m_switchSendToDevCallback(p, ch);
@@ -170,11 +165,10 @@ void WanRouting::periodic_decrease_bytes() {
             //    m_switch_id, dst_as, rtt_monitor.accumulated_cnp_bytes);
             fprintf(logfile::accumulated_bytes_log, "%ld,%u,%u,%ld\n", 
                 Simulator::Now().GetNanoSeconds(), m_switch_id, dst_as, rtt_monitor.accumulated_cnp_bytes);
-            if (rtt_monitor.accumulated_cnp_bytes < 500*1000
-                || rtt_monitor.accumulated_cnp_bytes > -500*1000) {
-                rtt_monitor.accumulated_cnp_bytes *= 0.9;
+            if (rtt_monitor.accumulated_cnp_bytes < 500*1000) {
+                rtt_monitor.accumulated_cnp_bytes *= 0.8;
             } else if (rtt_monitor.accumulated_cnp_bytes >= 500*1000) {
-                rtt_monitor.accumulated_cnp_bytes -= 50*1000;
+                rtt_monitor.accumulated_cnp_bytes -= 100*1000;
             } /*else if (rtt_monitor.accumulated_cnp_bytes <= -500*1000) {
                 rtt_monitor.accumulated_cnp_bytes += 50*1000;
             }*/
@@ -191,19 +185,14 @@ void WanRouting::controlplane_logic() {
         for (auto& [port, rtt_monitor] : port_map) {
             //logging
             fprintf(logfile::rtt_log, 
-                "%" PRIu64 ",%" PRIu32 ",%" PRIu32 ",%" PRIu32 ",%.3f,%.3f,%" PRIu32 "\n",  // 格式说明符
-                Simulator::Now().GetNanoSeconds(),          // 时间戳（纳秒）
-                m_switch_id,          // 交换机ID
-                dst_as,              // AS编号
-                Settings::if2id.at(Settings::nodeContainer.Get(m_switch_id)).at(port),               // 下一跳
-                rtt_monitor.sensitive_rtt.GetSeconds() * 1000.0,  // RTT1（毫秒，保留3位小数）
-                rtt_monitor.stable_rtt2.GetSeconds() * 1000.0,  // RTT2（毫秒，保留3位小数）
-                rtt_monitor.entry_timeout_count                    // 超时计数
+                "%" PRIu64 ",%" PRIu32 ",%" PRIu32 ",%" PRIu32 ",%.3f,%" PRIu32 "\n",  // 格式说明符
+                Simulator::Now().GetNanoSeconds(), m_switch_id, dst_as,
+                Settings::if2id.at(Settings::nodeContainer.Get(m_switch_id)).at(port),
+                rtt_monitor.sensitive_rtt.GetSeconds() * 1000.0, rtt_monitor.entry_timeout_count
             );
             rtt_monitor.entry_timeout_count = 0;
             fprintf(logfile::rate_monitor, "%lu,%u,%u,%lu,%lu\n", 
-                Simulator::Now().GetNanoSeconds(), 
-                Settings::nodeInfos[m_switch_id].as_id, dst_as, 
+                Simulator::Now().GetNanoSeconds(), Settings::nodeInfos[m_switch_id].as_id, dst_as, 
                 rtt_monitor.get_normalize_cur_rate(), rtt_monitor.base_rate);
             //速率调整
             rtt_monitor.send_bytes_history.push_back(rtt_monitor.total_send_bytes);
@@ -212,46 +201,62 @@ void WanRouting::controlplane_logic() {
             if (rtt_monitor.sensitive_rtt < MicroSeconds(200)) {//rtt还没有接收到第一个数据
                 continue;
             }
-            rtt_monitor.min_rtt = MilliSeconds(4);//std::min(rtt_monitor.min_rtt, rtt_monitor.sensitive_rtt);
-            Time rtt_diff = rtt_monitor.sensitive_rtt - rtt_monitor.min_rtt;
-            if (rtt_diff < rtt_monitor.increase_threshold
-                && rtt_monitor.base_rate < rtt_monitor.max_rate) {
-                //如果没有拥塞
-                int hsize = rtt_monitor.send_bytes_history.size();
-                int64_t rate_before = (rtt_monitor.send_bytes_history[hsize - 1]
-                    + rtt_monitor.send_bytes_history[hsize - 2]
-                    + rtt_monitor.send_bytes_history[hsize - 3]) / 3.0 / controller_active_interval.GetSeconds();
-                int64_t upper_rate = std::max(rtt_monitor.start_rate, static_cast<int64_t>(rate_before * 1.2));
-                if (rtt_monitor.base_rate > upper_rate) {
-                    rtt_monitor.base_rate = upper_rate + (rtt_monitor.base_rate - upper_rate) * 0.7;
-                    printf("[%ld]Rate Fall to %ld, %u -> %u, rtt_diff %lf\n", 
-                        Simulator::Now().GetNanoSeconds(), rtt_monitor.base_rate, m_switch_id, dst_as, rtt_diff.GetSeconds()*1000);
-                } else {
-                    if (Simulator::Now() - rtt_monitor.last_congestion_time >= MilliSeconds(3)) {
-                        rtt_monitor.base_rate += 0.08 * rtt_monitor.max_rate;
-                        rtt_monitor.base_rate = std::min(rtt_monitor.base_rate, rtt_monitor.max_rate);
-                        printf("[%ld]Hyper increase to %ld, %u -> %u, rtt_diff %lf\n", 
-                            Simulator::Now().GetNanoSeconds(), rtt_monitor.base_rate, m_switch_id, dst_as, rtt_diff.GetSeconds()*1000);
-                    } else {
-                        rtt_monitor.base_rate += 0.04 * rtt_monitor.max_rate;
-                        rtt_monitor.base_rate = std::min(rtt_monitor.base_rate, rtt_monitor.max_rate);
-                        printf("[%ld]Slow increase to %ld, %u -> %u, rtt_diff %lf\n", 
-                            Simulator::Now().GetNanoSeconds(), rtt_monitor.base_rate, m_switch_id, dst_as, rtt_diff.GetSeconds()*1000);
-                    }
-                }
-            } else if (rtt_diff > rtt_monitor.decrease_threshold) {
-                rtt_monitor.last_congestion_time = Simulator::Now();
-                if (Simulator::Now() - rtt_monitor.last_decrease_time >= MilliSeconds(5)) {
-                    rtt_monitor.last_decrease_time = Simulator::Now();
-                    printf("[%ld]Decrease to %ld, %u -> %u, rtt_diff %lf, min_rtt %lf\n", 
-                        Simulator::Now().GetNanoSeconds(), rtt_monitor.base_rate, 
-                        m_switch_id, dst_as, rtt_diff.GetSeconds()*1000, rtt_monitor.min_rtt.GetSeconds()*1000);
-                    rtt_monitor.base_rate *= 0.5;
-                }
+            //rtt_monitor.min_rtt = MilliSeconds(4);//std::min(rtt_monitor.min_rtt, rtt_monitor.sensitive_rtt);
+            if (Settings::wan_cc_mode == Settings::WanCCMode::WAN_OPT) {
+                printf("[%ld]Switch %u, dst_as %u, rtt %lf,", 
+                    Simulator::Now().GetNanoSeconds(), m_switch_id, dst_as, 
+                    rtt_monitor.sensitive_rtt.GetSeconds()*1000);
+                rtt_monitor.update_base_rate();
             }
         }
     }
     fflush(logfile::rate_monitor);
+}
+
+double weight(double g) {
+    if (g < -0.25) {
+        return 0;
+    } else if (g < 0.25) {
+        return 0.5 + 2 * g;
+    } else {
+        return 1;
+    }
+}
+
+void WanRouting::RttMonitor::update_base_rate() {
+    int hsize = send_bytes_history.size();
+    int64_t rate_before = (send_bytes_history[hsize - 1]
+        + send_bytes_history[hsize - 2]
+        + send_bytes_history[hsize - 3]) / 3.0 / MicroSeconds(1000).GetSeconds(); //Magic Number
+    int64_t upper_rate = std::max(start_rate, static_cast<int64_t>(rate_before * 1.2));
+    bool flag = (base_rate > upper_rate);
+
+    Time new_rtt_diff = sensitive_rtt - prev_rtt;
+    prev_rtt = sensitive_rtt;
+    rtt_diff = Seconds((1 - alpha) * rtt_diff.GetSeconds() + alpha * new_rtt_diff.GetSeconds());
+    printf("rtt_diff %lf, ", rtt_diff.GetSeconds() * 1000);
+    double rtt_gradient = rtt_diff.GetSeconds() / (t_high - t_low).GetSeconds();
+    if (sensitive_rtt < t_low) {
+        printf("TLOW,");
+        base_rate += ai;
+    } else if (sensitive_rtt > t_high) {
+        if (Simulator::Now() - last_thigh_triggered >= MilliSeconds(7)) {
+            printf("THIGH[SUCCESS],");
+            base_rate *= 0.5;//1 - beta * (1 - t_high.GetSeconds() / sensitive_rtt.GetSeconds());
+            last_thigh_triggered = Simulator::Now();
+        } else {
+            printf("THIGH[FAIL],");
+        }
+    } else {
+        double w = weight(rtt_gradient);
+        double error = (sensitive_rtt - t_ref).GetSeconds() / (t_high - t_low).GetSeconds();
+        base_rate = ai * (1 - w) + base_rate * (1 - beta * w * error);
+        printf("TMIDDLE[%lf, %lf],", w, 1 - beta * w * error);
+    }
+    if (flag && base_rate > upper_rate) {
+        base_rate = upper_rate + (base_rate - upper_rate) * 0.8;
+    }
+    printf("base_rate %ld\n", base_rate);
 }
 
 void WanRouting::send_cnp(Ptr<Packet> p, CustomHeader &ch) {
@@ -302,7 +307,7 @@ uint32_t WanRouting::Hash5Tuple(uint32_t sip, uint32_t dip, uint16_t sport, uint
     return ECMPHash(buf.u8, 12, m_hash_seed1);
 }
 
-uint16_t WanRouting::Hash5tupleSeq(uint32_t sip, uint32_t dip, uint16_t sport, uint16_t dport, uint16_t pg, uint32_t seq) {
+uint32_t WanRouting::Hash5tupleSeq(uint32_t sip, uint32_t dip, uint16_t sport, uint16_t dport, uint16_t pg, uint32_t seq) {
     union {
         uint8_t u8[4 + 4 + 2 + 2 + 4];
         uint32_t u32[4];

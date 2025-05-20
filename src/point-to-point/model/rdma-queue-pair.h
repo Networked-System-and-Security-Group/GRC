@@ -12,6 +12,7 @@
 
 #include <climits> /* for CHAR_BIT */
 #include <vector>
+#include <ns3/simulator.h>
 
 #define BITMASK(b) (1 << ((b) % CHAR_BIT))
 #define BITSLOT(b) ((b) / CHAR_BIT)
@@ -84,6 +85,7 @@ class RdmaQueuePair : public Object {
         bool m_decrease_cnp_arrived;  // indicate if CNP arrived in the last slot
         uint32_t m_rpTimeStage;
         EventId m_rpTimer;
+        Time last_cnp_time = Simulator::Now();
     } mlx;
     struct {
         uint32_t m_lastUpdateSeq;
@@ -207,6 +209,7 @@ class RdmaRxQueuePair : public Object {  // Rx side queue pair
     EventId QcnTimerEvent;  // if destroy this rxQp, remember to cancel this timer
     IrnSackManager m_irn_sack_;
     int32_t m_flow_id;
+    Time last_cnp_send_time = Seconds(0);
 
     bool send_cnp;
 

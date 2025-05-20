@@ -68,7 +68,6 @@ USE_DYNAMIC_PFC_THRESHOLD 1
 PACKET_PAYLOAD_SIZE 1000
 
 
-LINK_DOWN 0 0 0
 KMAX_MAP {kmax_map}
 KMIN_MAP {kmin_map}
 PMAX_MAP {pmax_map}
@@ -152,7 +151,7 @@ def main():
     parser.add_argument('--topo', dest='topo', action='store',
                         default='wan_topo_json', help="the name of the topology file (default: leaf_spine_128_100G_OS2)")
     parser.add_argument('--cdf', dest='cdf', action='store',
-                        default='WebSearch', help="the name of the cdf file (default: AliStorage2019)")
+                        default='WebSearch', help="the name of the cdf file (default: WebSearch)")
     parser.add_argument('--enforce_win', dest='enforce_win', action='store',
                         type=int, default=0, help="enforce to use window scheme (default: 0)")
     parser.add_argument('--sw_monitoring_interval', dest='sw_monitoring_interval', action='store',
@@ -163,6 +162,7 @@ def main():
     parser.add_argument('--inter_load_all', type=int, default=60, help="不同DC之间之间通信的负载，单位Gbps")
     parser.add_argument('--intra_load', type=int, default=30, help="单个host在DC内之间通信的负载")
     parser.add_argument('--wan_cc_mode', type=int, default=1, help="DC间拥塞控制方案")
+    parser.add_argument('--msg', type=str, default='', help="message")
 
     args = parser.parse_args()
 
@@ -204,6 +204,7 @@ def main():
     intra_load = args.intra_load
     inter_load_all = args.inter_load_all
     wan_cc_mode = args.wan_cc_mode
+    msg = args.msg
 
     # get over-subscription ratio from topoogy name
 
@@ -219,7 +220,7 @@ def main():
         raise Exception("CONFIG ERROR : Runtime must be larger than 5ms (= warmup interval).")
 
     if my_flow == '':
-        flow = f"WAN_{cdf}_{intra_load}_{inter_load_all}"
+        flow = f"WAN_{cdf}_{intra_load}_{inter_load_all}_{args.simul_time}"
     else:
         flow = my_flow
 
@@ -335,6 +336,9 @@ def main():
     with open(config_name, "w") as file:
         file.write(config)
 
+    if msg:
+        with open('mix/history.txt', 'a') as file:
+            file.write(f'{config_ID}: {msg}\n')
     # run program
     print("Running simulation...")
     output_log = config_name.replace(".txt", ".log")
