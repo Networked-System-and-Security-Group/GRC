@@ -106,7 +106,6 @@ private:
         Time cc_tau = MicroSeconds(200);        //更新速率计算的tau值
         Time cc_last_update = Simulator::Now(); //上一次更新速率的时间
         int64_t cur_rate = 0;                  //当前速率
-        int64_t accumulated_cnp_bytes = 0;     //cnp累积的字节数,可能是正数也可能是负数
         
         int64_t cnp_gen_threshold = 300 * 1000;
         Time last_cnp_send_time = MicroSeconds(0);
@@ -114,9 +113,30 @@ private:
         int64_t base_rate = start_rate;//每秒发送的基准字节数，从10GB/s开始
         uint64_t total_send_bytes = 0;
 
+        int64_t start_bytes = 0;
+        int64_t end_bytes = 0;
+        int64_t cur_bytes = 0;
+
 
         inline int64_t get_normalize_cur_rate() const {
             return cur_rate / cc_tau.GetSeconds();
+        }
+
+        inline int64_t get_std_bytes() const {
+            double ratio = 1.0 * (Simulator::Now().GetNanoSeconds() % MilliSeconds(1).GetNanoSeconds()) / MilliSeconds(1).GetNanoSeconds();
+            return start_bytes + static_cast<int64_t>((end_bytes - start_bytes) * ratio);
+        }
+
+        inline bool update_and_check_cnp(uint32_t pkt_size) {
+            cur_bytes += pkt_size;
+            int64_t std_bytes = get_std_bytes();
+            int64_t bytes_diff = cur_bytes - std_bytes;
+            if (bytes_diff > cnp_gen_threshold
+                && (Simulator::Now() - last_cnp_send_time).GetSeconds() > cnp_gen_interval.GetSeconds() * (1.0 * cnp_gen_threshold / bytes_diff)) {
+                last_cnp_send_time = Simulator::Now();
+                return true;
+            }
+            return false;
         }
 
         inline void try_record_rtt(uint32_t hashed_flow, uint32_t hashed_seq) {

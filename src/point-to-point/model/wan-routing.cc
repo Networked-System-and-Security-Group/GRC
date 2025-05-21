@@ -117,16 +117,9 @@ void WanRouting::HandleUdpReceived(Ptr<Packet> p, CustomHeader& ch) {
     rtt_monitor.cur_rate *= w;
     rtt_monitor.cur_rate += p->GetSize();
     rtt_monitor.cc_last_update = Simulator::Now();
-    // 检查CNP是否更新
-    int64_t normalize_cur_rate = rtt_monitor.get_normalize_cur_rate();
-    rtt_monitor.accumulated_cnp_bytes += (normalize_cur_rate - rtt_monitor.base_rate) * cc_delta_t;
-    //printf("Switch %u, dst_as %u, cur_rate %ld, base_rate %ld, accumulate_bytes %ld\n", 
-    //    m_switch_id, dst_as, normalize_cur_rate, rtt_monitor.base_rate, rtt_monitor.accumulated_cnp_bytes);
-
-    if (rtt_monitor.accumulated_cnp_bytes > rtt_monitor.cnp_gen_threshold
-        && Simulator::Now() - rtt_monitor.last_cnp_send_time > rtt_monitor.cnp_gen_interval * (1.0 * rtt_monitor.cnp_gen_threshold / rtt_monitor.accumulated_cnp_bytes)
-        && Settings::wan_cc_mode == Settings::WanCCMode::WAN_OPT) {
-        rtt_monitor.last_cnp_send_time = Simulator::Now();
+  
+    if (Settings::wan_cc_mode == Settings::WanCCMode::WAN_OPT
+        && rtt_monitor.update_and_check_cnp(p->GetSize())) {
         send_cnp(p, ch);
     }
     rtt_monitor.total_send_bytes += p->GetSize();
@@ -161,17 +154,14 @@ void WanRouting::periodic_decrease_bytes() {
     Simulator::Schedule(bytes_decreace_interval, &WanRouting::periodic_decrease_bytes, this);
     for (auto& [dst_as, port_map] : m_rttTable) {
         for (auto& [port, rtt_monitor] : port_map) {
-            //printf("Switch %u, dst_as %u, accumulated_cnp_bytes %ld\n", 
-            //    m_switch_id, dst_as, rtt_monitor.accumulated_cnp_bytes);
+            int64_t bytes_diff = rtt_monitor.cur_bytes - rtt_monitor.get_std_bytes();
             fprintf(logfile::accumulated_bytes_log, "%ld,%u,%u,%ld\n", 
-                Simulator::Now().GetNanoSeconds(), m_switch_id, dst_as, rtt_monitor.accumulated_cnp_bytes);
-            if (rtt_monitor.accumulated_cnp_bytes < 500*1000) {
-                rtt_monitor.accumulated_cnp_bytes *= 0.8;
-            } else if (rtt_monitor.accumulated_cnp_bytes >= 500*1000) {
-                rtt_monitor.accumulated_cnp_bytes -= 100*1000;
-            } /*else if (rtt_monitor.accumulated_cnp_bytes <= -500*1000) {
-                rtt_monitor.accumulated_cnp_bytes += 50*1000;
-            }*/
+                Simulator::Now().GetNanoSeconds(), m_switch_id, dst_as, bytes_diff);
+            if (bytes_diff < 500*1000) {
+                rtt_monitor.cur_bytes = rtt_monitor.get_std_bytes() + bytes_diff * 0.8;
+            } else if (bytes_diff >= 500*1000) {
+                rtt_monitor.cur_bytes -= 100
+            } 
         }
     }
 }
@@ -207,6 +197,9 @@ void WanRouting::controlplane_logic() {
                     Simulator::Now().GetNanoSeconds(), m_switch_id, dst_as, 
                     rtt_monitor.sensitive_rtt.GetSeconds()*1000);
                 rtt_monitor.update_base_rate();
+                rtt_monitor.start_bytes = rtt_monitor.end_bytes - rtt_monitor.get_std_bytes();
+                rtt_monitor.end_bytes = rtt_monitor.start_bytes + rtt_monitor.base_rate * rtt_monitor.cc_tau.GetSeconds();
+                rtt_monitor.cur_bytes = 0;
             }
         }
     }
