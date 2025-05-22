@@ -167,11 +167,11 @@ def main():
     args = parser.parse_args()
 
     config_index = 0
+    if not os.path.exists('./mix/index.txt'):
+        with open('./mix/index.txt', 'w') as file:
+            file.write('1')
     with open('./mix/index.txt', 'r+') as file:
-        try:
-            number = int(file.read().strip())
-        except:
-            number = 1
+        number = int(file.read().strip())
         config_index = number
         number += 1
         file.seek(0)

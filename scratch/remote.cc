@@ -374,7 +374,7 @@ void output_flow_info() {
  */
 void stop_simulation_middle() {
     uint32_t target_flow_num = flow_num - 0;  // can be lower than flownum
-    if (Settings::cnt_finished_flows >= target_flow_num || Simulator::Now() > Seconds(2.2)) {
+    if (Settings::cnt_finished_flows >= target_flow_num) {
         std::cout << "\n*** Simulator is enforced to be finished, finished so far: "
                   << Settings::cnt_finished_flows << "/ total: " << target_flow_num
                   << ", Time:" << Simulator::Now() << std::endl;

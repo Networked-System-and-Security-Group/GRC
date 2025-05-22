@@ -37,7 +37,7 @@ def auto_save_plot(func):
         save_path = op.join(base_dir, filename)
 
         # 4. 保存并关闭当前 figure
-        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        #plt.savefig(save_path, dpi=300, bbox_inches='tight')
         plt.show()
         plt.close()
 

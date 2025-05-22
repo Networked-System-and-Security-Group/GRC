@@ -1,0 +1,103 @@
+{
+    "num_as": 3,
+    "as_topologies": [
+        {
+            "dci_switch": 2,
+            "as_id": 0,
+            "num_switches": 0,
+            "num_hosts": 2,
+            "switches": [],
+            "hosts": [0, 1],
+            "links": [
+                {"src": 2, "dst": 0, "bw": "100Gbps", "delay": "4000ns", "loss": 0.0},
+                {"src": 2, "dst": 1, "bw": "100Gbps", "delay": "4000ns", "loss": 0.0}
+            ]
+        },
+        {
+            "dci_switch": 5,
+            "as_id": 1,
+            "num_switches": 0,
+            "num_hosts": 2,
+            "switches": [],
+            "hosts": [3, 4],
+            "links": [
+                {"src": 5, "dst": 3, "bw": "100Gbps", "delay": "4000ns", "loss": 0.0},
+                {"src": 5, "dst": 4, "bw": "100Gbps", "delay": "4000ns", "loss": 0.0}
+            ]
+        },
+        {
+            "dci_switch": 10,
+            "as_id": 2,
+            "num_switches": 0,
+            "num_hosts": 4,
+            "switches": [],
+            "hosts": [6, 7, 8, 9],
+            "links": [
+                {"src": 10, "dst": 6, "bw": "100Gbps", "delay": "4000ns", "loss": 0.0},
+                {"src": 10, "dst": 7, "bw": "100Gbps", "delay": "4000ns", "loss": 0.0},
+                {"src": 10, "dst": 8, "bw": "100Gbps", "delay": "4000ns", "loss": 0.0},
+                {"src": 10, "dst": 9, "bw": "100Gbps", "delay": "4000ns", "loss": 0.0}
+            ]
+        }
+    ],
+    "wan_switch_num": 1,
+    "wan_link_num": 3,
+    "wan_switches": [11],
+    "wan_links": [
+        {"src": 2, "dst": 11, "bw": "200Gbps", "delay": "1000us", "loss": 0.0},
+        {"src": 5, "dst": 11, "bw": "200Gbps", "delay": "1000us", "loss": 0.0},
+        {"src": 10, "dst": 11, "bw": "200Gbps", "delay": "1000us", "loss": 0.0}
+    ],
+    "as_delay": [
+        {"src": 0, "dst": 1, "delay": 2000000},
+        {"src": 0, "dst": 2, "delay": 2000000},
+        {"src": 1, "dst": 2, "delay": 2000000}
+    ],
+    "wan_routing": [
+        {
+            "srcSw": 2,
+            "dstAs": 1,
+            "next_nodes": [11]
+        },
+        {
+            "srcSw": 2,
+            "dstAs": 2,
+            "next_nodes": [11]
+        },
+        {
+            "srcSw": 5,
+            "dstAs": 0,
+            "next_nodes": [11]
+        },
+        {
+            "srcSw": 5,
+            "dstAs": 2,
+            "next_nodes": [11]
+        },
+        {
+            "srcSw": 10,
+            "dstAs": 0,
+            "next_nodes": [11]
+        },
+        {
+            "srcSw": 10,
+            "dstAs": 1,
+            "next_nodes": [11]
+        },
+        {
+            "srcSw": 11,
+            "dstAs": 0,
+            "next_nodes": [2]
+        },
+        {
+            "srcSw": 11,
+            "dstAs": 1,
+            "next_nodes": [5]
+        },
+        {
+            "srcSw": 11,
+            "dstAs": 2,
+            "next_nodes": [10]
+        }
+    ]
+}

@@ -1,4 +1,5 @@
 import json
+import os.path as op
 
 next_node_id = 0
 
@@ -100,7 +101,7 @@ def generate_fattree_topology(k):
 
     # (d) DCI 交换机与每个 core 交换机相连
     for core_id in core_switches:
-        links.append((dci_switch, core_id, bw, delay, loss))
+        links.append((dci_switch, core_id, '100Gbps', delay, loss))
 
     # 汇总所有交换机（顺序为：edge, agg, core, dci）
     switches = edge_switches + agg_switches + core_switches
@@ -190,14 +191,14 @@ if __name__ == "__main__":
     topology = generate_topology_file(num_as, k_values)
     topology['wan_switch_num'] = 2
     topology['wan_link_num'] = 6
-    topology['wan_switches'] = [111, 112]
+    topology['wan_switches'] = [111]
     topology['wan_links'] = [
         {"src": 36, "dst": 111, "bw": '400Gbps', "delay": '500us', "loss": 0.0},
-        {"src": 36, "dst": 112, "bw": '400Gbps', "delay": '500us', "loss": 0.0},
+        #{"src": 36, "dst": 112, "bw": '400Gbps', "delay": '500us', "loss": 0.0},
         {"src": 73, "dst": 111, "bw": '400Gbps', "delay": '500us', "loss": 0.0},
-        {"src": 73, "dst": 112, "bw": '400Gbps', "delay": '400us', "loss": 0.0},
-        #{"src": 110, "dst": 111, "bw": '400Gbps', "delay": '500us', "loss": 0.0},
-        {"src": 110, "dst": 112, "bw": '400Gbps', "delay": '500us', "loss": 0.0}
+        #{"src": 73, "dst": 112, "bw": '400Gbps', "delay": '400us', "loss": 0.0},
+        {"src": 110, "dst": 111, "bw": '400Gbps', "delay": '500us', "loss": 0.0},
+        #{"src": 110, "dst": 112, "bw": '400Gbps', "delay": '500us', "loss": 0.0}
     ]
     topology['as_delay'] = [
         {"src":0, "dst":1, "delay":1000000},
@@ -205,19 +206,16 @@ if __name__ == "__main__":
         {"src":1, "dst":2, "delay":1000000},
     ]
     topology['wan_routing'] = [
-        {"srcSw":36, "dstAs":1, "next_nodes":[111, 112]},
-        {"srcSw":36, "dstAs":2, "next_nodes":[112]},
-        {"srcSw":73, "dstAs":0, "next_nodes":[111, 112]},
-        {"srcSw":73, "dstAs":2, "next_nodes":[112]},
-        {"srcSw":110, "dstAs":0, "next_nodes":[112]},
-        {"srcSw":110, "dstAs":1, "next_nodes":[112]},
+        {"srcSw":36, "dstAs":1, "next_nodes":[111]},
+        {"srcSw":36, "dstAs":2, "next_nodes":[111]},
+        {"srcSw":73, "dstAs":0, "next_nodes":[111]},
+        {"srcSw":73, "dstAs":2, "next_nodes":[111]},
+        {"srcSw":110, "dstAs":0, "next_nodes":[111]},
+        {"srcSw":110, "dstAs":1, "next_nodes":[111]},
         {"srcSw":111, "dstAs":0, "next_nodes":[36]},
         {"srcSw":111, "dstAs":1, "next_nodes":[73]},
         {"srcSw":111, "dstAs":2, "next_nodes":[110]},
-        {"srcSw":112, "dstAs":0, "next_nodes":[36]},
-        {"srcSw":112, "dstAs":1, "next_nodes":[73]},
-        {"srcSw":112, "dstAs":2, "next_nodes":[110]},
     ]
     topology_json = custom_json_dumps(topology, indent=4)
-    with open('/home/zj/recover/ns-allinone-3.19/ns-3.19/config/wan_topo_json.txt', 'w') as f:
+    with open(op.join(op.dirname(__file__), 'wan_topo_json.txt'), 'w') as f:
         f.write(topology_json)

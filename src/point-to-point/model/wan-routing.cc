@@ -160,7 +160,7 @@ void WanRouting::periodic_decrease_bytes() {
             if (bytes_diff < 500*1000) {
                 rtt_monitor.cur_bytes = rtt_monitor.get_std_bytes() + bytes_diff * 0.8;
             } else if (bytes_diff >= 500*1000) {
-                rtt_monitor.cur_bytes -= 100
+                rtt_monitor.cur_bytes -= 100;
             } 
         }
     }
@@ -188,17 +188,15 @@ void WanRouting::controlplane_logic() {
             rtt_monitor.send_bytes_history.push_back(rtt_monitor.total_send_bytes);
             rtt_monitor.total_send_bytes = 0;
             //continue;
-            if (rtt_monitor.sensitive_rtt < MicroSeconds(200)) {//rtt还没有接收到第一个数据
-                continue;
-            }
             //rtt_monitor.min_rtt = MilliSeconds(4);//std::min(rtt_monitor.min_rtt, rtt_monitor.sensitive_rtt);
             if (Settings::wan_cc_mode == Settings::WanCCMode::WAN_OPT) {
-                printf("[%ld]Switch %u, dst_as %u, rtt %lf,", 
-                    Simulator::Now().GetNanoSeconds(), m_switch_id, dst_as, 
-                    rtt_monitor.sensitive_rtt.GetSeconds()*1000);
-                rtt_monitor.update_base_rate();
-                rtt_monitor.start_bytes = rtt_monitor.end_bytes - rtt_monitor.get_std_bytes();
-                rtt_monitor.end_bytes = rtt_monitor.start_bytes + rtt_monitor.base_rate * rtt_monitor.cc_tau.GetSeconds();
+                if (rtt_monitor.sensitive_rtt >= MicroSeconds(200)) {//rtt已经接收到第一个数据
+                    printf("[%ld]Switch %u, dst_as %u, rtt %lf ", 
+                        Simulator::Now().GetNanoSeconds(), m_switch_id, dst_as, rtt_monitor.sensitive_rtt.GetSeconds() * 1000);
+                    rtt_monitor.update_base_rate();
+                }
+                rtt_monitor.start_bytes = rtt_monitor.end_bytes - rtt_monitor.cur_bytes;
+                rtt_monitor.end_bytes = rtt_monitor.start_bytes + rtt_monitor.base_rate * controller_active_interval.GetSeconds();
                 rtt_monitor.cur_bytes = 0;
             }
         }
@@ -223,7 +221,7 @@ void WanRouting::RttMonitor::update_base_rate() {
         + send_bytes_history[hsize - 3]) / 3.0 / MicroSeconds(1000).GetSeconds(); //Magic Number
     int64_t upper_rate = std::max(start_rate, static_cast<int64_t>(rate_before * 1.2));
     bool flag = (base_rate > upper_rate);
-
+    int64_t pre_base_rate = base_rate;
     Time new_rtt_diff = sensitive_rtt - prev_rtt;
     prev_rtt = sensitive_rtt;
     rtt_diff = Seconds((1 - alpha) * rtt_diff.GetSeconds() + alpha * new_rtt_diff.GetSeconds());
@@ -249,7 +247,7 @@ void WanRouting::RttMonitor::update_base_rate() {
     if (flag && base_rate > upper_rate) {
         base_rate = upper_rate + (base_rate - upper_rate) * 0.8;
     }
-    printf("base_rate %ld\n", base_rate);
+    printf("base_rate %.3lf->%.3lf\n", pre_base_rate / 1e9, base_rate / 1e9);
 }
 
 void WanRouting::send_cnp(Ptr<Packet> p, CustomHeader &ch) {

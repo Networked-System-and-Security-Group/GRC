@@ -1,6 +1,8 @@
 import json
 import math
 import random
+import os.path as op
+import argparse
 
 class Flow:
     def __init__(self, src, dst, size, t):
@@ -66,14 +68,12 @@ def generate_intra_as_flows(hosts, cdf_file, bandwidth, load, duration, base_tim
     return flows
 
 def generate_flows(src_hosts, dst_hosts, cdf_file, send_rate, duration, base_time=2.0):
+    '''注意：速率单位为 Gbps，持续时间单位为秒'''
     custom_rand = CustomRand(cdf_file)
     flows = []
     avg_size = custom_rand.get_avg()
     rate_per_host = translate_bandwidth(send_rate)
     avg_interval = 1 / (rate_per_host / 8 / avg_size)
-    print(f'{src_hosts} -> {dst_hosts}')
-    print(f'time: {base_time}, duration: {duration}')
-    print(f'avg_interval: {avg_interval*1000:.3f}ms, avg_size: {avg_size}, rate_per_host: {rate_per_host/1e9:.3f}G')
 
     for src in src_hosts:
         current_time = base_time + poisson(avg_interval*1e9)/1e9
@@ -84,27 +84,44 @@ def generate_flows(src_hosts, dst_hosts, cdf_file, send_rate, duration, base_tim
 
 
     flows.sort(key=lambda f: f.t)
-    return flows
+    actual_rate = sum([f.size for f in flows]) / duration * 8
+    target_rate = rate_per_host * len(src_hosts)
+    if 0.95 * target_rate <= actual_rate <= 1.05 * target_rate:
+        print(f'{src_hosts} -> {dst_hosts}')
+        print(f'time: {base_time}-{base_time+duration}, avg_interval: {avg_interval*1000:.3f}ms, avg_size: {avg_size}, rate_per_host: {rate_per_host/1e9:.3f}G')
+        print(f'Actual Rate: {actual_rate/1e9:.3f} Gbps, Target Rate: {target_rate/1e9:.3f} Gbps')
+        return flows
+    else:
+        return generate_flows(src_hosts, dst_hosts, cdf_file, send_rate, duration, base_time)
 
 if __name__ == '__main__':
-    # 合并后的配置（duration 为公共参数）
-    cdf = '/home/zj/recover/ns-allinone-3.19/ns-3.19/traffic_gen/WebSearch.txt'
+    parser = argparse.ArgumentParser(description='Generate WAN traffic flows')
+    parser.add_argument('--duration', type=float, default=0.05, help='Duration of the traffic generation in seconds')
+    parser.add_argument('--inter_load_all', type=int, default=60, help='DC间的平均发送速率')
+    parser.add_argument('--intra_load', type=int, default=30, help='DC内部每个host的发送速率')
+    parser.add_argument('--cdf', type=str, default='WebSearch', help='CDF file name')
+    parser.add_argument('--output', type=str, default='wan_traffic.txt', help='Output file name')
+    args = parser.parse_args()
+
+    base_dir = op.join(op.dirname(__file__), '../traffic_gen')
+    cdf_path = op.join(base_dir, args.cdf) + '.txt'
     as0 = list(range(0, 16))
     as1 = list(range(37, 53))
     as2 = list(range(74, 90))
 
-    flows = generate_flows(as0, as0, cdf, '30G', 0.05) \
-          + generate_flows(as1, as1, cdf, '30G', 0.05) \
-          + generate_flows(as2, as2, cdf, '30G', 0.05) \
-          + generate_flows(as0, as1, cdf, '10G', 0.05) \
-          + generate_flows(as0, as2, cdf, '10G', 0.05) \
-          + generate_flows(as1, as0, cdf, '10G', 0.05) \
-          + generate_flows(as1, as2, cdf, '10G', 0.05) \
-          + generate_flows(as2, as0, cdf, '6G', 0.05) \
-          + generate_flows(as2, as1, cdf, '6G', 0.05) 
+    flows = generate_flows(as0, as0, cdf_path, f'{args.intra_load}G', args.duration) \
+          + generate_flows(as1, as1, cdf_path, f'{args.intra_load}G', args.duration) \
+          + generate_flows(as2, as2, cdf_path, f'{args.intra_load}G', args.duration) \
+          + generate_flows(as0, as1, cdf_path, f'{args.inter_load_all/16}G', args.duration) \
+          + generate_flows(as0, as2, cdf_path, f'{args.inter_load_all/16}G', args.duration) \
+          + generate_flows(as1, as0, cdf_path, f'{args.inter_load_all/16}G', args.duration) \
+          + generate_flows(as1, as2, cdf_path, f'{args.inter_load_all/16}G', args.duration) \
+          + generate_flows(as2, as0, cdf_path, f'{args.inter_load_all/16}G', args.duration) \
+          + generate_flows(as2, as1, cdf_path, f'{args.inter_load_all/16}G', args.duration) 
     flows.sort(key=lambda x : x.t)
-    # 输出到文件
-    with open('/home/zj/recover/ns-allinone-3.19/ns-3.19/config/wan_traffic.txt', 'w') as ofile:
+    saved_path = op.join(op.dirname(__file__), args.output)
+    print(f'Flow count: {len(flows)}, Saved to: {saved_path}')
+    with open(saved_path, 'w') as ofile:
         ofile.write(f"{len(flows)}\n")
         for f in flows:
             ofile.write(str(f) + '\n')
