@@ -36,7 +36,7 @@ def check_folders_for_log(n=5):
     # 使用 ps aux | grep scratch/remote 检查所有相关进程
     processes = os.popen("ps aux | grep scratch/remote | grep -v grep").read().strip().split('\n')
     for process in processes:
-        if 'python2' in process or 'grep' in process:
+        if 'python2' in process or 'grep' in process or process == '':
             continue
         pid = process.split()[1]
         experiment_name = process.split()[-1]

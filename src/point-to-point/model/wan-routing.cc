@@ -90,23 +90,31 @@ void WanRouting::HandleUdpReceived(Ptr<Packet> p, CustomHeader& ch) {
         uint32_t e_index2 = (e_index1 + 1) % 16;
         uint32_t e_index3 = (e_index1 + 2) % 16;
         Time now = Simulator::Now();
-        //printf("UDP bucket:%u, index:%u\n", (flow_hash_value >> 3) % 8, e_index1);        
-        if (entries[e_index1].hashed_seq == 0) {
-            entries[e_index1].hashed_seq = hashed_seq;
-            entries[e_index1].timestamp = now;
-        } else if (entries[e_index2].hashed_seq == 0) {
-            entries[e_index2].hashed_seq = hashed_seq;
-            entries[e_index2].timestamp = now;
-        } else if (entries[e_index3].hashed_seq == 0) {
-            entries[e_index3].hashed_seq = hashed_seq;
-            entries[e_index3].timestamp = now;
+        //printf("UDP bucket:%u, index:%u\n", (flow_hash_value >> 3) % 8, e_index1);
+        if (entries[e_index1].hashed_seq == hashed_seq) {
+            entries[e_index1].hashed_seq = 0;
+        } else if (entries[e_index2].hashed_seq == hashed_seq) {
+            entries[e_index2].hashed_seq = 0;
+        } else if (entries[e_index3].hashed_seq == hashed_seq) {
+            entries[e_index3].hashed_seq = 0;
         } else {
-            if (entries[e_index1].timestamp > entries[e_index2].timestamp) std::swap(e_index1, e_index2);
-            if (entries[e_index1].timestamp > entries[e_index3].timestamp) std::swap(e_index1, e_index3);
-            if (entries[e_index2].timestamp > entries[e_index3].timestamp) std::swap(e_index2, e_index3);
-            if (now - entries[e_index3].timestamp > entries[e_index3].timestamp - entries[e_index1].timestamp) {
+            if (entries[e_index1].hashed_seq == 0) {
+                entries[e_index1].hashed_seq = hashed_seq;
+                entries[e_index1].timestamp = now;
+            } else if (entries[e_index2].hashed_seq == 0) {
                 entries[e_index2].hashed_seq = hashed_seq;
                 entries[e_index2].timestamp = now;
+            } else if (entries[e_index3].hashed_seq == 0) {
+                entries[e_index3].hashed_seq = hashed_seq;
+                entries[e_index3].timestamp = now;
+            } else {
+                if (entries[e_index1].timestamp > entries[e_index2].timestamp) std::swap(e_index1, e_index2);
+                if (entries[e_index1].timestamp > entries[e_index3].timestamp) std::swap(e_index1, e_index3);
+                if (entries[e_index2].timestamp > entries[e_index3].timestamp) std::swap(e_index2, e_index3);
+                if (now - entries[e_index3].timestamp > entries[e_index3].timestamp - entries[e_index1].timestamp) {
+                    entries[e_index2].hashed_seq = hashed_seq;
+                    entries[e_index2].timestamp = now;
+                }
             }
         }
     }
@@ -159,9 +167,9 @@ void WanRouting::periodic_decrease_bytes() {
                 Simulator::Now().GetNanoSeconds(), m_switch_id, dst_as, bytes_diff);
             if (bytes_diff < 500*1000) {
                 rtt_monitor.cur_bytes = rtt_monitor.get_std_bytes() + bytes_diff * 0.8;
-            } else if (bytes_diff >= 500*1000) {
+            }/* else if (bytes_diff >= 500*1000) {
                 rtt_monitor.cur_bytes -= 100;
-            } 
+            } */
         }
     }
 }
@@ -191,13 +199,17 @@ void WanRouting::controlplane_logic() {
             //rtt_monitor.min_rtt = MilliSeconds(4);//std::min(rtt_monitor.min_rtt, rtt_monitor.sensitive_rtt);
             if (Settings::wan_cc_mode == Settings::WanCCMode::WAN_OPT) {
                 if (rtt_monitor.sensitive_rtt >= MicroSeconds(200)) {//rtt已经接收到第一个数据
-                    printf("[%ld]Switch %u, dst_as %u, rtt %lf ", 
-                        Simulator::Now().GetNanoSeconds(), m_switch_id, dst_as, rtt_monitor.sensitive_rtt.GetSeconds() * 1000);
+                    printf("[%ld]Switch %u, dst_as %u, rtt %lf#%lf ", 
+                        Simulator::Now().GetNanoSeconds(), m_switch_id, dst_as, rtt_monitor.sensitive_rtt.GetSeconds() * 1000, 
+                        rtt_monitor.rtt_sum.GetSeconds() * 1000 / rtt_monitor.rtt_num);
                     rtt_monitor.update_base_rate();
                 }
                 rtt_monitor.start_bytes = rtt_monitor.end_bytes - rtt_monitor.cur_bytes;
                 rtt_monitor.end_bytes = rtt_monitor.start_bytes + rtt_monitor.base_rate * controller_active_interval.GetSeconds();
                 rtt_monitor.cur_bytes = 0;
+                
+                rtt_monitor.rtt_sum = Seconds(0);
+                rtt_monitor.rtt_num = 0;
             }
         }
     }
@@ -222,25 +234,26 @@ void WanRouting::RttMonitor::update_base_rate() {
     int64_t upper_rate = std::max(start_rate, static_cast<int64_t>(rate_before * 1.2));
     bool flag = (base_rate > upper_rate);
     int64_t pre_base_rate = base_rate;
-    Time new_rtt_diff = sensitive_rtt - prev_rtt;
-    prev_rtt = sensitive_rtt;
+    Time cur_rtt = Seconds(rtt_sum.GetSeconds() / rtt_num);
+    Time new_rtt_diff = cur_rtt - prev_rtt;
+    prev_rtt = cur_rtt;
     rtt_diff = Seconds((1 - alpha) * rtt_diff.GetSeconds() + alpha * new_rtt_diff.GetSeconds());
     printf("rtt_diff %lf, ", rtt_diff.GetSeconds() * 1000);
     double rtt_gradient = rtt_diff.GetSeconds() / (t_high - t_low).GetSeconds();
-    if (sensitive_rtt < t_low) {
+    if (cur_rtt < t_low) {
         printf("TLOW,");
         base_rate += ai;
-    } else if (sensitive_rtt > t_high) {
+    } else if (cur_rtt > t_high) {
         if (Simulator::Now() - last_thigh_triggered >= MilliSeconds(7)) {
             printf("THIGH[SUCCESS],");
-            base_rate *= 0.5;//1 - beta * (1 - t_high.GetSeconds() / sensitive_rtt.GetSeconds());
+            base_rate *= 0.5;
             last_thigh_triggered = Simulator::Now();
         } else {
             printf("THIGH[FAIL],");
         }
     } else {
         double w = weight(rtt_gradient);
-        double error = (sensitive_rtt - t_ref).GetSeconds() / (t_high - t_low).GetSeconds();
+        double error = (cur_rtt - t_ref).GetSeconds() / (t_high - t_low).GetSeconds();
         base_rate = ai * (1 - w) + base_rate * (1 - beta * w * error);
         printf("TMIDDLE[%lf, %lf],", w, 1 - beta * w * error);
     }

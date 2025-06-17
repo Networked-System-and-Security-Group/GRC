@@ -78,6 +78,8 @@ private:
         Time sensitive_rtt = MicroSeconds(0);
         Time last_update_time = MicroSeconds(0);
         uint32_t entry_timeout_count = 0;
+        Time rtt_sum = Seconds(0);
+        int rtt_num = 0;
         struct RttEntry {
             uint32_t hashed_seq = 0;
             Time timestamp;
@@ -89,10 +91,10 @@ private:
         const Time min_rtt = Seconds(4.08 * 1e-3);
         const double alpha = 0.5;
         const double beta = 0.2;
-        const int64_t ai = max_rate / 20;//addition increase
-        const Time t_high = Seconds(4.5 * 1e-3);
-        const Time t_low = Seconds(4.05 * 1e-3);
-        const Time t_ref = Seconds(4.15 * 1e-3);
+        const int64_t ai = max_rate / 40;//addition increase
+        const Time t_high = Seconds(5.5 * 1e-3);
+        const Time t_low = Seconds(4.2 * 1e-3);
+        const Time t_ref = Seconds(4.6 * 1e-3);
         Time rtt_diff = Seconds(0);
         Time prev_rtt = Seconds(4.08 * 1e-3);
         Time last_thigh_triggered = Seconds(0);
@@ -157,11 +159,16 @@ private:
             if (rtt_table[bucket][index].hashed_seq == hashed_seq) {
                 //找到匹配的AckReq报文
                 Time rtt = Simulator::Now() - rtt_table[bucket][index].timestamp;
+                rtt_table[bucket][index].hashed_seq = 0;
+                if (rtt < MilliSeconds(4)) {
+                    return;
+                }
                 Time delta_t = Simulator::Now() - last_update_time;
                 last_update_time = Simulator::Now();
                 double weight1 = std::min(delta_t.GetSeconds() / tau1.GetSeconds(), 1.0);
                 sensitive_rtt = Seconds((1 - weight1) * sensitive_rtt.GetSeconds() + weight1 * rtt.GetSeconds());
-                rtt_table[bucket][index].hashed_seq = 0;
+                rtt_sum += rtt;
+                rtt_num += 1;
             } else if (Simulator::Now() - rtt_table[bucket][index].timestamp.GetInteger() > MilliSeconds(7)) {
                 //没找到匹配的报文，尝试去除该项
                 rtt_table[bucket][index].hashed_seq = 0;

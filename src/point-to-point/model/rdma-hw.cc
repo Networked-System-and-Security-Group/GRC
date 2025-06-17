@@ -927,7 +927,7 @@ void RdmaHw::cnp_received_mlx(Ptr<RdmaQueuePair> q) {
     //std::cout << "ID: " << m_node->GetId() << ",Receive cnp " << q->m_flow_id <<  ",m_first_cnp:" <<q->mlx.m_first_cnp << ",at" << Simulator::Now() << std::endl;
     Time interval = Simulator::Now() - q->mlx.last_cnp_time;
     q->mlx.last_cnp_time = Simulator::Now();
-    if (q->mlx.m_first_cnp || interval > MilliSeconds(7)) {
+    if (q->mlx.m_first_cnp || interval > MilliSeconds(10)) {
         // init alpha
         q->mlx.m_alpha = 1;
         q->mlx.m_alpha_cnp_arrived = false;

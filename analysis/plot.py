@@ -3,7 +3,11 @@ import numpy as np
 import matplotlib.pyplot as plt
 from itertools import cycle
 from deep_analyse import *
+from matplotlib.font_manager import FontProperties
 
+# 假设你把字体文件放在当前工作目录下，名字是 SourceHanSansSC-Regular.otf
+font_path = "/home/LAB/zhangjue25/myfont/simsun.ttc"
+font_prop = FontProperties(fname=font_path)
 _style_list = [
     ('--',              (0,   0,   179/255), 'o'),
     ('-.',              'green',           's'),
@@ -61,8 +65,8 @@ def plot_auto_lines(data, xlabel, ylabel, filename, xticks=None, xlim=None):
     plt.yticks(all_ticks,  [1,2,4,8],fontsize=18)
 
     # 轴标签、图例、网格、去除多余边框
-    plt.xlabel(xlabel, fontsize=22)
-    plt.ylabel(ylabel, fontsize=22)
+    plt.xlabel(xlabel, fontsize=22, fontproperties=font_prop)
+    plt.ylabel(ylabel, fontsize=22, fontproperties=font_prop)
     plt.legend(frameon=False, fontsize=20, loc='upper left', bbox_to_anchor=(0,1.1))
     plt.grid(axis='y', alpha=0.3)
     ax = plt.gca()
@@ -95,8 +99,8 @@ data = {
 }
 plot_auto_lines(
     data,
-    xlabel="Avg. Bandwidth (Gbps)",
-    ylabel="Avg. FCT Slowdown",
+    xlabel="平均DC间吞吐 (Gbps)",
+    ylabel="平均归一化FCT",
     filename="auto_styled_lines.png",
     xticks=[50,60,70,80,90],
     xlim=(45,92)

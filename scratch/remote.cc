@@ -55,7 +55,7 @@ uint32_t cc_mode = 1;           // mode for congestion control, 1: DCQCN
 bool enable_qcn = true, enable_pfc = true, use_dynamic_pfc_threshold = true;
 uint32_t packet_payload_size = 1000, l2_chunk_size = 0, l2_ack_interval = 0;
 double pause_time = 5;  // PFC pause, microseconds
-double flowgen_start_time = 2.0, flowgen_stop_time = 2.5, simulator_extra_time = 0.1;
+double flowgen_start_time = 2.0, flowgen_stop_time = 2.5, simulator_extra_time = 3.0;//0.15;
 // queue length monitoring time is not used in this simulator
 // uint32_t qlen_dump_interval = 100000000, qlen_mon_interval = 1000;  // ns
 uint64_t qlen_mon_start;               // ns
@@ -243,7 +243,7 @@ void m_QP_rate_monitoring()
             }
         }
     }
-    Simulator::Schedule(NanoSeconds(server_rtt_mon_interval), &m_QP_rate_monitoring);  // every 10us
+    Simulator::Schedule(MicroSeconds(50), &m_QP_rate_monitoring);  // every 10us
     return;
 }
 
@@ -374,7 +374,7 @@ void output_flow_info() {
  */
 void stop_simulation_middle() {
     uint32_t target_flow_num = flow_num - 0;  // can be lower than flownum
-    if (Settings::cnt_finished_flows >= target_flow_num) {
+    if (Settings::cnt_finished_flows >= target_flow_num || Simulator::Now() > Seconds(flowgen_stop_time + simulator_extra_time)) {
         std::cout << "\n*** Simulator is enforced to be finished, finished so far: "
                   << Settings::cnt_finished_flows << "/ total: " << target_flow_num
                   << ", Time:" << Simulator::Now() << std::endl;
@@ -1229,7 +1229,7 @@ int main(int argc, char *argv[]) {
                 sw->m_mmu->ConfigHdrm(j, 0);
             }
             sw->m_mmu->ConfigNPort(sw->GetNDevices() - 1);
-            sw->m_mmu->ConfigBufferSize(28 * 1024 * 1024);  // Magic Number
+            sw->m_mmu->ConfigBufferSize(128 * 1024 * 1024);  // Magic Number
             sw->m_mmu->node_id = sw->GetId();
             sw->m_mmu->InitSwitch();
 

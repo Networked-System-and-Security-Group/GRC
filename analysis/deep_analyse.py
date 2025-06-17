@@ -14,6 +14,9 @@ import pandas as pd
 from typing import Generator, Union, List, Dict
 import functools
 from IPython.display import display
+from matplotlib.font_manager import FontProperties
+font_path = "/home/LAB/zhangjue25/myfont/simsun.ttc"
+font_prop = FontProperties(fname=font_path)
 
 def auto_save_plot(func):
     @functools.wraps(func)
@@ -175,11 +178,11 @@ class Analyser:
             print(f'No rate info for AS {src_as}->{dst_as}')
             return
             
-        plt.figure(figsize=(5, 4))
-        plt.plot(df['timestamp_ns'], df['real_rate'], label='Real Rate', color='blue')
-        plt.plot(df['timestamp_ns'], df['base_rate'], label='Base Rate', color='red', linestyle='--')
-        plt.xlabel('Timestamp (ns)', fontsize=12)
-        plt.ylabel('Rate(bytes)', fontsize=12)
+        plt.figure(figsize=(5, 4), dpi=300)
+        plt.plot(df['timestamp_ns'] / 1e9, df['real_rate'] / 1e9, label='Real Rate', color='blue')
+        plt.plot(df['timestamp_ns'] / 1e9, df['base_rate'] / 1e9, label='Base Rate', color='red', linestyle='--')
+        plt.xlabel('时间轴(s)', fontsize=14, fontproperties=font_prop)
+        plt.ylabel('速率(GB/s)', fontsize=14, fontproperties=font_prop)
         #plt.title(f'DC Rate Monitor: {src_as}->{dst_as}', fontsize=14)
         plt.grid(True, linestyle='--', alpha=0.7)
         plt.legend(fontsize=10)
@@ -188,7 +191,7 @@ class Analyser:
     def plot_qp_rate(self, flow_ids: List[int]):
         """绘制多个 flow_id 的速率折线图，每个 flow 一条曲线"""
         self.__read_qp_rate_info()
-        plt.figure(figsize=(5, 4))
+        plt.figure(figsize=(5, 4), dpi=300)
         for flow_id in flow_ids:
             df = self.qp_rate_info[self.qp_rate_info['flow_id'] == flow_id]
             if df.empty:
@@ -196,8 +199,8 @@ class Analyser:
                 continue
             if len(flow_ids) == 1:
                 fig, ax1 = plt.subplots()
-                ax1.plot(df['timestamp_ns'] / 1e9, df['rate'] / 1e9 * 8, label=f'Flow {flow_id}')
-                ax1.plot(df['timestamp_ns'] / 1e9, df['target_rate'] / 1e9 * 8, label='Target Rate', linestyle='--')
+                ax1.plot(df['timestamp_ns'] / 1e9, df['rate'] / 1e9, label=f'Flow {flow_id}')
+                ax1.plot(df['timestamp_ns'] / 1e9, df['target_rate'] / 1e9, label='Target Rate', linestyle='--')
                 ax1.set_xlabel('Timestamp (s)', fontsize=12)
                 ax1.set_ylabel('Rate', fontsize=12)
                 ax2 = ax1.twinx()
@@ -205,9 +208,9 @@ class Analyser:
                 ax2.set_ylabel('Alpha', fontsize=12)
                 return
             else:
-                plt.plot(df['timestamp_ns'] / 1e9, df['rate'] / 1e9 * 8, label=f'Flow {flow_id}')
-        plt.xlabel('Timestamp (s)', fontsize=15)
-        plt.ylabel('Rate(Gbps)', fontsize=15)
+                plt.plot(df['timestamp_ns'] / 1e9, df['rate'] / 1e9, label=f'Flow {flow_id}')
+        plt.xlabel('时间轴(s)', fontsize=14, fontproperties=font_prop)
+        plt.ylabel('速率(GB/s)', fontsize=14, fontproperties=font_prop)
         plt.xticks(fontsize=12)
         plt.yticks(fontsize=12)
         #plt.title('QP Rate for Selected Flows', fontsize=14)
@@ -293,9 +296,9 @@ class Analyser:
         series /= monitor_interval
         series = series.rolling(smooth_window, center=True).mean()
         plt.figure()
-        plt.plot(series.index, series.values)
+        plt.plot(series.index, series.values / 1e9)
         plt.xlabel('Timestamp (ns)')
-        plt.ylabel('Bytes/s')
+        plt.ylabel('GB/s')
         plt.title(f'Link Utilization {src_id}->{dst_id}')
 
     @auto_save_plot
@@ -310,11 +313,11 @@ class Analyser:
      
         col = 'egress_bytes' if egress else 'ingress_bytes'
         df = df[['timestamp_ns', 'next_hop', col]].rename(columns={col: 'bytes'})
-        plt.figure(figsize=(5,4))
+        plt.figure(figsize=(5,4), dpi=300)
         for next_hop, group in df.groupby('next_hop'):
-            plt.plot(group['timestamp_ns'], group['bytes'] / 1e6, label=f'Hop {next_hop}')
-        plt.xlabel('Timestamp (ns)')
-        plt.ylabel('Queue Size (MB)')
+            plt.plot(group['timestamp_ns'] / 1e9, group['bytes'] / 1e6, label=f'Hop {next_hop}')
+        plt.xlabel('时间戳(s)', fontsize=16, fontproperties=font_prop)
+        plt.ylabel('队列长度(MB)', fontsize=16, fontproperties=font_prop)
         plt.title(f'Buffer Utilization switch {switch_id}, hop {next_hop}')
 
     def print_info(self):
@@ -348,6 +351,19 @@ class Analyser:
     
     def get_fct(self):
         return (self.get_avg_fct(), self.get_p99_fct())
+    
+    def diagnose_slow_flows(self, threshold=95):
+        '''查看慢于99%的所有流'''
+        self.__read_flow_info()
+        slowdown_values = [f.fct_slowdown for f in self.inter_flows]
+        if not slowdown_values:
+            print("No inter flows found.")
+            return
+        threshold_value = np.percentile(slowdown_values, threshold)
+        slow_flows = [f for f in self.inter_flows if f.fct_slowdown > threshold_value]
+        slow_flows_sorted = sorted(slow_flows, key=lambda f: f.fct_slowdown, reverse=True)
+        for flow in slow_flows_sorted:
+            print(flow)
 
     def __read_rtt_info(self):
         if self.rtt_info is None:

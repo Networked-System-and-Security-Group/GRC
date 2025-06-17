@@ -203,9 +203,9 @@ namespace logfile {
         fprintf(rate_monitor, "timestamp_ns,src_as,dst_as,real_rate,base_rate\n");
         OPEN_FILE(qp_rate_log);
         fprintf(qp_rate_log, "timestamp_ns,flow_id,rate,alpha,target_rate\n");
-        OPEN_FILE(cnp_log);
+        OPEN_EMPTY_FILE(cnp_log);
         fprintf(cnp_log, "timestamp_ns,switch_id,flow_id\n");
-        OPEN_FILE(accumulated_bytes_log);
+        OPEN_EMPTY_FILE(accumulated_bytes_log);
         fprintf(accumulated_bytes_log, "timestamp_ns,switch_id,dst_as,accumulated_bytes\n");
 
         OPEN_EMPTY_FILE(cnp_output);

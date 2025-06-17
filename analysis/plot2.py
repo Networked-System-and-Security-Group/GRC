@@ -3,7 +3,9 @@ import numpy as np
 import matplotlib.pyplot as plt
 from itertools import cycle
 from deep_analyse import *
-
+from matplotlib.font_manager import FontProperties
+font_path = "/home/LAB/zhangjue25/myfont/simsun.ttc"
+font_prop = FontProperties(fname=font_path)
 _style_list = [
     ('--',              (0,   0,   179/255), 'o'),
     ('-.',              'green',           's'),
@@ -57,11 +59,11 @@ def plot_auto_lines(data, xlabel, ylabel, filename, xticks=None, xlim=None):
     visible = [t if True or i % 2 != len(all_ticks) % 2 else ''
                for i, t in enumerate(all_ticks)]
     plt.yscale('log', base=2)
-    plt.yticks([1,2,4,8], fontsize=18)
+    plt.yticks([1,2,4,8,16,32], fontsize=18)
 
     # 轴标签、图例、网格、去除多余边框
-    plt.xlabel(xlabel, fontsize=22)
-    plt.ylabel(ylabel, fontsize=22)
+    plt.xlabel(xlabel, fontsize=22, fontproperties=font_prop)
+    plt.ylabel(ylabel, fontsize=22, fontproperties=font_prop)
     plt.legend(frameon=False, fontsize=20, loc='upper left', bbox_to_anchor=(0,1.1))
     plt.grid(axis='y', alpha=0.3)
     ax = plt.gca()
@@ -70,7 +72,7 @@ def plot_auto_lines(data, xlabel, ylabel, filename, xticks=None, xlim=None):
 
     # 设置范围
     #plt.ylim(0.8, all_ticks[-1])
-    plt.ylim(0.9, 10)
+    plt.ylim(0.9, 24)
     if xlim:
         plt.xlim(*xlim)
 
@@ -81,8 +83,9 @@ def plot_auto_lines(data, xlabel, ylabel, filename, xticks=None, xlim=None):
     print(f"Saved figure to {filepath}")
 
 #df = get_basic_result('551-556,539-550')
-df = get_basic_result('559-576')
-avg_fct = np.array(df['Avg_Inter_FCT']).reshape(6, 3).T
+df = get_basic_result('559-570,737-742')
+#df = get_basic_result('577-594')
+avg_fct = np.array(df['Avg_Intra_FCT']).reshape(6, 3).T
 print(avg_fct)
 disable_ecn_avg = avg_fct[0].tolist()
 enable_ecn_avg = avg_fct[1].tolist()
@@ -95,9 +98,9 @@ data = {
 }
 plot_auto_lines(
     data,
-    xlabel="Avg. Bandwidth (Gbps)",
-    ylabel="Avg. FCT Slowdown",
-    filename="5.2b.pdf",
+    xlabel="平均DC间吞吐(Gbps)",
+    ylabel="平均归一化FCT",
+    filename="5.2a.png",
     xticks=[60,80,100,120,140,160],
     xlim=(55,165)
 )
