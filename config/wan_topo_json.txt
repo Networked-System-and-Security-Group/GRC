@@ -57,10 +57,10 @@
                 {"src": 30, "dst": 33, "bw": "100Gbps", "delay": "1000ns", "loss": 0.0},
                 {"src": 31, "dst": 34, "bw": "100Gbps", "delay": "1000ns", "loss": 0.0},
                 {"src": 31, "dst": 35, "bw": "100Gbps", "delay": "1000ns", "loss": 0.0},
-                {"src": 36, "dst": 32, "bw": "100Gbps", "delay": "1000ns", "loss": 0.0},
-                {"src": 36, "dst": 33, "bw": "100Gbps", "delay": "1000ns", "loss": 0.0},
-                {"src": 36, "dst": 34, "bw": "100Gbps", "delay": "1000ns", "loss": 0.0},
-                {"src": 36, "dst": 35, "bw": "100Gbps", "delay": "1000ns", "loss": 0.0}
+                {"src": 36, "dst": 32, "bw": "200Gbps", "delay": "1000ns", "loss": 0.0},
+                {"src": 36, "dst": 33, "bw": "200Gbps", "delay": "1000ns", "loss": 0.0},
+                {"src": 36, "dst": 34, "bw": "200Gbps", "delay": "1000ns", "loss": 0.0},
+                {"src": 36, "dst": 35, "bw": "200Gbps", "delay": "1000ns", "loss": 0.0}
             ]
         },
         {
@@ -119,10 +119,10 @@
                 {"src": 67, "dst": 70, "bw": "100Gbps", "delay": "1000ns", "loss": 0.0},
                 {"src": 68, "dst": 71, "bw": "100Gbps", "delay": "1000ns", "loss": 0.0},
                 {"src": 68, "dst": 72, "bw": "100Gbps", "delay": "1000ns", "loss": 0.0},
-                {"src": 73, "dst": 69, "bw": "100Gbps", "delay": "1000ns", "loss": 0.0},
-                {"src": 73, "dst": 70, "bw": "100Gbps", "delay": "1000ns", "loss": 0.0},
-                {"src": 73, "dst": 71, "bw": "100Gbps", "delay": "1000ns", "loss": 0.0},
-                {"src": 73, "dst": 72, "bw": "100Gbps", "delay": "1000ns", "loss": 0.0}
+                {"src": 73, "dst": 69, "bw": "200Gbps", "delay": "1000ns", "loss": 0.0},
+                {"src": 73, "dst": 70, "bw": "200Gbps", "delay": "1000ns", "loss": 0.0},
+                {"src": 73, "dst": 71, "bw": "200Gbps", "delay": "1000ns", "loss": 0.0},
+                {"src": 73, "dst": 72, "bw": "200Gbps", "delay": "1000ns", "loss": 0.0}
             ]
         },
         {
@@ -181,10 +181,10 @@
                 {"src": 104, "dst": 107, "bw": "100Gbps", "delay": "1000ns", "loss": 0.0},
                 {"src": 105, "dst": 108, "bw": "100Gbps", "delay": "1000ns", "loss": 0.0},
                 {"src": 105, "dst": 109, "bw": "100Gbps", "delay": "1000ns", "loss": 0.0},
-                {"src": 110, "dst": 106, "bw": "100Gbps", "delay": "1000ns", "loss": 0.0},
-                {"src": 110, "dst": 107, "bw": "100Gbps", "delay": "1000ns", "loss": 0.0},
-                {"src": 110, "dst": 108, "bw": "100Gbps", "delay": "1000ns", "loss": 0.0},
-                {"src": 110, "dst": 109, "bw": "100Gbps", "delay": "1000ns", "loss": 0.0}
+                {"src": 110, "dst": 106, "bw": "200Gbps", "delay": "1000ns", "loss": 0.0},
+                {"src": 110, "dst": 107, "bw": "200Gbps", "delay": "1000ns", "loss": 0.0},
+                {"src": 110, "dst": 108, "bw": "200Gbps", "delay": "1000ns", "loss": 0.0},
+                {"src": 110, "dst": 109, "bw": "200Gbps", "delay": "1000ns", "loss": 0.0}
             ]
         }
     ],

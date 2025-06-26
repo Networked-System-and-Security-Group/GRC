@@ -2,6 +2,7 @@ import json
 import os.path as op
 
 next_node_id = 0
+dci_switches = []
 
 def get_next_id():
     global next_node_id
@@ -71,6 +72,7 @@ def generate_fattree_topology(k):
 
     # 5. 生成 DCI 交换机（最后生成）
     dci_switch = get_next_id()
+    dci_switches.append(dci_switch)
 
     # 生成链路列表，所有链路均采用 bw="100Gbps", delay=1000, loss=0
     links = []
@@ -101,7 +103,7 @@ def generate_fattree_topology(k):
 
     # (d) DCI 交换机与每个 core 交换机相连
     for core_id in core_switches:
-        links.append((dci_switch, core_id, '100Gbps', delay, loss))
+        links.append((dci_switch, core_id, '200Gbps', delay, loss))
 
     # 汇总所有交换机（顺序为：edge, agg, core, dci）
     switches = edge_switches + agg_switches + core_switches
@@ -186,36 +188,27 @@ if __name__ == "__main__":
     next_node_id = 0
 
     # 示例参数：3个 AS，每个 AS 的 fat-tree 参数 k=4（注意 k 必须为偶数）
-    num_as = 3
-    k_values = [4, 4, 4]
+    num_as = 6
+    k_values = [4, 4, 4, 4, 4, 4]
     topology = generate_topology_file(num_as, k_values)
-    topology['wan_switch_num'] = 2
-    topology['wan_link_num'] = 6
-    topology['wan_switches'] = [111]
+    topology['wan_switch_num'] = 3
+    topology['wan_link_num'] = 9
+    wan0 = get_next_id()
+    wan1 = get_next_id()
+    wan2 = get_next_id()
+    topology['wan_switches'] = [wan0, wan1, wan2]
+    dci0, dci1, dci2, dci3, dci4, dci5 = dci_switches[0], dci_switches[1], dci_switches[2], dci_switches[3], dci_switches[4], dci_switches[5]
     topology['wan_links'] = [
-        {"src": 36, "dst": 111, "bw": '400Gbps', "delay": '500us', "loss": 0.0},
-        #{"src": 36, "dst": 112, "bw": '400Gbps', "delay": '500us', "loss": 0.0},
-        {"src": 73, "dst": 111, "bw": '400Gbps', "delay": '500us', "loss": 0.0},
-        #{"src": 73, "dst": 112, "bw": '400Gbps', "delay": '400us', "loss": 0.0},
-        {"src": 110, "dst": 111, "bw": '400Gbps', "delay": '500us', "loss": 0.0},
-        #{"src": 110, "dst": 112, "bw": '400Gbps', "delay": '500us', "loss": 0.0}
-    ]
-    topology['as_delay'] = [
-        {"src":0, "dst":1, "delay":1000000},
-        {"src":0, "dst":2, "delay":1000000},
-        {"src":1, "dst":2, "delay":1000000},
-    ]
-    topology['wan_routing'] = [
-        {"srcSw":36, "dstAs":1, "next_nodes":[111]},
-        {"srcSw":36, "dstAs":2, "next_nodes":[111]},
-        {"srcSw":73, "dstAs":0, "next_nodes":[111]},
-        {"srcSw":73, "dstAs":2, "next_nodes":[111]},
-        {"srcSw":110, "dstAs":0, "next_nodes":[111]},
-        {"srcSw":110, "dstAs":1, "next_nodes":[111]},
-        {"srcSw":111, "dstAs":0, "next_nodes":[36]},
-        {"srcSw":111, "dstAs":1, "next_nodes":[73]},
-        {"srcSw":111, "dstAs":2, "next_nodes":[110]},
+        {"src": wan0, "dst": dci0, "bw": '400Gbps', "delay": '500us', "loss": 0.0},
+        {"src": wan0, "dst": dci1, "bw": '400Gbps', "delay": '500us', "loss": 0.0},
+        {"src": wan1, "dst": dci2, "bw": '400Gbps', "delay": '500us', "loss": 0.0},
+        {"src": wan1, "dst": dci3, "bw": '400Gbps', "delay": '500us', "loss": 0.0},
+        {"src": wan2, "dst": dci4, "bw": '400Gbps', "delay": '500us', "loss": 0.0},
+        {"src": wan2, "dst": dci5, "bw": '400Gbps', "delay": '500us', "loss": 0.0},
+        {"src": wan0, "dst": wan1, "bw": '400Gbps', "delay": '1500us', "loss": 0.0},
+        {"src": wan0, "dst": wan2, "bw": '400Gbps', "delay": '2000us', "loss": 0.0},
+        {"src": wan1, "dst": wan2, "bw": '400Gbps', "delay": '2400us', "loss": 0.0},
     ]
     topology_json = custom_json_dumps(topology, indent=4)
-    with open(op.join(op.dirname(__file__), 'wan_topo_json.txt'), 'w') as f:
+    with open(op.join(op.dirname(__file__), 'wan_topo_large.txt'), 'w') as f:
         f.write(topology_json)

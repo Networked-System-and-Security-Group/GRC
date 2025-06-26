@@ -189,6 +189,7 @@ namespace logfile {
 
         // 为所有文件调用宏
         OPEN_FILE(pfc_file);
+        fprintf(pfc_file, "timestamp_ns,node_id,is_switch,nbr_id,is_pause\n");
         OPEN_FILE(flow_output);
         OPEN_FILE(wan_log);
         OPEN_FILE(rtt_log);
@@ -201,7 +202,7 @@ namespace logfile {
         fprintf(buffer_monitor, "timestamp_ns,switch_id,next_hop,ingress_bytes,egress_bytes\n");
         OPEN_FILE(rate_monitor);
         fprintf(rate_monitor, "timestamp_ns,src_as,dst_as,real_rate,base_rate\n");
-        OPEN_FILE(qp_rate_log);
+        OPEN_EMPTY_FILE(qp_rate_log);
         fprintf(qp_rate_log, "timestamp_ns,flow_id,rate,alpha,target_rate\n");
         OPEN_EMPTY_FILE(cnp_log);
         fprintf(cnp_log, "timestamp_ns,switch_id,flow_id\n");

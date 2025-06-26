@@ -362,18 +362,6 @@ void SwitchNode::SendToDevContinue(Ptr<Packet> p, CustomHeader &ch) {
             qIndex = (ch.l3Prot == 0x06 ? 1 : ch.udp.pg);  // if TCP, put to queue 1. Otherwise, it
                                                            // would be 3 (refer to trafficgen)
         }
-        // 在这个位置输出egress缓存相关的内容
-        // if (m_mmu->GetusedEgressQSharedBytes(idx, qIndex) != 0)
-        // {
-        // std::cout<< "Egress buffer" << ",Sw:" << m_id << "," 
-        //             << "egress port:" << idx 
-        //             << ",m_usedEgressQSharedBytes:" << m_mmu->GetusedEgressQSharedBytes(idx, qIndex) 
-        //             << ",kmin:" << m_mmu->kmin[idx]
-        //             << ",kmax:" << m_mmu->kmax[idx]
-        //             << ",pmax:" << m_mmu->pmax[idx]
-        //             << ",m_op_uc_port_config1_cell:" << m_mmu->Getop_uc_port_config1_cell()
-        //             << ",At " << Simulator::Now() << std::endl;
-        // }
         DoSwitchSend(p, ch, idx, qIndex);  // m_devices[idx]->SwitchSend(qIndex, p, ch);
         return;
     }

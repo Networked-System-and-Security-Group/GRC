@@ -1,8 +1,10 @@
 import json
 import math
+import os
 import random
 import os.path as op
 import argparse
+from pathlib import Path
 
 class Flow:
     def __init__(self, src, dst, size, t):
@@ -86,7 +88,7 @@ def generate_flows(src_hosts, dst_hosts, cdf_file, send_rate, duration, base_tim
     flows.sort(key=lambda f: f.t)
     actual_rate = sum([f.size for f in flows]) / duration * 8
     target_rate = rate_per_host * len(src_hosts)
-    if 0.95 * target_rate <= actual_rate <= 1.05 * target_rate:
+    if 0.9 * target_rate <= actual_rate <= 1.1 * target_rate:
         print(f'{src_hosts} -> {dst_hosts}')
         print(f'time: {base_time}-{base_time+duration}, avg_interval: {avg_interval*1000:.3f}ms, avg_size: {avg_size}, rate_per_host: {rate_per_host/1e9:.3f}G')
         print(f'Actual Rate: {actual_rate/1e9:.3f} Gbps, Target Rate: {target_rate/1e9:.3f} Gbps')
@@ -98,15 +100,23 @@ if __name__ == '__main__':
 
     base_dir = op.join(op.dirname(__file__), '../traffic_gen')
     cdf_path = op.join(base_dir, 'WebSearch') + '.txt'
-    as0 = [0,1]
-    as1 = [3,4]
-    as2 = [6,7,8,9]
-    load = 25
-    flows = generate_flows(as0, as2, cdf_path, f'{load}G', 0.03) \
-          + generate_flows(as1, as2, cdf_path, f'{load}G', 0.03)
+    as_list = []
+    with (Path(__file__).parent / 'wan_topo_large.txt').open() as f:
+        topo = json.load(f)
+        for as_item in topo['as_topologies']:
+            as_list.append(as_item['hosts'])
+    inter_load = 250 / 5 / 16
+    intra_load = 100 * 0.3
+    flows = []
+    for as1 in as_list:
+        for as2 in as_list:
+            if as1 == as2:
+                flows += generate_flows(as1, as2, cdf_path, f'{intra_load}G', 0.1)
+            else:
+                flows += generate_flows(as1, as2, cdf_path, f'{inter_load}G', 0.1)
     flows.sort(key=lambda x : x.t)
     # 输出到文件
-    saved_path = op.join(op.dirname(__file__), f'simple_flow2-{load}.txt')
+    saved_path = op.join(op.dirname(__file__), f'large-{int(inter_load * 5 * 16)}.txt')
     print(f'Flow count: {len(flows)}, Saved to: {saved_path}')
     with open(saved_path, 'w') as ofile:
         ofile.write(f"{len(flows)}\n")

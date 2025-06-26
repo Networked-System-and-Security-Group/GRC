@@ -313,8 +313,8 @@ void get_pfc(FILE *fout, Ptr<QbbNetDevice> dev, uint32_t type) {
     //std::cout << "PFC event: " << Simulator::Now().GetTimeStep() << " " << dev->GetNode()->GetId()
     //          << " " << dev->GetNode()->GetNodeType() << " " << dev->GetIfIndex() << " " << type
     //          << std::endl;
-    fprintf(fout, "%lu %u %u %u %u\n", Simulator::Now().GetTimeStep(), dev->GetNode()->GetId(),
-            dev->GetNode()->GetNodeType(), dev->GetIfIndex(), type);
+    fprintf(fout, "%lu,%u,%u,%u,%u\n", Simulator::Now().GetNanoSeconds(), dev->GetNode()->GetId(),
+            dev->GetNode()->GetNodeType(), if2id[dev->GetNode()][dev->GetIfIndex()] , type);
 }
 
 void output_flow_info() {
@@ -452,18 +452,6 @@ void CalculateRoutes(NodeContainer &n) {
             CalculateRoute(node);
         }
     }
-    //for (const auto& [keyNode, innerMap] : nextHop) {
-    //    std::cout << "Node ID: " << keyNode->GetId() << std::endl;
-    //
-    //    for (const auto& [innerKeyNode, nextNodes] : innerMap) {
-    //        std::cout << "  -> Target Host: " << innerKeyNode->GetId() << " -> ";
-    //
-    //        for (const auto& nextNode : nextNodes) {
-    //            std::cout << nextNode->GetId() << " ";
-    //        }
-    //        std::cout << std::endl;
-    //    }
-    //}
 }
 
 /**
@@ -541,7 +529,92 @@ void SetRoutingEntries() {
     }
 }
 
+map<uint32_t, map<uint32_t, uint64_t>> as_delay; //(as_id, as_id) -> delay
+void SetSPFWanRouting() {
+    /**
+     * 初始化 Settings::wan_routing, as_delay
+     * 最短路径以“跳数”为度量；假设任意两点之间仅存在一条最短路径。
+     */
+    json& j = topo_json;
 
+ /* ---------- 构建节点集合与边 ----------- */
+    std::set<uint32_t> nodes;
+    std::set<uint32_t> dci_nodes;                       // 记录所有 DCI 节点
+    std::map<uint32_t, std::map<uint32_t, uint64_t>> edges; // src -> dst -> delay(ns)
+
+    /* DCI 节点来自 asId2DciId */
+    for (const auto& [as_id, dci_id] : Settings::asId2DciId) {
+        nodes.insert(dci_id);
+        dci_nodes.insert(dci_id);
+    }
+
+    /* 普通 WAN 交换机节点 */
+    for (const auto& wan_switch : j["wan_switches"])
+        nodes.insert(wan_switch.get<uint32_t>());
+
+    /* 链路，默认视为双向 */
+    for (const auto& wan_link : j["wan_links"]) {
+        uint32_t src = wan_link["src"].get<uint32_t>();
+        uint32_t dst = wan_link["dst"].get<uint32_t>();
+        uint64_t link_delay = Settings::nbr2if[n.Get(src)][n.Get(dst)].delay;
+        edges[src][dst] = link_delay;
+        edges[dst][src] = link_delay; 
+    }
+
+    /* ---------- 构建邻接表 ----------- */
+    std::unordered_map<uint32_t, std::vector<uint32_t>> adj;
+    for (const auto& [src, dst_map] : edges)
+        for (const auto& [dst, _] : dst_map) adj[src].push_back(dst);
+
+    /* ---------- 逐源节点 BFS ---------- */
+    Settings::wan_routing.clear();
+    as_delay.clear();
+
+    std::queue<uint32_t> q;
+    std::unordered_map<uint32_t, uint32_t> parent;  // dst -> its parent when explored
+
+    for (uint32_t src : nodes) {
+        parent.clear();
+        parent[src] = src;
+        while (!q.empty()) q.pop();                // 清空队列
+        q.push(src);
+
+        /* BFS：保证最少跳数 */
+        while (!q.empty()) {
+            uint32_t u = q.front(); q.pop();
+            for (uint32_t v : adj[u]) {
+                if (!parent.count(v)) {            // 未访问
+                    parent[v] = u;
+                    q.push(v);
+                }
+            }
+        }
+
+        /* 为所有 DCI 目标填 next-hop，并在 DCI↔DCI 时计算延迟 */
+        for (auto [as, dst] : Settings::asId2DciId) {
+            if (src == dst || !parent.count(dst)) continue;  // 自己或不可达
+
+            /* 回溯找到 src 出口 nextHop */
+            uint32_t nextHop = dst;
+            while (parent[nextHop] != src) nextHop = parent[nextHop];
+            Settings::wan_routing[src][as].push_back(nbr2if[n.Get(src)][n.Get(nextHop)].idx);
+            printf("WAN routing: %u -> %u, next hop: %u\n", src, as, nextHop);
+
+            /* 若源本身也是 DCI，则计算两 DCI 之间的最短路径延迟 */
+            if (dci_nodes.count(src)) {
+                uint64_t pathDelay = 0;
+                for (uint32_t cur = dst; cur != src; ) {
+                    uint32_t prv = parent[cur];
+                    pathDelay += edges[prv].at(cur);     // 已保证边存在
+                    cur = prv;
+                }
+                as_delay[src][dst] = pathDelay;
+                as_delay[dst][src] = pathDelay; // 对称
+                cout << "AS delay: " << src << " -> " << dst << ": " << pathDelay << " ns" << endl;
+            }
+        }
+    }
+}
 
 
 
@@ -588,6 +661,9 @@ uint64_t get_nic_rate(NodeContainer &n) {
 
 vector<tuple<uint32_t, uint32_t, string, string, double>> links;
 void init_nodeinfo_links() {
+    /**
+     * 初始化Settings::nodeInfos, Settings::asId2DciId, links
+     */
     json& j = topo_json;
 
     // 使用 as_topologies 数组的大小代替冗余字段 num_as
@@ -1321,15 +1397,16 @@ int main(int argc, char *argv[]) {
      */
     CalculateRoutes(n);
     SetRoutingEntries();
+    SetSPFWanRouting();
     //init wan_routing
-    for (const auto& routing_entry : topo_json["wan_routing"]) {
-        int srcSw = routing_entry["srcSw"].get<int>();
-        int dstAs = routing_entry["dstAs"].get<int>();
-        for (const auto nextNode : routing_entry["next_nodes"]) {
-            int next_node = nextNode.get<int>();
-            Settings::wan_routing[srcSw][dstAs].push_back(nbr2if[n.Get(srcSw)][n.Get(next_node)].idx);
-        }
-}
+    //for (const auto& routing_entry : topo_json["wan_routing"]) {
+    //    int srcSw = routing_entry["srcSw"].get<int>();
+    //    int dstAs = routing_entry["dstAs"].get<int>();
+    //    for (const auto nextNode : routing_entry["next_nodes"]) {
+    //        int next_node = nextNode.get<int>();
+    //        Settings::wan_routing[srcSw][dstAs].push_back(nbr2if[n.Get(srcSw)][n.Get(next_node)].idx);
+    //    }
+    //}
     std::cout << "WAN Routing Table:" << std::endl;
     for (const auto& [srcSw, dstMap] : Settings::wan_routing) {
         std::cout << "Source Switch: " << srcSw << std::endl;
@@ -1351,14 +1428,14 @@ int main(int argc, char *argv[]) {
     /**
      * @brief get BDP and delay
      */
-    unordered_map<uint32_t, unordered_map<uint32_t, uint32_t>> as_delay;
-    for (const auto& delay_entry : topo_json["as_delay"]) {
-        int src = delay_entry["src"].get<int>();
-        int dst = delay_entry["dst"].get<int>();
-        int delay = delay_entry["delay"].get<int>();
-        as_delay[src][dst] = delay;
-        as_delay[dst][src] = delay;
-    }
+    //unordered_map<uint32_t, unordered_map<uint32_t, uint32_t>> as_delay;
+    //for (const auto& delay_entry : topo_json["as_delay"]) {
+    //    int src = delay_entry["src"].get<int>();
+    //    int dst = delay_entry["dst"].get<int>();
+    //    int delay = delay_entry["delay"].get<int>();
+    //    as_delay[src][dst] = delay;
+    //    as_delay[dst][src] = delay;
+    //}
     maxRtt = maxBdp = 0;
     for (uint32_t i = 0; i < nodeInfos.size(); i++) {
         if (nodeInfos[i].node_type != NodeInfo::NodeType::HOST) continue;
@@ -1383,12 +1460,13 @@ int main(int argc, char *argv[]) {
                 uint32_t as2 = nodeInfos[j].as_id;
                 uint32_t dci1 = Settings::asId2DciId[as1];
                 uint32_t dci2 = Settings::asId2DciId[as2];
-                uint64_t rtt = (pairDelay[n.Get(i)][n.Get(dci1)] + static_cast<uint64_t>(as_delay[as1][as2]) + pairDelay[n.Get(dci2)][n.Get(j)]) * 2;
+                uint64_t rtt = (pairDelay[n.Get(i)][n.Get(dci1)] + static_cast<uint64_t>(as_delay[dci1][dci2]) + pairDelay[n.Get(dci2)][n.Get(j)]) * 2;
                 uint64_t bdp = rtt / 8 * 100;
                 pairBdp[n.Get(i)][n.Get(j)] = bdp;
                 pairBdp[n.Get(j)][n.Get(i)] = bdp;
                 pairRtt[n.Get(i)][n.Get(j)] = rtt;
                 pairRtt[n.Get(j)][n.Get(i)] = rtt;
+                cout << "pair " << i << " " << j << ": rtt " << rtt << " bdp " << bdp << endl;
                 if (rtt < server_rtt_mon_interval) server_rtt_mon_interval = rtt;
                 if (bdp > maxBdp) maxBdp = bdp;
                 if (rtt > maxRtt) maxRtt = rtt;

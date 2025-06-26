@@ -15,6 +15,9 @@ from typing import Generator, Union, List, Dict
 import functools
 from IPython.display import display
 from matplotlib.font_manager import FontProperties
+import traceback
+from pathlib import Path
+
 font_path = "/home/LAB/zhangjue25/myfont/simsun.ttc"
 font_prop = FontProperties(fname=font_path)
 
@@ -76,11 +79,11 @@ class FlowInfo:
     start_time: float
     finish_time: float
     flow_id: int
-    passed_nodes: List[int]
     std_fct: float
     fct_slowdown: Union[float, None] = field(init=False)
     src_as: Union[float, None] = field(init=False)
     dst_as: Union[float, None] = field(init=False)
+    passed_nodes: List[int]
 
     def __post_init__(self):
         self.fct_slowdown = (self.finish_time - self.start_time) / self.std_fct
@@ -109,10 +112,7 @@ class Analyser:
     def __init__(self, id):
         self.id = str(id)
         self.dir = get_dir_by_id(self.id)
-        self.flows: List[FlowInfo] = []
-        self.id_to_flow: Dict[int, FlowInfo] = {}
-        self.intra_flows: List[FlowInfo] = []
-        self.inter_flows: List[FlowInfo] = []
+        self.flow_df: pd.DataFrame = None    # 全量流记录
         self.rtt_info: pd.DataFrame = None #timestamp_ns,switch_id,dst_as,next_hop,rtt1_ms,rtt2_ms,timeout_count
         self.drop_info: pd.DataFrame = None #timestamp_ns,switch_id,next_hop,flow_id,seq_num,type
         self.link_info: pd.DataFrame = None #timestamp_ns,src_id,dst_id,flow_id,bytes
@@ -121,6 +121,11 @@ class Analyser:
         self.as_rate_info: pd.DataFrame = None #timestamp_ns,src_as,dst_as,real_rate,base_rate
         self.cnp_info: pd.DataFrame = None #timestamp_ns,switch_id,flow_id
         self.accumulated_bytes_info: pd.DataFrame = None #timestamp_ns,switch_id,dst_as,accumulated_bytes
+        self.pfc_info: pd.DataFrame = None #timestamp_ns,node_id,is_switch,nbr_id,is_pause
+        self.config: map[str, object] = {}
+        self.read_config()
+        with (Path(__file__).parent.parent / self.config['TOPOLOGY_FILE']).open() as f:
+            self.topo = json.load(f)
 
     def __read_accumulated_bytes_info(self):
         if self.accumulated_bytes_info is None:
@@ -218,8 +223,15 @@ class Analyser:
         plt.legend(fontsize=13)
 
     @auto_save_plot
-    def plot_rtt(self, switch_id, dst_as):
+    def plot_rtt(self, src_as, dst_as):
         self.__read_rtt_info()
+        for as_obj in self.topo['as_topologies']:
+            if as_obj['as_id'] == src_as:
+                switch_id = as_obj['dci_switch']
+                break
+        else:
+            print(f'No switch found for src_as {src_as}')
+            return
         df = self.rtt_info[(self.rtt_info['switch_id']==switch_id)&(self.rtt_info['dst_as']==dst_as)]
         if df.empty:
             print(f'No RTT info for switch {switch_id} and dst_as {dst_as}')
@@ -234,21 +246,20 @@ class Analyser:
 
     @auto_save_plot
     def plot_fct_cdf(self):
-        """绘制 FCT slowdown 的 CDF 图，包含 overall, intra 和 inter"""
         self.__read_flow_info()
-        overall = [f.fct_slowdown for f in self.flows]
-        intra   = [f.fct_slowdown for f in self.intra_flows]
-        inter   = [f.fct_slowdown for f in self.inter_flows]
-        plt.figure(figsize=(10, 6))
-        plot_cdf(overall, label='Overall', color='blue')
-        plot_cdf(intra,   label='Intra',   color='green')
-        plot_cdf(inter,   label='Inter',   color='red')
-        print(f'Avg slowdowns: O={np.mean(overall):.2f}, Intra={np.mean(intra):.2f}, Inter={np.mean(inter):.2f}')
-        plt.grid(True, linestyle='--', alpha=0.7)
-        plt.xlabel('FCT Slowdown', fontsize=12)
-        plt.ylabel('CDF', fontsize=12)
-        plt.title('CDF of FCT Slowdown', fontsize=14)
-        plt.legend(fontsize=10)
+        def _plot(series, label, color):
+            if series.empty: return
+            sorted_vals = np.sort(series)
+            y = np.arange(1, len(sorted_vals) + 1) / len(sorted_vals)
+            plt.plot(sorted_vals, y, label=label, color=color)
+        flow_df = self.flow_df
+        _plot(flow_df['fct_slowdown'], 'Overall', 'blue')
+        _plot(self.get_intra_df()['fct_slowdown'], 'Intra', 'green')
+        _plot(self.get_inter_df()['fct_slowdown'], 'Inter', 'red')
+        plt.grid(True, ls='--', alpha=.7)
+        plt.xlabel('FCT Slowdown')
+        plt.ylabel('CDF')
+        plt.legend()
         if max(overall+intra+inter)/min(overall+intra+inter) > 100:
             plt.xscale('log')
         plt.ylim(0, 1.05)
@@ -318,64 +329,124 @@ class Analyser:
             plt.plot(group['timestamp_ns'] / 1e9, group['bytes'] / 1e6, label=f'Hop {next_hop}')
         plt.xlabel('时间戳(s)', fontsize=16, fontproperties=font_prop)
         plt.ylabel('队列长度(MB)', fontsize=16, fontproperties=font_prop)
-        plt.title(f'Buffer Utilization switch {switch_id}, hop {next_hop}')
+        plt.title(f"Buffer Utilization switch {switch_id}, {'egress' if egress else 'ingress'}")
+        plt.legend()
+
+    @auto_save_plot
+    def plot_pfc(self, node):
+        """绘制指定 node 和 nbr 的 PFC 时间轴"""
+        if self.pfc_info is None:
+            self.pfc_info = pd.read_csv(op.join(self.dir, 'pfc_file'))
+        plt.figure(figsize=(8, 4))
+        y = 1
+        y_tickets = []
+        for nbr, df in self.pfc_info[(self.pfc_info['node_id'] == node) \
+                                      & (self.pfc_info['is_pause'] == 1)].groupby('nbr_id'):
+            plt.scatter(df['timestamp_ns'] / 1e9, np.ones(len(df)) *y, label=nbr, s=1)
+            y += 1
+            y_tickets.append(nbr)
+        plt.yticks(range(1, y), y_tickets)
+        plt.xlabel('时间戳(s)', fontsize=12, fontproperties=font_prop)
+        plt.title(f'PFC Timeline: node {node}')
+        plt.legend()
+        plt.tight_layout()
 
     def print_info(self):
         print(f'===ID:{self.id}===')
 
     def get_avg_fct(self):
         self.__read_flow_info()
-        vals = [f.fct_slowdown for f in self.flows]
-        intra = [f.fct_slowdown for f in self.intra_flows]
-        inter = [f.fct_slowdown for f in self.inter_flows]
-        
-        # Check if lists are empty before calculating mean
-        avg_vals = np.mean(vals) if vals else None
-        avg_intra = np.mean(intra) if intra else None
-        avg_inter = np.mean(inter) if inter else None
-        
-        return avg_vals, avg_intra, avg_inter
+        return (
+            self.flow_df['fct_slowdown'].mean(),
+            self.get_intra_df()['fct_slowdown'].mean(),
+            self.get_inter_df()['fct_slowdown'].mean()
+        )
 
     def get_p99_fct(self):
         self.__read_flow_info()
-        vals = [f.fct_slowdown for f in self.flows]
-        intra = [f.fct_slowdown for f in self.intra_flows]
-        inter = [f.fct_slowdown for f in self.inter_flows]
-        
-        # Check if lists are empty before calculating percentile
-        p99_vals = np.percentile(vals, 99) if vals else None
-        p99_intra = np.percentile(intra, 99) if intra else None
-        p99_inter = np.percentile(inter, 99) if inter else None
-        
-        return p99_vals, p99_intra, p99_inter
+        return (
+            self.flow_df['fct_slowdown'].quantile(.99),
+            self.get_intra_df()['fct_slowdown'].quantile(.99),
+            self.get_inter_df()['fct_slowdown'].quantile(.99)
+        )
     
     def get_fct(self):
         return (self.get_avg_fct(), self.get_p99_fct())
     
-    def diagnose_slow_flows(self, threshold=95):
-        '''查看慢于99%的所有流'''
+    def diagnose_slow_flow(self, threshold=99):
+        """
+        Diagnoses slow flows based on a given threshold for the 'fct_slowdown' column.
+        """
         self.__read_flow_info()
-        slowdown_values = [f.fct_slowdown for f in self.inter_flows]
-        if not slowdown_values:
-            print("No inter flows found.")
-            return
-        threshold_value = np.percentile(slowdown_values, threshold)
-        slow_flows = [f for f in self.inter_flows if f.fct_slowdown > threshold_value]
-        slow_flows_sorted = sorted(slow_flows, key=lambda f: f.fct_slowdown, reverse=True)
-        for flow in slow_flows_sorted:
-            print(flow)
+        slow_df = self.get_inter_df().copy()
+        
+        # Get the 99th percentile of the 'fct_slowdown' column
+        cutoff = slow_df['fct_slowdown'].quantile(0.99)
+        slow_df = slow_df[slow_df['fct_slowdown'] > cutoff]
+
+        start_time = self.flow_df['start_time'].min()
+        end_time = self.flow_df['finish_time'].max()
+
+        # Define time bins (time steps) based on the given range
+        time_bins = np.arange(start_time, end_time, 1e-4)  # 每秒一个时间点 
+        
+        plt.figure(figsize=(5, 4))
+        
+        # Grouping by source AS and destination AS
+        for (src_as, dst_as), group in slow_df.groupby(['src_as', 'dst_as']):
+            # Binning start and end times of each flow
+            start_bin_indices = np.digitize(group['start_time'], time_bins) - 1
+            end_bin_indices = np.digitize(group['finish_time'], time_bins) - 1
+
+            # Efficiently counting overlaps using a histogram-like approach
+            counts = np.zeros(len(time_bins) - 1, dtype=int)
+            
+            # For each flow, increment the bins it starts and ends in
+            for start_bin, end_bin in zip(start_bin_indices, end_bin_indices):
+                counts[start_bin:end_bin + 1] += 1  # Increment the bins that overlap with this flow
+            
+            # Create DataFrame for the result
+            result_df = pd.DataFrame({'Time Bin': time_bins[:-1], 'Count': counts})
+            
+            # Plotting
+            plt.plot(time_bins[:-1], counts, label=f'{src_as}->{dst_as}')
+        
+        plt.title('Heatmap of Overlapping Intervals in Time Bins')
+        plt.legend()
+        plt.tight_layout()
+
+        # 选出最慢的20条流并展示
+        top20 = slow_df.sort_values('fct_slowdown', ascending=False).head(20)
+        display(top20[['flow_id', 'src', 'dst', 'fct_slowdown', 'start_time', 'finish_time', 'src_as', 'dst_as']])
+        
+
 
     def __read_rtt_info(self):
         if self.rtt_info is None:
             self.rtt_info = pd.read_csv(op.join(self.dir, 'rtt_log'))
 
     def __read_flow_info(self):
-        if not self.flows:
-            with open(op.join(self.dir, 'flow_output'),'r') as f:
-                self.flows = [FlowInfo(**it) for it in json.load(f)]
-            self.id_to_flow = {f.flow_id: f for f in self.flows}
-            self.intra_flows = [f for f in self.flows if len(f.passed_nodes)<=5]
-            self.inter_flows = [f for f in self.flows if len(f.passed_nodes)>5]
+        if self.flow_df is not None:
+            return
+        with open(op.join(self.dir, 'flow_output'), 'r') as f:
+            raw = json.load(f)
+        host2as = {}
+        for as_obj in self.topo['as_topologies']:
+            for host in as_obj['hosts']:
+                host2as[host] = as_obj["as_id"]
+        df = pd.DataFrame(raw)
+        df['fct_slowdown'] = (df['finish_time'] - df['start_time']) / df['std_fct']
+        df['src_as']        = df['src'].apply(lambda x : host2as[x])
+        df['dst_as']        = df['dst'].apply(lambda x : host2as[x])
+        self.flow_df = df
+
+    def get_intra_df(self):
+        self.__read_flow_info()
+        return self.flow_df[self.flow_df['src_as'] == self.flow_df['dst_as']]
+
+    def get_inter_df(self):
+        self.__read_flow_info()
+        return self.flow_df[self.flow_df['src_as'] != self.flow_df['dst_as']]
 
     def __read_drop_info(self):
         self.__read_flow_info()
@@ -383,6 +454,15 @@ class Analyser:
             self.drop_info = pd.read_csv(op.join(self.dir,'drop_log'))
             self.drop_info['src_as'] = self.drop_info['flow_id'].map(lambda x: self.id_to_flow[x].src_as if x in self.id_to_flow else None)
             self.drop_info['dst_as'] = self.drop_info['flow_id'].map(lambda x: self.id_to_flow[x].dst_as if x in self.id_to_flow else None)
+
+    def __read_drop_info(self):
+        self.__read_flow_info()
+        if self.drop_info is None:
+            self.drop_info = pd.read_csv(op.join(self.dir, 'drop_log'))
+            self.drop_info = self.drop_info.merge(
+                self.flow_df[['flow_id', 'src_as', 'dst_as']],
+                on='flow_id', how='left'
+            )
 
     def __read_link_info(self):
         if self.link_info is None:
@@ -399,6 +479,45 @@ class Analyser:
     def __read_as_rate_info(self):
         if self.as_rate_info is None:
             self.as_rate_info = pd.read_csv(op.join(self.dir, 'rate_monitor'))
+
+    def read_config(self):
+        with open(op.join(self.dir, 'config.txt')) as f:
+            lines = f.readlines()
+            lines = [l.strip() for l in lines if l.strip()]
+            self.config = {l.split()[0] : l.split(maxsplit=2)[-1] for l in lines}
+
+    def rtt_detail(self):
+        file_path = op.join(self.dir, 'wan_log')
+        time_vals = []
+        rtt_vals = []
+        sensitive_rtt_vals = []
+        # 读取并解析文件
+        with open(file_path, 'r') as f:
+            for line in f:
+                try:
+                    parts = line.strip().split(',')
+                    now = float(parts[0].split(':')[1])
+                    rtt = float(parts[1].split(':')[1])
+                    sensitive_rtt = float(parts[2].split(':')[1])
+                    # count = int(parts[3].split(':')[1])  # 可选
+
+                    time_vals.append(now)
+                    rtt_vals.append(rtt)
+                    sensitive_rtt_vals.append(sensitive_rtt)
+                except (IndexError, ValueError):
+                    print(f"Skipping invalid line: {line}")
+
+        # 绘图
+        plt.figure(figsize=(12, 4), dpi=300)
+        plt.scatter(time_vals, rtt_vals, label='RTT', s=2)
+        plt.plot(time_vals, sensitive_rtt_vals, label='Sensitive RTT', linestyle='--', color='orange')
+
+        plt.xlabel('Time (Now)')
+        plt.ylabel('RTT Value')
+        plt.title('RTT and Sensitive RTT Over Time')
+        plt.legend()
+        plt.grid(True)
+        plt.tight_layout()
 
 _instances: Dict[str, Analyser] = {}
 def get_analyser(id) -> Analyser:
@@ -422,6 +541,7 @@ def analyser_iter(config_ids_str: str) -> Generator[Analyser, None, None]:
             yield get_analyser(i)
         except Exception as e:
             print(f'{i}号实验数据异常：{e}')
+            traceback.print_exc()
 
 def clear_data(config_ids_str: str):
     dirs = []
