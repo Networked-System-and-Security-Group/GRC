@@ -71,42 +71,13 @@ def latest(offset=0):
     print(f'latest experiment dir: {latest_dir}')
     return get_analyser(id)
 
-@dataclass
-class FlowInfo:
-    src: int
-    dst: int
-    fsize: int
-    start_time: float
-    finish_time: float
-    flow_id: int
-    std_fct: float
-    fct_slowdown: Union[float, None] = field(init=False)
-    src_as: Union[float, None] = field(init=False)
-    dst_as: Union[float, None] = field(init=False)
-    passed_nodes: List[int]
 
-    def __post_init__(self):
-        self.fct_slowdown = (self.finish_time - self.start_time) / self.std_fct
-        def get_as(id):
-            if id in range(0, 16):
-                return 0
-            elif id in range(37, 53):
-                return 1
-            elif id in range(74, 90):
-                return 2
-            else:
-                print(f'Unknown AS for id {id}')
-                assert False
-        self.src_as = get_as(self.src)
-        self.dst_as = get_as(self.dst)
-
-def plot_cdf(data, label=None, color=None):
+def plot_cdf(series, label=None, color=None):
     """辅助函数：绘制单个数据集的 CDF"""
-    if not data:
-        return
-    sorted_data = np.sort(data)
-    y_values = np.arange(1, len(sorted_data) + 1) / len(sorted_data)
-    plt.plot(sorted_data, y_values, label=label, color=color)
+    if series.empty: return
+    sorted_vals = np.sort(series)
+    y = np.arange(1, len(sorted_vals) + 1) / len(sorted_vals)
+    plt.plot(sorted_vals, y, label=label, color=color)
 
 class Analyser:
     def __init__(self, id):
@@ -118,7 +89,7 @@ class Analyser:
         self.link_info: pd.DataFrame = None #timestamp_ns,src_id,dst_id,flow_id,bytes
         self.buffer_info: pd.DataFrame = None #timestamp_ns,switch_id,next_hop,ingress_bytes,egress_bytes
         self.qp_rate_info: pd.DataFrame = None #timestamp_ns,flow_id,rate,alpha,target_rate
-        self.as_rate_info: pd.DataFrame = None #timestamp_ns,src_as,dst_as,real_rate,base_rate
+        self.as_rate_info: pd.DataFrame = None #timestamp_ns,src_as,dst_as,real_rate,ref_rate
         self.cnp_info: pd.DataFrame = None #timestamp_ns,switch_id,flow_id
         self.accumulated_bytes_info: pd.DataFrame = None #timestamp_ns,switch_id,dst_as,accumulated_bytes
         self.pfc_info: pd.DataFrame = None #timestamp_ns,node_id,is_switch,nbr_id,is_pause
@@ -173,7 +144,7 @@ class Analyser:
 
     @auto_save_plot
     def plot_as_rate(self, src_as, dst_as):
-        """绘制AS间的real_rate和base_rate对比图"""
+        """绘制AS间的real_rate和ref_rate对比图"""
         self.__read_as_rate_info()
         df = self.as_rate_info[
             (self.as_rate_info['src_as'] == src_as) & 
@@ -185,7 +156,7 @@ class Analyser:
             
         plt.figure(figsize=(5, 4), dpi=300)
         plt.plot(df['timestamp_ns'] / 1e9, df['real_rate'] / 1e9, label='Real Rate', color='blue')
-        plt.plot(df['timestamp_ns'] / 1e9, df['base_rate'] / 1e9, label='Base Rate', color='red', linestyle='--')
+        plt.plot(df['timestamp_ns'] / 1e9, df['ref_rate'] / 1e9, label='Base Rate', color='red', linestyle='--')
         plt.xlabel('时间轴(s)', fontsize=14, fontproperties=font_prop)
         plt.ylabel('速率(GB/s)', fontsize=14, fontproperties=font_prop)
         #plt.title(f'DC Rate Monitor: {src_as}->{dst_as}', fontsize=14)
@@ -203,14 +174,20 @@ class Analyser:
                 print(f'No QP rate info for flow_id {flow_id}')
                 continue
             if len(flow_ids) == 1:
-                fig, ax1 = plt.subplots()
-                ax1.plot(df['timestamp_ns'] / 1e9, df['rate'] / 1e9, label=f'Flow {flow_id}')
-                ax1.plot(df['timestamp_ns'] / 1e9, df['target_rate'] / 1e9, label='Target Rate', linestyle='--')
-                ax1.set_xlabel('Timestamp (s)', fontsize=12)
-                ax1.set_ylabel('Rate', fontsize=12)
-                ax2 = ax1.twinx()
-                ax2.plot(df['timestamp_ns'] / 1e9, df['alpha'], label='Alpha', linestyle=':', color='orange')
-                ax2.set_ylabel('Alpha', fontsize=12)
+                fig, ax1 = plt.subplots(figsize=(5, 4), dpi=300)
+                ax1.plot(df['timestamp_ns'] / 1e9, df['rate'] / 1e9 * 8, label=f'Flow {flow_id}')
+                #ax1.plot(df['timestamp_ns'] / 1e9, df['target_rate'] / 1e9, label='Target Rate', linestyle='--')
+                ax1.set_xlabel('Timestamp (s)', fontsize=22)
+                ax1.set_ylabel('Rate (Gbps)', fontsize=22)
+                ax1.tick_params(axis='both', which='major', labelsize=18)
+                ax1.set_ylim(0,100)
+                ax1.set_xlim(1.98,2.8)
+                fig.gca().spines['top'].set_visible(False)
+                fig.gca().spines['right'].set_visible(False)
+                fig.savefig('motivation2.pdf', bbox_inches='tight')
+                #ax2 = ax1.twinx()
+                #ax2.plot(df['timestamp_ns'] / 1e9, df['alpha'], label='Alpha', linestyle=':', color='orange')
+                #ax2.set_ylabel('Alpha', fontsize=22)
                 return
             else:
                 plt.plot(df['timestamp_ns'] / 1e9, df['rate'] / 1e9, label=f'Flow {flow_id}')
@@ -260,8 +237,7 @@ class Analyser:
         plt.xlabel('FCT Slowdown')
         plt.ylabel('CDF')
         plt.legend()
-        if max(overall+intra+inter)/min(overall+intra+inter) > 100:
-            plt.xscale('log')
+        plt.xscale('log')
         plt.ylim(0, 1.05)
 
     @auto_save_plot
@@ -586,8 +562,29 @@ def get_basic_result(config_ids_str: str):
     df = pd.DataFrame(results)
     return df
         
+def plot_motivation_expr():
+    a = get_analyser(863)
+    b = get_analyser(864)
+    plt.figure(figsize=(5, 4), dpi=300)
+    plot_cdf(a.get_inter_df()['fct_slowdown'], label='Disable-ECN')
+    plot_cdf(b.get_inter_df()['fct_slowdown'], label='Enable-ECN')
+    plt.xscale('log')
+    plt.ylim(0, 1)
+    plt.xlim(1, 200)
+    plt.xlabel('FCT Slowdown', fontsize=22)
+    plt.ylabel('CDF', fontsize=22)
+    plt.xticks(fontsize=18)
+    plt.yticks(fontsize=18)
+    plt.legend(fontsize=18)
+    plt.gca().spines['top'].set_visible(False)
+    plt.gca().spines['right'].set_visible(False)
+    plt.savefig('motivation1.pdf', bbox_inches='tight')
+    #plt.grid(True, linestyle='--', alpha=0.7)
 
+def plot_motivation_expr2():
+    get_analyser(863).plot_qp_rate([467])
 if __name__ == '__main__':
     pass
-
-# %%
+    # %%
+    plot_motivation_expr()
+    plot_motivation_expr2()

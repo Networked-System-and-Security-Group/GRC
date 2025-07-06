@@ -203,7 +203,7 @@ void RdmaHw::AddQueuePair(uint64_t size, uint16_t pg, Ipv4Address sip, Ipv4Addre
     if (Settings::nodeInfos[flow_info.src].as_id == Settings::nodeInfos[flow_info.dst].as_id) {
         qp->SetTimeout(m_waitAckTimeout);
     } else {
-        qp->SetTimeout(MilliSeconds(10)); //Magic Number
+        qp->SetTimeout(MilliSeconds(20)); //Magic Number
     }
 
     if (m_irn) {

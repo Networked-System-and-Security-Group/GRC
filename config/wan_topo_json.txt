@@ -188,64 +188,12 @@
             ]
         }
     ],
-    "wan_switch_num": 2,
-    "wan_link_num": 6,
+    "wan_switch_num": 1,
+    "wan_link_num": 3,
     "wan_switches": [111],
     "wan_links": [
-        {"src": 36, "dst": 111, "bw": "400Gbps", "delay": "1000us", "loss": 0.0},
-        {"src": 73, "dst": 111, "bw": "400Gbps", "delay": "1000us", "loss": 0.0},
-        {"src": 110, "dst": 111, "bw": "400Gbps", "delay": "1000us", "loss": 0.0}
-    ],
-    "as_delay": [
-        {"src": 0, "dst": 1, "delay": 2000000},
-        {"src": 0, "dst": 2, "delay": 2000000},
-        {"src": 1, "dst": 2, "delay": 2000000}
-    ],
-    "wan_routing": [
-        {
-            "srcSw": 36,
-            "dstAs": 1,
-            "next_nodes": [111]
-        },
-        {
-            "srcSw": 36,
-            "dstAs": 2,
-            "next_nodes": [111]
-        },
-        {
-            "srcSw": 73,
-            "dstAs": 0,
-            "next_nodes": [111]
-        },
-        {
-            "srcSw": 73,
-            "dstAs": 2,
-            "next_nodes": [111]
-        },
-        {
-            "srcSw": 110,
-            "dstAs": 0,
-            "next_nodes": [111]
-        },
-        {
-            "srcSw": 110,
-            "dstAs": 1,
-            "next_nodes": [111]
-        },
-        {
-            "srcSw": 111,
-            "dstAs": 0,
-            "next_nodes": [36]
-        },
-        {
-            "srcSw": 111,
-            "dstAs": 1,
-            "next_nodes": [73]
-        },
-        {
-            "srcSw": 111,
-            "dstAs": 2,
-            "next_nodes": [110]
-        }
+        {"src": 36, "dst": 111, "bw": "200Gbps", "delay": "1000us", "loss": 0.0},
+        {"src": 73, "dst": 111, "bw": "200Gbps", "delay": "1000us", "loss": 0.0},
+        {"src": 110, "dst": 111, "bw": "200Gbps", "delay": "1000us", "loss": 0.0}
     ]
 }

@@ -321,7 +321,7 @@ void SwitchNode::SendToDev(Ptr<Packet> p, CustomHeader &ch) {
         return;
     }
 
-    if (isESW) {
+    if (isDCI) {
         m_mmu->m_wanRouting.RouteInput(p, ch);
         return;
     }
@@ -426,12 +426,6 @@ void SwitchNode::DoSwitchSend(Ptr<Packet> p, CustomHeader &ch, uint32_t outDev, 
                 m_mmu->UpdateIngressAdmission(inDev, qIndex, p->GetSize());
                 m_mmu->UpdateEgressAdmission(outDev, qIndex, p->GetSize());
             } else { /** DROP: At Ingress */
-                if (ch.l3Prot == 0x11) {
-                    //printf("An UDP packet dropped because ingress admission check false: Node:%u, Flow:%u, Seq=%u\n", 
-                    //    m_id, 
-                    //    Settings::get_flowid(p),
-                    //    ch.udp.seq);
-                }
                 Settings::dropped_pkt_sw_ingress++;
                 fprintf(logfile::drop_log, "%lu,%u,%u,%u,%u,%u\n", 
                     Simulator::Now().GetNanoSeconds(),
@@ -440,6 +434,20 @@ void SwitchNode::DoSwitchSend(Ptr<Packet> p, CustomHeader &ch, uint32_t outDev, 
                     Settings::get_flowid(p),
                     ch.udp.seq,
                     0);
+                if (ch.l3Prot == 0x11 && m_pfcEnabled == true && false) {
+                    printf("An UDP packet dropped because ingress admission check false: Node:%u, Flow:%u, Seq=%u\n", 
+                        m_id, 
+                        Settings::get_flowid(p),
+                        ch.udp.seq);
+                    m_mmu->printBufferManagerStatus();
+                    std::cout << m_mmu->m_usedIngressPGHeadroomBytes[inDev][qIndex] << " "
+                        << m_mmu->paused[inDev][qIndex]
+                        << std::endl;
+                    fflush(stdout);
+                    fflush(logfile::pfc_file);
+                    fflush(logfile::drop_log);
+                    assert(false);
+                }
                 return;  // drop
             }
         } else { /** DROP: At Egress */

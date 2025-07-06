@@ -143,29 +143,32 @@ def main():
     parser.add_argument('--irn', dest='irn', action='store',
                         type=int, default=0, help="enable IRN (default: 0)")
     parser.add_argument('--simul_time', dest='simul_time', action='store',
-                        default='0.05', help="traffic time to simulate (up to 3 seconds) (default: 0.1)")
+                        default='0.05', help="traffic time to simulate (up to 3 seconds) (default: 0.1)")#
     parser.add_argument('--buffer', dest="buffer", action='store',
                         default='9', help="the switch buffer size (MB) (default: 9)")
     parser.add_argument('--bw', dest="bw", action='store',
                         default='100', help="the NIC bandwidth (Gbps) (default: 100)")
     parser.add_argument('--topo', dest='topo', action='store',
-                        default='wan_topo_json', help="the name of the topology file (default: leaf_spine_128_100G_OS2)")
+                        default='wan_topo_json', help="the name of the topology file (default: leaf_spine_128_100G_OS2)")#
     parser.add_argument('--cdf', dest='cdf', action='store',
                         default='WebSearch', help="the name of the cdf file (default: WebSearch)")
     parser.add_argument('--enforce_win', dest='enforce_win', action='store',
                         type=int, default=0, help="enforce to use window scheme (default: 0)")
     parser.add_argument('--sw_monitoring_interval', dest='sw_monitoring_interval', action='store',
                         type=int, default=10000, help="interval of sampling statistics for queue status (default: 10000ns)")
-    parser.add_argument('--my_flow', type=str, default='', help="use my own flow, if '', use default flow")
+    parser.add_argument('--my_flow', type=str, default='', help="use my own flow, if '', use default flow")#
     parser.add_argument('--debug', type=bool, default=False, help="debug")
     parser.add_argument('--stdout', type=bool, default=False, help="stdout")
     parser.add_argument('--inter_load_all', type=int, default=60, help="不同DC之间之间通信的负载，单位Gbps")
     parser.add_argument('--intra_load', type=int, default=30, help="单个host在DC内之间通信的负载")
-    parser.add_argument('--wan_cc_mode', type=int, default=1, help="DC间拥塞控制方案")
+    parser.add_argument('--wan_cc_mode', type=int, default=1, help="DC间拥塞控制方案")#
     parser.add_argument('--msg', type=str, default='', help="message")
 
     args = parser.parse_args()
 
+    if opcode := os.system("./waf") != 0:
+        print("Error: Failed to compile")
+        sys.exit(opcode)
     config_index = 0
     if not os.path.exists('./mix/index.txt'):
         with open('./mix/index.txt', 'w') as file:

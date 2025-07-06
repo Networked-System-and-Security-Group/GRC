@@ -95,10 +95,11 @@ if __name__ == '__main__':
     as1 = list(range(37, 53))
     as2 = list(range(74, 90))
 
-    flows = generate_flows(as0, as2, cdf_path, f'10G', 0.05)
+    flows = generate_flows(as0, as2, cdf_path, f'10G', 0.05) \
+            + generate_flows(as1, as2, cdf_path, f'10G', 0.05)
     flows.sort(key=lambda x : x.t)
     # 输出到文件
-    saved_path = op.join(op.dirname(__file__), 'my_flow2.txt')
+    saved_path = op.join(op.dirname(__file__), 'mot_flow.txt')
     print(f'Flow count: {len(flows)}, Saved to: {saved_path}')
     with open(saved_path, 'w') as ofile:
         ofile.write(f"{len(flows)}\n")

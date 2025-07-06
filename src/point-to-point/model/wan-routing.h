@@ -17,6 +17,7 @@
 #include "ns3/settings.h"
 #include "ns3/simulator.h"
 #include "ns3/tag.h"
+#include <assert.h>
 
 namespace ns3 {
 /**
@@ -73,11 +74,20 @@ private:
     double bytes_decrease_coefficient = 0.25;
     Time bytes_decreace_interval = MicroSeconds(50);
     struct RttMonitor {
+        RttMonitor() {
+            //assert(false);
+        };
+        inline RttMonitor(int64_t max_rate) : 
+            max_rate(max_rate),
+            guaranteed_rate(max_rate * 0.3){
+            std::cout << max_rate << "maxrate!" << std::endl;
+        }
         //Sensitive RTT监测 使用EWMA的方式 实际上与GSCC方案无关，仅作为监控使用
         Time tau1 = MicroSeconds(1000);
         Time sensitive_rtt = MicroSeconds(0);
         Time last_update_time = MicroSeconds(0);    
         uint32_t entry_timeout_count = 0;
+
         //GSCC rtt监测
         Time rtt_sum = Seconds(0);
         int rtt_num = 0;
@@ -85,22 +95,38 @@ private:
             uint32_t hashed_seq = 0;
             Time timestamp;
         } rtt_table[8][16];
+        inline int get_entries_number() const {
+            int count = 0;
+            for (int i = 0; i < 8; ++i) {
+                for (int j = 0; j < 16; ++j) {
+                    if (rtt_table[i][j].hashed_seq != 0) {
+                        ++count;
+                    }
+                }
+            }
+            return count;
+        }
+        inline void print_rtt_table() const {
+            for (int i = 0; i < 8; ++i) {
+                for (int j = 0; j < 16; ++j) {
+                    printf("%x|%.1lf ", rtt_table[i][j].hashed_seq, rtt_table[i][j].timestamp.GetSeconds() * 1000);
+                }
+                printf("\n");
+            }
+        }
 
         //速率检测        
         //controlplane para
-        const int64_t max_rate = 400 / 8 * 1e9;
-        const double alpha = 0.5;
-        const double beta = 0.2;
-        const int64_t ai = max_rate / 40;//addition increase
-        const Time t_high = Seconds(5.5 * 1e-3);
-        const Time t_low = Seconds(4.2 * 1e-3);
-        const Time t_ref = Seconds(4.6 * 1e-3);
-        Time last_thigh_triggered = Seconds(0);
+        int64_t max_rate;
+        int64_t guaranteed_rate; 
+        double alpha = 0.5;
+        double beta = 0.6;
+        double h = 1.0 / 16.0;
+        //int64_t ai;//addition increase
         Time min_rtt = Seconds(0);
         Time rtt_diff = Seconds(0);
         Time prev_rtt = Seconds(0);
-        void update_base_rate();
-        const int64_t start_rate = max_rate * 0.4; 
+        void update_ref_rate();
         std::vector<uint64_t> send_bytes_history;
         std::vector<Time> rtt_history;
 
@@ -115,11 +141,11 @@ private:
         int64_t cnp_gen_threshold = 400 * 1000;
         Time last_cnp_send_time = MicroSeconds(0);
         Time cnp_gen_interval = MicroSeconds(40); //生成cnp的时间间隔
-        int64_t base_rate = start_rate;//每秒发送的基准字节数，从10GB/s开始
+        int64_t ref_rate = guaranteed_rate;//每秒发送的基准字节数，从10GB/s开始
         uint64_t total_send_bytes = 0;
 
         int64_t start_bytes = 0;
-        int64_t end_bytes = base_rate * MilliSeconds(1).GetSeconds();
+        int64_t end_bytes = ref_rate * MilliSeconds(1).GetSeconds();
         int64_t cur_bytes = 0;
         inline int64_t get_std_bytes() const {
             double ratio = 1.0 * (Simulator::Now().GetNanoSeconds() % MilliSeconds(1).GetNanoSeconds()) / MilliSeconds(1).GetNanoSeconds();
@@ -158,9 +184,6 @@ private:
                 Time rtt = Simulator::Now() - rtt_table[bucket][index].timestamp;
                 rtt_table[bucket][index].hashed_seq = 0;
                 rtt_table[bucket][index].timestamp = Seconds(0);
-                if (rtt < MilliSeconds(4)) {
-                    return;
-                }
                 Time delta_t = Simulator::Now() - last_update_time;
                 last_update_time = Simulator::Now();
                 double weight1 = std::min(delta_t.GetSeconds() / tau1.GetSeconds(), 1.0);
@@ -169,8 +192,17 @@ private:
                 rtt_num += 1;
                 if (t) fprintf(logfile::wan_log, "Now: %lf, RTT: %lf, Sensitive RTT: %lf, Count: %d\n",
                     Simulator::Now().GetSeconds(), rtt.GetSeconds(), sensitive_rtt.GetSeconds(), rtt_num);
-            } else if (Simulator::Now() - rtt_table[bucket][index].timestamp > MilliSeconds(20)) {
+                if (Simulator::Now() > Seconds(2.4)) {
+                    printf("[%ld]Update RTT %.3lf\n", 
+                        Simulator::Now().GetNanoSeconds(), rtt.GetSeconds() * 1000);
+                }
+            } else if (rtt_table[bucket][index].hashed_seq != 0
+                        && Simulator::Now() - rtt_table[bucket][index].timestamp > MilliSeconds(20)) {
                 //没找到匹配的报文，尝试去除该项
+                if (Simulator::Now() > Seconds(2.4)) {
+                    printf("[%ld]Erase RTT %x|%.1lf\n", 
+                        Simulator::Now().GetNanoSeconds(), rtt_table[bucket][index].hashed_seq, rtt_table[bucket][index].timestamp.GetSeconds() * 1000);
+                }
                 rtt_table[bucket][index].hashed_seq = 0;
                 entry_timeout_count++;
             }

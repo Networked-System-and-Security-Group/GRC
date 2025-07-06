@@ -1116,7 +1116,7 @@ int main(int argc, char *argv[]) {
                 n.Add(sw);
                 sw->SetAttribute("EcnEnabled", BooleanValue(enable_qcn));
                 sw->SetAttribute("PfcEnabled", BooleanValue(enable_pfc));
-                sw->isESW = true;
+                sw->isDCI = true;
                 break;
             }
             case NodeInfo::NodeType::WAN_SWITCH: {
@@ -1282,7 +1282,7 @@ int main(int argc, char *argv[]) {
                 sw->m_mmu->ConfigHdrm(j, headroom);
             }
             sw->m_mmu->ConfigNPort(sw->GetNDevices() - 1);
-            sw->m_mmu->ConfigBufferSize(96 * 1024 * 1024);  // Magic Number
+            sw->m_mmu->ConfigBufferSize(144 * 1024 * 1024);  // Magic Number
             sw->m_mmu->node_id = sw->GetId();
             sw->m_mmu->InitSwitch();
 
@@ -1305,7 +1305,7 @@ int main(int argc, char *argv[]) {
                 sw->m_mmu->ConfigHdrm(j, 0);
             }
             sw->m_mmu->ConfigNPort(sw->GetNDevices() - 1);
-            sw->m_mmu->ConfigBufferSize(128 * 1024 * 1024);  // Magic Number
+            sw->m_mmu->ConfigBufferSize(168 * 1024 * 1024);  // Magic Number
             sw->m_mmu->node_id = sw->GetId();
             sw->m_mmu->InitSwitch();
 
@@ -1466,7 +1466,7 @@ int main(int argc, char *argv[]) {
                 pairBdp[n.Get(j)][n.Get(i)] = bdp;
                 pairRtt[n.Get(i)][n.Get(j)] = rtt;
                 pairRtt[n.Get(j)][n.Get(i)] = rtt;
-                cout << "pair " << i << " " << j << ": rtt " << rtt << " bdp " << bdp << endl;
+                //cout << "pair " << i << " " << j << ": rtt " << rtt << " bdp " << bdp << endl;
                 if (rtt < server_rtt_mon_interval) server_rtt_mon_interval = rtt;
                 if (bdp > maxBdp) maxBdp = bdp;
                 if (rtt > maxRtt) maxRtt = rtt;

@@ -124,10 +124,11 @@ class SwitchMmu : public Object {
 
     /*------------ ConWeave Objects-------------*/
     ConWeaveRouting m_conweaveRouting;
-
+    
     CaverRouting m_caverRouting;
     HulaRouting m_hulaRouting;
     WanRouting m_wanRouting;
+
     inline void printBufferInfo() {
         for (uint32_t port = 0; port < Settings::nodeContainer.Get(node_id)->GetNDevices(); ++port) {
             fprintf(logfile::buffer_monitor, "%ld,%u,%u,%u,%u\n", 
@@ -139,7 +140,7 @@ class SwitchMmu : public Object {
         }
     }
 
-   private:
+   //private:
     bool m_PFCenabled;
 
     uint32_t m_maxBufferBytes{0};  // 总缓冲区的容量
@@ -222,7 +223,7 @@ class SwitchMmu : public Object {
                   << "\n";
 
         std::cout << "PG Headroom Limit (m_pg_hdrm_limit): \n";
-        for (unsigned i = 0; i < 10; ++i) {
+        for (unsigned i = 0; i < 6; ++i) {
             std::cout << "PGHeadroom[" << i << "] (m_pg_hdrm_limit): " << m_pg_hdrm_limit[i]
                       << "\n";
         }
