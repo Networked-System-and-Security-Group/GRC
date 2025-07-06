@@ -31,7 +31,7 @@ wget https://www.nsnam.org/releases/ns-allinone-3.19.tar.bz2
 tar -xvf ns-allinone-3.19.tar.bz2
 cd ns-allinone-3.19
 rm -rf ns-3.19
-git clone https://github.com/CAVER-LB/CAVER-ns3.git ns-3.19
+git clone https://github.com/Networked-System-and-Security-Group/RDMA-WAN-Optimization ns-3.19
 cd ns-3.19
 ./waf configure --build-profile=optimized
 ./waf
