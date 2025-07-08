@@ -256,7 +256,7 @@ private:
             }
         }
     };
-    Time controller_active_interval = MicroSeconds(1000);
+    static Time epoch_duration;
     std::map<uint32_t, ControllerPathSelector> dst2path_selector;
     void controlplane_logic();
 

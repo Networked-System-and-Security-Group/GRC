@@ -183,8 +183,84 @@ def custom_json_dumps(obj, indent=4, level=0):
     else:
         return json.dumps(obj)
 
+def generate_cernet_topo():
+    """
+    生成一个基于CERNET骨干网的特定拓扑。
+    - WAN: 包含北京、天津、石家庄、太原、呼和浩特5个核心节点。
+    - LAN: 6个AS(Fat-Tree, k=4)分别连接到指定的WAN节点。
+    """
+    global next_node_id, dci_switches
+    # 重置全局计数器和列表，确保每次调用都从头开始生成
+    next_node_id = 0
+    dci_switches = []
+
+    # 1. 生成所有自治域 (AS) 的拓扑
+    # 总共需要 1(北京) + 1(天津) + 1(石家庄) + 2(呼和浩特) + 1(太原) = 6个AS
+    num_as = 6
+    k_values = [4] * num_as  # 所有AS都使用k=4的Fat-Tree
+    # 调用现有函数生成AS拓扑，这将填充全局的 dci_switches 列表
+    topology = generate_topology_file(num_as, k_values)
+
+    # 2. 定义广域网 (WAN) 拓扑
+    wan_cities = ['北京', '天津', '石家庄', '太原', '呼和浩特']
+    wan_switch_map = {city: get_next_id() for city in wan_cities}
+    wan_switches_list = list(wan_switch_map.values())
+    
+    # 3. 定义并创建WAN链路
+    wan_links_info = [
+        ('北京', '天津', 108), ('北京', '石家庄', 265.62), ('北京', '呼和浩特', 415.29),
+        ('北京', '太原', 402), ('石家庄', '天津', 265), ('呼和浩特', '太原', 336)
+    ]
+    
+    wan_links = []
+    wan_bw = '400Gbps'
+    
+    for src_city, dst_city, distance in wan_links_info:
+        # 延迟计算：200km = 1ms = 1000us
+        delay_us = (distance / 200.0) * 1000
+        delay_str = f"{int(delay_us)}us"
+        wan_links.append({
+            "src": wan_switch_map[src_city],
+            "dst": wan_switch_map[dst_city],
+            "bw": wan_bw,
+            "delay": delay_str,
+            "loss": 0.0
+        })
+
+    # 4. 创建AS (DCI交换机) 与 WAN交换机的连接链路
+    # dci_switches 列表中的DCI交换机是按AS ID顺序生成的 (AS0, AS1, ...)
+    dci_to_wan_connections = [
+        (dci_switches[0], '北京'),
+        (dci_switches[1], '天津'),
+        (dci_switches[2], '石家庄'),
+        (dci_switches[3], '呼和浩特'), # 第一个连接到呼和浩特的AS
+        (dci_switches[4], '呼和浩特'), # 第二个连接到呼和浩特的AS
+        (dci_switches[5], '太原')
+    ]
+
+    dci_wan_delay = '300us'
+    for dci_id, city in dci_to_wan_connections:
+        wan_links.append({
+            "src": dci_id,
+            "dst": wan_switch_map[city],
+            "bw": wan_bw, 
+            "delay": dci_wan_delay,
+            "loss": 0.0
+        })
+
+    # 5. 将WAN信息整合到最终的拓扑字典中
+    topology['wan_switch_num'] = len(wan_switches_list)
+    topology['wan_switches'] = wan_switches_list
+    topology['wan_links'] = wan_links
+    topology['wan_link_num'] = len(wan_links)
+    with open(op.join(op.dirname(__file__), 'cernet_topo.txt'), 'w') as f:
+        topology_json = custom_json_dumps(topology, indent=4)
+        f.write(topology_json)
+
 if __name__ == "__main__":
     # 重置全局节点计数器
+    generate_cernet_topo()
+    quit(0)
     next_node_id = 0
 
     # 示例参数：3个 AS，每个 AS 的 fat-tree 参数 k=4（注意 k 必须为偶数）

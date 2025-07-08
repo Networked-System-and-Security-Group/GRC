@@ -89,10 +89,14 @@ void Settings::record_flow_distribution(Ptr<Packet> p, CustomHeader &ch, Ptr<Nod
     }
     uint32_t srcId = srcNode->GetId();
     uint32_t dstId = if2id[srcNode][outDev];
-    if (dstId == Settings::hostIp2IdMap[ch.dip]) {//最后一跳不进行记录
+    //7.8修改:只记录广域链路
+    if ((Settings::nodeInfos[srcId].node_type != NodeInfo::NodeType::DCI_SWITCH &&
+        Settings::nodeInfos[srcId].node_type != NodeInfo::NodeType::WAN_SWITCH) ||
+        (Settings::nodeInfos[dstId].node_type != NodeInfo::NodeType::DCI_SWITCH &&
+        Settings::nodeInfos[dstId].node_type != NodeInfo::NodeType::WAN_SWITCH)) {
         return;
     }
-    if (srcId != 111 && dstId != 111) {
+    if (dstId == Settings::hostIp2IdMap[ch.dip]) {//最后一跳不进行记录
         return;
     }
     uint32_t flowId = Settings::get_flowid(p);

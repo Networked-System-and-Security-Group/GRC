@@ -10,6 +10,8 @@
 #include <ns3/qbb-net-device.h>
 namespace ns3 {
 
+Time WanRouting::epoch_duration = MicroSeconds(1000); // 1ms
+
 uint64_t WanRouting::GetQpKey(uint32_t dip, uint16_t sport, uint16_t dport, uint16_t pg) {
     return ((uint64_t)dip << 32) | ((uint64_t)sport << 16) | (uint64_t)pg | (uint64_t)dport;
 }
@@ -35,7 +37,7 @@ void WanRouting::init() {
         }
         //printf("\n");
     }
-    Simulator::Schedule(controller_active_interval, &WanRouting::controlplane_logic, this);
+    Simulator::Schedule(epoch_duration, &WanRouting::controlplane_logic, this);
     Simulator::Schedule(Seconds(2), &WanRouting::periodic_decrease_bytes, this);
 }
 
@@ -192,7 +194,7 @@ void WanRouting::periodic_decrease_bytes() {
 }
 
 void WanRouting::controlplane_logic() {
-    Simulator::Schedule(controller_active_interval, &WanRouting::controlplane_logic, this);
+    Simulator::Schedule(epoch_duration, &WanRouting::controlplane_logic, this);
     if (Simulator::Now() < Seconds(2)) {
         return;
     }
@@ -237,7 +239,7 @@ void WanRouting::controlplane_logic() {
                     rtt_monitor.update_ref_rate();
                 }
                 rtt_monitor.start_bytes = rtt_monitor.end_bytes - rtt_monitor.cur_bytes;
-                rtt_monitor.end_bytes = rtt_monitor.start_bytes + rtt_monitor.ref_rate * controller_active_interval.GetSeconds();
+                rtt_monitor.end_bytes = rtt_monitor.start_bytes + rtt_monitor.ref_rate * epoch_duration.GetSeconds();
                 rtt_monitor.cur_bytes = 0;
                 
                 rtt_monitor.rtt_sum = Seconds(0);
@@ -264,7 +266,7 @@ void WanRouting::RttMonitor::update_ref_rate() {
     int hsize = send_bytes_history.size();
     int64_t rate_before = (send_bytes_history[hsize - 1]
         + send_bytes_history[hsize - 2]
-        + send_bytes_history[hsize - 3]) / 3.0 / MicroSeconds(1000).GetSeconds();
+        + send_bytes_history[hsize - 3]) / 3.0 / WanRouting::epoch_duration.GetSeconds();
     int64_t upper_rate = std::max(guaranteed_rate, static_cast<int64_t>(rate_before * 1.2));
     bool flag = (ref_rate > upper_rate);
     int64_t pre_ref_rate = ref_rate;
@@ -280,7 +282,7 @@ void WanRouting::RttMonitor::update_ref_rate() {
     rtt_diff = Seconds((1 - alpha) * rtt_diff.GetSeconds() + alpha * new_rtt_diff.GetSeconds());
     Time threshold = min_rtt + MicroSeconds(1000); //Magic Number
 
-    double epochs_per_rtt = min_rtt.GetSeconds() / MilliSeconds(1).GetSeconds();
+    double epochs_per_rtt = min_rtt.GetSeconds() / WanRouting::epoch_duration.GetSeconds();
     int64_t ai = max_rate / epochs_per_rtt * h;
     double md = std::pow(beta, 1 / epochs_per_rtt);
     printf("ai: %.2lf, md: %.2lf, ", ai / 1e9, md);
