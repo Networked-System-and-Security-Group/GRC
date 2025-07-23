@@ -18,7 +18,8 @@ from matplotlib.font_manager import FontProperties
 import traceback
 from pathlib import Path
 
-font_path = "/home/LAB/zhangjue25/myfont/simsun.ttc"
+#font_path = "/home/LAB/zhangjue25/myfont/simsun.ttc"
+font_path = "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc"
 font_prop = FontProperties(fname=font_path)
 
 def auto_save_plot(func):
@@ -51,6 +52,7 @@ def auto_save_plot(func):
         return result
     return wrapper
 
+# 根据config_id来获取指定的实验数据的所在的位置
 def get_dir_by_id(config_id):
     '''return experiment output dir by id'''
     base_dir = op.join(op.dirname(__file__), '../mix/output')
@@ -346,6 +348,12 @@ class Analyser:
             self.get_inter_df()['fct_slowdown'].quantile(.99)
         )
     
+    def get_inter_fct(self):
+        self.__read_flow_info()
+        df = self.get_inter_df()[['src_as', 'dst_as', 'fct_slowdown']]
+        groupby_df = df.groupby(['src_as', 'dst_as'])['fct_slowdown'].mean().reset_index()
+        return groupby_df
+    
     def get_fct(self):
         return (self.get_avg_fct(), self.get_p99_fct())
     
@@ -561,6 +569,17 @@ def get_basic_result(config_ids_str: str):
             print(f'Error processing {ana.id}: {e}')
     df = pd.DataFrame(results)
     return df
+
+def get_avg_interfct_groupby_as(config_ids_str: str):
+    results = []
+    for ana in analyser_iter(config_ids_str):
+        try:
+            inter_fct_df = ana.get_inter_fct()
+            results.append(inter_fct_df)
+        except Exception as e:
+            print(f'Error processing {ana.id}: {e}')
+    return results
+        
         
 def plot_motivation_expr():
     a = get_analyser(863)

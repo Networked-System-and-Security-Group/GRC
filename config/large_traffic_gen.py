@@ -144,8 +144,8 @@ if __name__ == '__main__':
         topo = json.load(f)
         for as_item in topo['as_topologies']:
             as_list.append(as_item['hosts'])
-    background_inter_load = 200
-    dynamic_load = 100
+    background_inter_load = 100
+    dynamic_load = 50
     per_host_inter_load = background_inter_load / 5 / 16 # 总的出速率是250Gbps,分给5个目标DC,再分给16个host
     intra_load = 100 * 0.3 # 每个网卡最高速率100GGbps,平均速率为0.3
     flows = []

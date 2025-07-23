@@ -108,16 +108,12 @@ if __name__ == '__main__':
     as0 = list(range(0, 16))
     as1 = list(range(37, 53))
     as2 = list(range(74, 90))
+    as5 = list(range(185, 201))
 
-    flows = generate_flows(as0, as0, cdf_path, f'{args.intra_load}G', args.duration) \
-          + generate_flows(as1, as1, cdf_path, f'{args.intra_load}G', args.duration) \
-          + generate_flows(as2, as2, cdf_path, f'{args.intra_load}G', args.duration) \
-          + generate_flows(as0, as1, cdf_path, f'{args.inter_load_all/16}G', args.duration) \
-          + generate_flows(as0, as2, cdf_path, f'{args.inter_load_all/16}G', args.duration) \
-          + generate_flows(as1, as0, cdf_path, f'{args.inter_load_all/16}G', args.duration) \
-          + generate_flows(as1, as2, cdf_path, f'{args.inter_load_all/16}G', args.duration) \
-          + generate_flows(as2, as0, cdf_path, f'{args.inter_load_all/16}G', args.duration) \
-          + generate_flows(as2, as1, cdf_path, f'{args.inter_load_all/16}G', args.duration) 
+    flows = generate_flows(as0, as1, cdf_path, f'{args.inter_load_all/16}G', args.duration) \
+          + generate_flows(as2, as1, cdf_path, f'{args.inter_load_all/16}G', args.duration) \
+          + generate_flows(as5, as1, cdf_path, f'{args.inter_load_all/16}G', args.duration)
+    
     flows.sort(key=lambda x : x.t)
     saved_path = op.join(op.dirname(__file__), args.output)
     print(f'Flow count: {len(flows)}, Saved to: {saved_path}')
