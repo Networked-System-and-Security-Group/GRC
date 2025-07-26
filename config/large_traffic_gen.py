@@ -211,16 +211,41 @@ def plot_concurrent_flows(flows: list[Flow], bw: float, output_filename: str = "
     print(f"绘图已保存为 {output_filename}")
 
 if __name__ == '__main__':
+    # 添加命令行参数解析
+    parser = argparse.ArgumentParser(description='生成网络流量并绘制并发流图')
+    # 添加background_inter_load参数（默认值150）
+    parser.add_argument('-b','--background-inter-load', type=int, default=150,
+                        help='background_inter_load的值（默认150）')
+    # 添加dynamic_load参数（默认值200）
+    parser.add_argument('-d','--dynamic-load', type=int, default=200,
+                        help='dynamic_load的值（默认200）')
+    # 添加流量集参数
+    parser.add_argument('-f', '--flow_set', type=str, default='w')
+
+    parser.add_argument('-t', '--time', type=float)
+
+    # 解析参数
+    args = parser.parse_args()
+
+    # 从命令行参数获取值（替代原有的硬编码）
+    background_inter_load = args.background_inter_load
+    dynamic_load = args.dynamic_load
+    flow_set = args.flow_set
+    time = args.time
 
     base_dir = op.join(op.dirname(__file__), '../traffic_gen')
-    cdf_path = op.join(base_dir, 'WebSearch') + '.txt'
+
+    if flow_set == 'a':
+        cdf_path = op.join(base_dir, 'AliStorage2019') + '.txt'
+    else:
+        cdf_path = op.join(base_dir, 'WebSearch') + '.txt'
+
     as_list:list[list[int]] = []
     with (Path(__file__).parent / 'cernet_topo.txt').open() as f:
         topo = json.load(f)
         for as_item in topo['as_topologies']:
             as_list.append(as_item['hosts'])
-    background_inter_load = 150
-    dynamic_load = 200
+
     per_host_inter_load = background_inter_load / 5 / 16 # 总的出速率是250Gbps,分给5个目标DC,再分给16个host
     intra_load = 100 * 0.3 # 每个网卡最高速率100GGbps,平均速率为0.3
     flows = []
@@ -233,7 +258,7 @@ if __name__ == '__main__':
                 flows += generate_flows(as1, as2, cdf_path, f'{per_host_inter_load}G', 0.1)
 
     if dynamic_load > 0:
-        flows += generate_dynamic_flows(as_list, cdf_path, f'{dynamic_load}G', 0.1, slice_duration=0.05, slice_rate='100G')
+        flows += generate_dynamic_flows(as_list, cdf_path, f'{dynamic_load}G', 0.1, slice_duration=0.03, slice_rate='100G')
 
     
     flows.sort(key=lambda x : x.t)
@@ -242,7 +267,7 @@ if __name__ == '__main__':
                           output_filename=f'concurrent_flows{"_d" if dynamic_load > 0 else ""}.png')
     quit(0)
     # 输出到文件
-    saved_path = op.join(op.dirname(__file__), f'dynamic-{int(background_inter_load)}-{int(dynamic_load)}.txt')
+    saved_path = op.join(op.dirname(__file__), f'{flow_set}-dynamic-{int(background_inter_load)}-{int(dynamic_load)}.txt')
     print(f'Flow count: {len(flows)}, Saved to: {saved_path}')
     with open(saved_path, 'w') as ofile:
         ofile.write(f"{len(flows)}\n")
