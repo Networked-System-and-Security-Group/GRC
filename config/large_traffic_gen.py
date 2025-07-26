@@ -5,6 +5,8 @@ import random
 import os.path as op
 import argparse
 from pathlib import Path
+import matplotlib.pyplot as plt
+
 
 class Flow:
     def __init__(self, src, dst, size, t):
@@ -135,6 +137,79 @@ def generate_dynamic_flows(as_list, cdf_file, total_rate, duration,
 
     return flows
 
+
+def plot_concurrent_flows(flows: list[Flow], bw: float, output_filename: str = "concurrent_flows.png"):
+    """
+    计算并绘制并发流数量随时间变化的折线图。
+
+    参数:
+    - flows (List[Flow]): 一个包含Flow对象的列表。
+    - bw (float): 链路带宽。
+    - output_filename (str): 输出图像的文件名。
+    """
+    if not flows:
+        print("流列表为空，无法生成图像。")
+        return
+
+    # 1. 根据流的大小和带宽计算持续时间，并创建事件列表
+    #    (time, +1) 表示流开始
+    #    (time, -1) 表示流结束
+    flows = list(flows)
+    print(f"Calculating concurrent flows for {len(flows)} flows with bandwidth {bw/1e9:.2f} GB/s")
+    events = []
+    for flow in flows:
+        duration = flow.size / bw
+        events.append((flow.t, 1))
+        events.append((flow.t + duration, -1))
+
+    # 2. 按时间对事件进行排序
+    events.sort()
+
+    # 3. 计算每个时间点的并发流数量
+    time_points = [0]
+    flow_counts = [0]
+    current_flows = 0
+    
+    # 遍历排序后的事件来构建时间点和流计数的列表
+    for t, event_type in events:
+        # 如果当前事件的时间点与上一个不同，则添加一个点以保持上一个状态
+        if t > time_points[-1]:
+            time_points.append(t)
+            flow_counts.append(current_flows)
+
+        # 更新流计数
+        current_flows += event_type
+        
+        # 更新当前时间点的流计数值
+        if t == time_points[-1]:
+            flow_counts[-1] = current_flows
+        else:
+            # 这个分支理论上在上面的if条件下不会被执行，但为保险起见保留
+            time_points.append(t)
+            flow_counts.append(current_flows)
+
+    # 4. 绘图
+    plt.figure(figsize=(10, 6))
+    # 使用 'post' 方式绘制阶梯图，表示值在每个时间点之后保持不变
+    plt.step(time_points, flow_counts, where='post')
+    
+    plt.xlabel("time (t)")
+    plt.ylabel("concurrent flows")
+    plt.grid(True)
+    
+    # 设置刻度为整数
+    max_flows = max(flow_counts) if flow_counts else 0
+    max_time = time_points[-1] if time_points else 1
+    #plt.xticks(range(0, int(max_time) + 2))
+    plt.yticks(range(0, int(max_flows) + 2))
+    plt.xlim(2, 2.1)
+
+    # 保存图像
+    plt.savefig(output_filename)
+    plt.close() # 关闭图形，释放内存
+
+    print(f"绘图已保存为 {output_filename}")
+
 if __name__ == '__main__':
 
     base_dir = op.join(op.dirname(__file__), '../traffic_gen')
@@ -144,8 +219,8 @@ if __name__ == '__main__':
         topo = json.load(f)
         for as_item in topo['as_topologies']:
             as_list.append(as_item['hosts'])
-    background_inter_load = 200
-    dynamic_load = 100
+    background_inter_load = 150
+    dynamic_load = 200
     per_host_inter_load = background_inter_load / 5 / 16 # 总的出速率是250Gbps,分给5个目标DC,再分给16个host
     intra_load = 100 * 0.3 # 每个网卡最高速率100GGbps,平均速率为0.3
     flows = []
@@ -158,10 +233,14 @@ if __name__ == '__main__':
                 flows += generate_flows(as1, as2, cdf_path, f'{per_host_inter_load}G', 0.1)
 
     if dynamic_load > 0:
-        flows += generate_dynamic_flows(as_list, cdf_path, f'{dynamic_load}G', 0.1, slice_duration=0.02, slice_rate='100G')
+        flows += generate_dynamic_flows(as_list, cdf_path, f'{dynamic_load}G', 0.1, slice_duration=0.05, slice_rate='100G')
 
     
     flows.sort(key=lambda x : x.t)
+
+    plot_concurrent_flows(filter(lambda f: f.dst in as_list[1], flows), 400 * 1e9 / 8, 
+                          output_filename=f'concurrent_flows{"_d" if dynamic_load > 0 else ""}.png')
+    quit(0)
     # 输出到文件
     saved_path = op.join(op.dirname(__file__), f'dynamic-{int(background_inter_load)}-{int(dynamic_load)}.txt')
     print(f'Flow count: {len(flows)}, Saved to: {saved_path}')
