@@ -1275,14 +1275,15 @@ int main(int argc, char *argv[]) {
                 Ptr<QbbNetDevice> dev = DynamicCast<QbbNetDevice>(sw->GetDevice(j));
                 // set ecn
                 uint64_t rate = dev->GetDataRate().GetBitRate();
-                sw->m_mmu->ConfigEcn(j, rate2kmin.at(rate), rate2kmax.at(rate), rate2pmax.at(rate));
+                //sw->m_mmu->ConfigEcn(j, rate2kmin.at(rate), rate2kmax.at(rate), rate2pmax.at(rate));
+                sw->m_mmu->ConfigEcn(j, 1000, 20000, 0.15);
                 // set pfc
                 uint64_t delay = DynamicCast<QbbChannel>(dev->GetChannel())->GetDelay().GetTimeStep();
                 uint32_t headroom = rate * delay / 8 / 1000000000 * 2 + 2 * sw->m_mmu->MTU;
                 sw->m_mmu->ConfigHdrm(j, headroom);
             }
             sw->m_mmu->ConfigNPort(sw->GetNDevices() - 1);
-            sw->m_mmu->ConfigBufferSize(144 * 1024 * 1024);  // Magic Number
+            sw->m_mmu->ConfigBufferSize(160 * 1024 * 1024);  // Magic Number
             sw->m_mmu->node_id = sw->GetId();
             sw->m_mmu->InitSwitch();
 
@@ -1298,14 +1299,15 @@ int main(int argc, char *argv[]) {
                 dev->SetAttribute("QbbEnabled", BooleanValue(false));
                 // set ecn
                 uint64_t rate = dev->GetDataRate().GetBitRate();
-                sw->m_mmu->ConfigEcn(j, rate2kmin.at(rate), rate2kmax.at(rate), rate2pmax.at(rate));
+                //sw->m_mmu->ConfigEcn(j, rate2kmin.at(rate), rate2kmax.at(rate), rate2pmax.at(rate));
+                sw->m_mmu->ConfigEcn(j, 1000, 20000, 0.15);
                 // set pfc
                 //uint64_t delay = DynamicCast<QbbChannel>(dev->GetChannel())->GetDelay().GetTimeStep();
                 //uint32_t headroom = rate * delay / 8 / 1000000000 * 2 + 2 * sw->m_mmu->MTU;
                 sw->m_mmu->ConfigHdrm(j, 0);
             }
             sw->m_mmu->ConfigNPort(sw->GetNDevices() - 1);
-            sw->m_mmu->ConfigBufferSize(168 * 1024 * 1024);  // Magic Number
+            sw->m_mmu->ConfigBufferSize(320 * 1024 * 1024);  // Magic Number
             sw->m_mmu->node_id = sw->GetId();
             sw->m_mmu->InitSwitch();
 
