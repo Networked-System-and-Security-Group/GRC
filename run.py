@@ -163,6 +163,7 @@ def main():
     parser.add_argument('--intra_load', type=int, default=30, help="单个host在DC内之间通信的负载")
     parser.add_argument('--wan_cc_mode', type=int, default=1, help="DC间拥塞控制方案")#
     parser.add_argument('--msg', type=str, default='', help="message")
+    parser.add_argument('--config', type=str, default='', help="config.txt file to use, if '', generate a new config.txt file")
 
     args = parser.parse_args()
 
@@ -182,6 +183,7 @@ def main():
         file.truncate()
 
     config_ID = f"[{config_index}]-{datetime.now().strftime('%m-%d-%H:%M:%S')}" 
+    
     # while (isExist):
     #     config_ID = str(random.randrange(MAX_RAND_RANGE))
     #     isExist = os.path.exists(os.getcwd() + "/mix/output/" + config_ID)
