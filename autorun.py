@@ -22,7 +22,7 @@ def main():
             os.system(f"python ./config/large_traffic_gen.py -b {flow} -d 0 -f {flow_set}")
             flow_name = f'{flow_set}-dynamic-{flow}-0'
             for wan_cc_mode in range(0,3):
-                os.system(f"python run.py --topo cernet_topo --my_flow {flow_name} --wan_cc_mode {wan_cc_mode} --msg 'No.{expr_cnt} 静态实验-流{flow_name} -wan_cc_mode{wan_cc_mode}' ")
+                os.system(f"python run.py --topo cernet_topo --my_flow {flow_name} --wan_cc_mode {wan_cc_mode} --msg 'No.{expr_cnt}静态实验-流{flow_name} -wan_cc_mode{wan_cc_mode}' ")
                 expr_cnt += 1
 
     elif expr_type == 'd':
@@ -30,7 +30,7 @@ def main():
             os.system(f"python ./config/large_traffic_gen.py -b 150 -d {flow} -f {flow_set}")
             flow_name = f'{flow_set}-dynamic-150-{flow}'
             for wan_cc_mode in range(0,3):
-                os.system(f"python run.py --topo cernet_topo --my_flow {flow_name} --wan_cc_mode {wan_cc_mode} --msg 'No.{expr_cnt} 动态实验-流{flow_name} -wan_cc_mode{wan_cc_mode}' ")
+                os.system(f"python run.py --topo cernet_topo --my_flow {flow_name} --wan_cc_mode {wan_cc_mode} --msg 'No.{expr_cnt}动态实验-流{flow_name} -wan_cc_mode{wan_cc_mode}' ")
                 expr_cnt += 1
 
     

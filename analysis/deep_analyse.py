@@ -346,6 +346,22 @@ class Analyser:
             self.get_inter_df()['fct_slowdown'].quantile(.99)
         )
     
+    def get_large_flow_fct(self):
+        self.__read_flow_info()
+        df = self.get_large_flow_df().copy()
+        return ( df['fct_slowdown'].mean(), 
+                df[ df['src_as'] != df['dst_as'] ]['fct_slowdown'].mean(),
+                df[ df['src_as'] != df['dst_as'] ]['fct_slowdown'].quantile(.99), 
+                df[ df['src_as'] == df['dst_as'] ]['fct_slowdown'].mean())
+    
+    def get_small_flow_fct(self):
+        self.__read_flow_info()
+        df = self.get_small_flow_df().copy()
+        return ( df['fct_slowdown'].mean(), 
+                df[ df['src_as'] != df['dst_as'] ]['fct_slowdown'].mean(),
+                df[ df['src_as'] != df['dst_as'] ]['fct_slowdown'].quantile(.99), 
+                df[ df['src_as'] == df['dst_as'] ]['fct_slowdown'].mean())
+    
     def get_fct(self):
         return (self.get_avg_fct(), self.get_p99_fct())
     
@@ -423,6 +439,14 @@ class Analyser:
     def get_inter_df(self):
         self.__read_flow_info()
         return self.flow_df[self.flow_df['src_as'] != self.flow_df['dst_as']]
+    
+    def get_large_flow_df(self):
+        self.__read_flow_info()
+        return self.flow_df[self.flow_df['fsize'] >= 5000000]
+    
+    def get_small_flow_df(self):
+        self.__read_flow_info()
+        return self.flow_df[self.flow_df['fsize'] < 1000000]
 
     def __read_drop_info(self):
         self.__read_flow_info()

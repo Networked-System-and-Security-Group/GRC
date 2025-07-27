@@ -222,8 +222,6 @@ if __name__ == '__main__':
     # 添加流量集参数
     parser.add_argument('-f', '--flow_set', type=str, default='w')
 
-    parser.add_argument('-t', '--time', type=float)
-
     # 解析参数
     args = parser.parse_args()
 
@@ -231,7 +229,6 @@ if __name__ == '__main__':
     background_inter_load = args.background_inter_load
     dynamic_load = args.dynamic_load
     flow_set = args.flow_set
-    time = args.time
 
     base_dir = op.join(op.dirname(__file__), '../traffic_gen')
 
@@ -263,9 +260,8 @@ if __name__ == '__main__':
     
     flows.sort(key=lambda x : x.t)
 
-    plot_concurrent_flows(filter(lambda f: f.dst in as_list[1], flows), 400 * 1e9 / 8, 
-                          output_filename=f'concurrent_flows{"_d" if dynamic_load > 0 else ""}.png')
-    quit(0)
+    #plot_concurrent_flows(filter(lambda f: f.dst in as_list[1], flows), 400 * 1e9 / 8, 
+    #                      output_filename=f'concurrent_flows{"_d" if dynamic_load > 0 else ""}.png')
     # 输出到文件
     saved_path = op.join(op.dirname(__file__), f'{flow_set}-dynamic-{int(background_inter_load)}-{int(dynamic_load)}.txt')
     print(f'Flow count: {len(flows)}, Saved to: {saved_path}')
