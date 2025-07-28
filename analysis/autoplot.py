@@ -16,7 +16,7 @@ _style_list = [
 
 def plot_auto_lines(data, xlabel, ylabel, filename, xticks=None, xlim=None):
     """
-    针对任意多条曲线，按 _style_list 轮换样式画图。
+    针对任意多条曲线，按 _style_list 轮换样式画图，支持处理None值。
 
     参数:
       data: dict[label, (x_list, y_list)]
@@ -31,10 +31,17 @@ def plot_auto_lines(data, xlabel, ylabel, filename, xticks=None, xlim=None):
 
     # 逐条绘制
     for label, (x, y) in data.items():
+        # 过滤掉y为None的点
+        filtered_x = []
+        filtered_y = []
+        for xi, yi in zip(x, y):
+            if yi is not None:  # 只保留y不为None的点
+                filtered_x.append(xi)
+                filtered_y.append(yi)
+        
         ls, col, mk = next(style_cycle)
-        print(x,y)
         plt.plot(
-            x, y,
+            filtered_x, filtered_y,  # 使用过滤后的数据
             label=label,
             linestyle=ls,
             color=col,
@@ -42,12 +49,21 @@ def plot_auto_lines(data, xlabel, ylabel, filename, xticks=None, xlim=None):
             linewidth=2.5,
             markersize=4
         )
-        if y:
-            y_max = max(y_max, max(y))
+        
+        # 计算y最大值时排除None值
+        if filtered_y:  # 确保过滤后的数据不为空
+            current_max = max(filtered_y)
+            y_max = max(y_max, current_max)
 
     # X 轴刻度
     if xticks is None:
-        all_x = sorted({xi for xs, _ in data.values() for xi in xs})
+        # 收集所有非None值对应的x坐标
+        all_x = []
+        for xs, ys in data.values():
+            for xi, yi in zip(xs, ys):
+                if yi is not None:
+                    all_x.append(xi)
+        all_x = sorted(set(all_x))  # 去重并排序
         plt.xticks(all_x, fontsize=14)
     else:
         plt.xticks(xticks, fontsize=14)
@@ -58,7 +74,6 @@ def plot_auto_lines(data, xlabel, ylabel, filename, xticks=None, xlim=None):
     all_ticks = np.arange(0, y_max + step, step)
     visible = [t if True or i % 2 != len(all_ticks) % 2 else ''
                for i, t in enumerate(all_ticks)]
-    #plt.yscale('log', base=2)
     plt.yticks(all_ticks, visible, fontsize=14)
 
     # 轴标签、图例、网格、去除多余边框
@@ -72,7 +87,6 @@ def plot_auto_lines(data, xlabel, ylabel, filename, xticks=None, xlim=None):
 
     # 设置范围
     plt.ylim(0.8, all_ticks[-1])
-    #plt.ylim(0.9, 10)
     if xlim:
         plt.xlim(*xlim)
 
@@ -81,6 +95,7 @@ def plot_auto_lines(data, xlabel, ylabel, filename, xticks=None, xlim=None):
     plt.savefig(filepath, bbox_inches='tight')
     plt.close()
     print(f"Saved figure to {filepath}")
+
 
 
 def main():
@@ -142,6 +157,31 @@ def main():
 
         except Exception as e:
             print(f'Error processing {ana.id}: {e}')
+            if wan_cc_mode == 0:
+                dcqcn_inter[0].append(None)
+                dcqcn_inter[1].append(None)
+                dcqcn_inter[2].append(None)
+                dcqcn_inter[3].append(None)
+
+                dcqcn_intra[0].append(None)
+                dcqcn_intra[1].append(None)
+
+            elif wan_cc_mode == 2:
+                dcqcn_ecn_inter[0].append(None)
+                dcqcn_ecn_inter[1].append(None)
+                dcqcn_ecn_inter[2].append(None)
+                dcqcn_ecn_inter[3].append(None)
+
+                dcqcn_ecn_intra[0].append(None)
+                dcqcn_ecn_intra[1].append(None)
+            else:
+                gscc_intra[0].append(None)
+                gscc_intra[1].append(None)
+
+                gscc_inter[0].append(None)
+                gscc_inter[1].append(None)
+                gscc_inter[2].append(None)
+                gscc_inter[3].append(None)
         
         wan_cc_mode = (wan_cc_mode + 1) % 3
 
