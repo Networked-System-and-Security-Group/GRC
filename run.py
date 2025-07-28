@@ -1,4 +1,5 @@
 #!/usr/bin/python3
+# -*- coding: utf-8 -*-
 from genericpath import exists
 import subprocess
 import os
@@ -14,6 +15,7 @@ import os
 import argparse
 from datetime import date
 import json
+import re
 
 # randomID
 random.seed(datetime.now())
@@ -339,7 +341,16 @@ def main():
         print("unknown cc:{}".format(args.cc))
 
     with open(config_name, "w") as file:
-        file.write(config)
+        if not args.config:
+            file.write(config)
+        else:
+            # 先读入已有的config文件，将其中的OUTPUT_DIR_PATH替换为新的目录, TIME替换为当前时间
+            # 使用正则判断某行是不是 OUTPUT_DIR_PATH 或 TIME开头，然后替换整行
+            with open(args.config, "r") as existing_file:
+                existing_config = existing_file.read()
+            existing_config = re.sub(r'^OUTPUT_DIR_PATH.*$', f'OUTPUT_DIR_PATH mix/output/{config_ID}', existing_config, flags=re.MULTILINE)
+            existing_config = re.sub(r'^TIME .*$' , f'TIME {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}', existing_config, flags=re.MULTILINE)
+            file.write(existing_config)
 
     if msg:
         with open('mix/history.txt', 'a') as file:

@@ -70,11 +70,11 @@ private:
     void HandleAckReceived(Ptr<Packet> p, CustomHeader& ch);
 
     /************数据平面延迟检测*********/
-    const int rtt_table_size = 48 * 16;
+    static const inline int rtt_table_size = 64 * 16;
     struct RttEntry {
         uint32_t hashed_seq = 0;
         Time timestamp = Seconds(0);
-    } rtt_table[48*16];
+    } rtt_table[rtt_table_size];
 
     void periodic_decrease_bytes();
     double bytes_decrease_coefficient = 0.25;
@@ -118,6 +118,7 @@ private:
         Time min_rtt = Seconds(0);
         Time rtt_diff = Seconds(0);
         Time prev_rtt = Seconds(0);
+        int rtt_miss_counter = 0;
         void update_ref_rate();
         std::vector<uint64_t> send_bytes_history;
         std::vector<Time> rtt_history;

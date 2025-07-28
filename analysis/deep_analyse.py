@@ -18,8 +18,7 @@ from matplotlib.font_manager import FontProperties
 import traceback
 from pathlib import Path
 
-font_path = "/home/LAB/zhangjue25/myfont/simsun.ttc"
-font_prop = FontProperties(fname=font_path)
+font_prop = None
 
 def auto_save_plot(func):
     @functools.wraps(func)
@@ -103,9 +102,16 @@ class Analyser:
             self.accumulated_bytes_info = pd.read_csv(op.join(self.dir, 'accumulated_bytes_log'))
 
     @auto_save_plot
-    def plot_accumulated_bytes(self, switch_id, dst_as):
+    def plot_accumulated_bytes(self, src_as, dst_as):
         """绘制指定 switch_id 和 dst_as 的 accumulated_bytes 变化曲线"""
         self.__read_accumulated_bytes_info()
+        for as_obj in self.topo['as_topologies']:
+            if as_obj['as_id'] == src_as:
+                switch_id = as_obj['dci_switch']
+                break
+        else:
+            print(f'No switch found for src_as {src_as}')
+            return
         df = self.accumulated_bytes_info[
             (self.accumulated_bytes_info['switch_id'] == switch_id) &
             (self.accumulated_bytes_info['dst_as'] == dst_as)

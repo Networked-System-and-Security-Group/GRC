@@ -41,7 +41,7 @@ TypeId RdmaHw::GetTypeId(void) {
             .AddAttribute("CcMode", "which mode of DCQCN is running", UintegerValue(0),
                           MakeUintegerAccessor(&RdmaHw::m_cc_mode), MakeUintegerChecker<uint32_t>())
             .AddAttribute("NACKGenerationInterval", "The NACK/CNP Generation interval",
-                          DoubleValue(4.0), MakeDoubleAccessor(&RdmaHw::m_nack_interval),
+                          DoubleValue(20000.0), MakeDoubleAccessor(&RdmaHw::m_nack_interval),
                           MakeDoubleChecker<double>())
             .AddAttribute("L2ChunkSize", "Layer 2 chunk size. Disable chunk mode if equals to 0.",
                           UintegerValue(4000), MakeUintegerAccessor(&RdmaHw::m_chunk),
@@ -345,7 +345,7 @@ int RdmaHw::ReceiveUdp(Ptr<Packet> p, CustomHeader &ch) {
     }
     rxQp->send_cnp = ((ecnbits || cnp_check) && Simulator::Now() - rxQp->last_cnp_send_time > MicroSeconds(10));
     //printf("Receive a udp\n");
-    if (ack_req || x == 2 || x == 6) {  // generate ACK or NACK
+    if ((ack_req && x == 1) || x == 2 || x == 6) {  // generate ACK or NACK
         qbbHeader seqh;
         seqh.SetSeq(rxQp->ReceiverNextExpectedSeq);
         seqh.SetPG(ch.udp.pg);
@@ -381,10 +381,10 @@ int RdmaHw::ReceiveUdp(Ptr<Packet> p, CustomHeader &ch) {
         head.SetDestination(Ipv4Address(ch.sip));
         head.SetSource(Ipv4Address(ch.dip));
         head.SetProtocol(x == 1 ? 0xFC : 0xFD);  // ack=0xFC nack=0xFD
-        //if (x != 1) {
-        //    printf("[%ld]Send NACK, FlowId:%u, Expect:%u, PacketSeq:%u\n",
-        //           Simulator::Now().GetNanoSeconds(), flow_id, rxQp->ReceiverNextExpectedSeq, ch.udp.seq);
-        //}
+        if (x != 1) {
+            printf("[%ld]Send NACK, FlowId:%u, Expect:%u, PacketSeq:%u\n",
+                   Simulator::Now().GetNanoSeconds(), flow_id, rxQp->ReceiverNextExpectedSeq, ch.udp.seq);
+        }
         head.SetTtl(64);
         head.SetPayloadSize(newp->GetSize());
         head.SetIdentification(rxQp->m_ipid++);
@@ -636,7 +636,8 @@ int RdmaHw::ReceiverCheckSeq(uint32_t seq, Ptr<RdmaRxQueuePair> q, uint32_t size
             cnp = true;    // XXX: out-of-order should accompany with CNP (?) TODO: Check on CX6
             return 2;      // generate SACK
         }
-        if (Simulator::Now() >= q->m_nackTimer || q->m_lastNACK != expected) {  // new NACK
+        if (Simulator::Now() >= q->m_nackTimer || q->m_lastNACK != expected) {  
+            // 如果NACK已经超过了当前的冷却时间，或者当前要发的NACK和上次发的NACK不一样
             q->m_nackTimer = Simulator::Now() + MicroSeconds(m_nack_interval);
             q->m_lastNACK = expected;
             if (m_backto0) {
