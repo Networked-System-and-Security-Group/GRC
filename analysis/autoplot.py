@@ -10,8 +10,8 @@ _style_list = [
     ('--',              "orange",       's'),
     (':',               "c",            'o'),
     ('--',               "c",            's'),
-    ('-.',              gscc_c,         '^'),
-    ('-.',              gscc_c,         'd'),
+    (':',              gscc_c,         '^'),
+    ('--',              gscc_c,         'd'),
 ]
 
 def plot_auto_lines(data, xlabel, ylabel, filename, xticks=None, xlim=None):
@@ -79,7 +79,7 @@ def plot_auto_lines(data, xlabel, ylabel, filename, xticks=None, xlim=None):
     # 轴标签、图例、网格、去除多余边框
     plt.xlabel(xlabel, fontsize=16)
     plt.ylabel(ylabel, fontsize=16)
-    plt.legend(frameon=False, fontsize=16, loc='upper left', bbox_to_anchor=(0,1.1))
+    #plt.legend(frameon=False, fontsize=16, loc='upper left', bbox_to_anchor=(0,1.1))
     plt.grid(axis='y', alpha=0.3)
     ax = plt.gca()
     ax.spines['top'].set_visible(False)
@@ -185,7 +185,7 @@ def main():
         
         wan_cc_mode = (wan_cc_mode + 1) % 3
 
-    static_flow = [30,40,50,60]
+    static_flow = [30,40,50,60, 70]
     dynamic_flow = [0, 50, 100, 150, 200]
 
     if flow_type == 'd':
