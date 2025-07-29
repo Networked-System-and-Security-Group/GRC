@@ -4,17 +4,38 @@ import os.path as op
 import numpy as np
 import matplotlib.pyplot as plt
 from itertools import cycle
-gscc_c = (130/255,0,180/255)
+
+gscc_c = (130/255, 0, 180/255)
 _style_list = [
-    (':',              "orange",       'o'),
-    ('--',              "orange",       's'),
-    (':',               "c",            'o'),
-    ('--',               "c",            's'),
-    (':',              gscc_c,         '^'),
-    ('--',              gscc_c,         'd'),
+    (':', "orange", 'o'),
+    ('--', "orange", 's'),
+    (':', "c", 'o'),
+    ('--', "c", 's'),
+    (':', gscc_c, '^'),
+    ('--', gscc_c, 'd'),
 ]
 
-def plot_auto_lines(data, xlabel, ylabel, filename, xticks=None, xlim=None):
+def process_y_data(y_list):
+    """
+    将y数据按索引模5分组，每组取平均值（排除None），返回长度为5的列表。
+    若某组无有效数据（全为None），则对应位置为None。
+    """
+    # 初始化5个分组（对应模5的0-4）
+    groups = [[] for _ in range(5)]
+    for idx, val in enumerate(y_list):
+        if val is not None:  # 只保留非None值
+            mod = idx % 5  # 计算索引模5的结果
+            groups[mod].append(val)
+    # 计算每个分组的平均值（空分组返回None）
+    processed = []
+    for group in groups:
+        if group:  # 分组非空时取平均
+            processed.append(sum(group) / len(group))
+        else:  # 分组为空时保留None
+            processed.append(None)
+    return processed
+
+def plot_auto_lines(data, xlabel, ylabel, filename, xticks=None, xlim=None, logtag=0):
     """
     针对任意多条曲线，按 _style_list 轮换样式画图，支持处理None值。
 
@@ -79,14 +100,14 @@ def plot_auto_lines(data, xlabel, ylabel, filename, xticks=None, xlim=None):
     # 轴标签、图例、网格、去除多余边框
     plt.xlabel(xlabel, fontsize=16)
     plt.ylabel(ylabel, fontsize=16)
-    #plt.legend(frameon=False, fontsize=16, loc='upper left', bbox_to_anchor=(0,1.1))
+    plt.legend(frameon=False, fontsize=16, loc='upper left', bbox_to_anchor=(0,1.1))
     plt.grid(axis='y', alpha=0.3)
     ax = plt.gca()
     ax.spines['top'].set_visible(False)
     ax.spines['right'].set_visible(False)
 
     # 设置范围
-    plt.ylim(0.8, all_ticks[-1])
+    plt.ylim(0, all_ticks[-1])
     if xlim:
         plt.xlim(*xlim)
 
@@ -96,32 +117,27 @@ def plot_auto_lines(data, xlabel, ylabel, filename, xticks=None, xlim=None):
     plt.close()
     print(f"Saved figure to {filepath}")
 
-
-
 def main():
     # 负责绘制
     parser = argparse.ArgumentParser()
     parser.add_argument('-e', '--expr', type=str)
     parser.add_argument('-f', '--flow_type', type=str, default='s')
 
-
     args = parser.parse_args()
     flow_type = args.flow_type
     expr = args.expr
+    figure = 4
 
-    dcqcn_inter = [[] for _ in range(0,4)]
-    dcqcn_intra = [[] for _ in range(0,4)]
-    dcqcn_ecn_inter = [[] for _ in range(0,4)]
-    dcqcn_ecn_intra = [[] for _ in range(0,4)]
-    gscc_intra = [[] for _ in range(0,4)]
-    gscc_inter = [[] for _ in range(0,4)]
-
+    dcqcn_inter = [[] for _ in range(0, figure)]
+    dcqcn_intra = [[] for _ in range(0, figure)]
+    dcqcn_ecn_inter = [[] for _ in range(0, figure)]
+    dcqcn_ecn_intra = [[] for _ in range(0, figure)]
+    gscc_intra = [[] for _ in range(0, figure)]
+    gscc_inter = [[] for _ in range(0, figure)]
 
     wan_cc_mode = 0
     for ana in analyser_iter(expr):
         try:
-            #print(ana.id)
-            
             avg_vals, avg_intra, avg_inter = ana.get_avg_fct()
             p99_vals, p99_intra, p99_inter = ana.get_p99_fct()
 
@@ -154,7 +170,6 @@ def main():
                 gscc_inter[2].append(s_inter_avg)
                 gscc_inter[3].append(l_inter_avg)
 
-
         except Exception as e:
             print(f'Error processing {ana.id}: {e}')
             if wan_cc_mode == 0:
@@ -185,7 +200,7 @@ def main():
         
         wan_cc_mode = (wan_cc_mode + 1) % 3
 
-    static_flow = [30,40,50,60, 70]
+    static_flow = [30, 40, 50, 60, 70]
     dynamic_flow = [0, 50, 100, 150, 200]
 
     if flow_type == 'd':
@@ -196,12 +211,12 @@ def main():
     plot_cnt = 0
     # 绘制Average normalized FCT
     data_to_plot = {
-    'DCQCN_inter':    (x_data, dcqcn_inter[plot_cnt]),
-    'DCQCN_intra':    (x_data, dcqcn_intra[plot_cnt]),
-    'DCQCN_inter with wide-area ECN': (x_data, dcqcn_ecn_inter[plot_cnt]),
-    'DCQCN_intra with wide-area ECN': (x_data, dcqcn_ecn_intra[plot_cnt]),
-    'GSCC_inter': (x_data, gscc_inter[plot_cnt]),
-    'GSCC_intra': (x_data, gscc_intra[plot_cnt])
+        'DCQCN_inter': (x_data, process_y_data(dcqcn_inter[plot_cnt])),
+        'DCQCN_intra': (x_data, process_y_data(dcqcn_intra[plot_cnt])),
+        'DCQCN_inter with wide-area ECN': (x_data, process_y_data(dcqcn_ecn_inter[plot_cnt])),
+        'DCQCN_intra with wide-area ECN': (x_data, process_y_data(dcqcn_ecn_intra[plot_cnt])),
+        'GSCC_inter': (x_data, process_y_data(gscc_inter[plot_cnt])),
+        'GSCC_intra': (x_data, process_y_data(gscc_intra[plot_cnt]))
     }
 
     plot_auto_lines(
@@ -210,18 +225,18 @@ def main():
         ylabel="Average normalized FCT",
         filename="Average-normalized-FCT.pdf",
         xticks=x_data,
-        xlim=(x_data[0],x_data[-1])
+        xlim=(x_data[0], x_data[-1])
     )
 
     # 绘制 P99 normalized FCT
     plot_cnt += 1
     data_to_plot = {
-    'DCQCN_inter':    (x_data, dcqcn_inter[plot_cnt]),
-    'DCQCN_intra':    (x_data, dcqcn_intra[plot_cnt]),
-    'DCQCN_inter with wide-area ECN': (x_data, dcqcn_ecn_inter[plot_cnt]),
-    'DCQCN_intra with wide-area ECN': (x_data, dcqcn_ecn_intra[plot_cnt]),
-    'GSCC_inter': (x_data, gscc_inter[plot_cnt]),
-    'GSCC_intra': (x_data, gscc_intra[plot_cnt])
+        'DCQCN_inter': (x_data, process_y_data(dcqcn_inter[plot_cnt])),
+        'DCQCN_intra': (x_data, process_y_data(dcqcn_intra[plot_cnt])),
+        'DCQCN_inter with wide-area ECN': (x_data, process_y_data(dcqcn_ecn_inter[plot_cnt])),
+        'DCQCN_intra with wide-area ECN': (x_data, process_y_data(dcqcn_ecn_intra[plot_cnt])),
+        'GSCC_inter': (x_data, process_y_data(gscc_inter[plot_cnt])),
+        'GSCC_intra': (x_data, process_y_data(gscc_intra[plot_cnt]))
     }
 
     plot_auto_lines(
@@ -230,42 +245,49 @@ def main():
         ylabel="P99 normalized FCT",
         filename="P99-normalized-FCT.pdf",
         xticks=x_data,
-        xlim=(x_data[0],x_data[-1])
+        xlim=(x_data[0], x_data[-1])
     )
 
     # 绘制Small flows' normalized FCT
     plot_cnt += 1
     data_to_plot = {
-    'DCQCN_inter':    (x_data, dcqcn_inter[plot_cnt]),
-    'DCQCN_inter with wide-area ECN': (x_data, dcqcn_ecn_inter[plot_cnt]),
-    'GSCC_inter': (x_data, gscc_inter[plot_cnt])
+        'DCQCN_inter': (x_data, process_y_data(dcqcn_inter[plot_cnt])),
+        'DCQCN_intra': (x_data, process_y_data(dcqcn_intra[plot_cnt])),
+        'DCQCN_inter with wide-area ECN': (x_data, process_y_data(dcqcn_ecn_inter[plot_cnt])),
+        'DCQCN_intra with wide-area ECN': (x_data, process_y_data(dcqcn_ecn_intra[plot_cnt])),
+        'GSCC_inter': (x_data, process_y_data(gscc_inter[plot_cnt])),
+        'GSCC_intra': (x_data, process_y_data(gscc_intra[plot_cnt]))
     }
 
     plot_auto_lines(
         data_to_plot,
         xlabel="Average inter-DC Throughput (Gbps)",
         ylabel="Small flows' normalized FCT",
-        filename="Small-flows'-normalized-FCT.pdf",
+        filename="Small-flows-normalized-FCT.pdf",
         xticks=x_data,
-        xlim=(x_data[0],x_data[-1])
+        xlim=(x_data[0], x_data[-1])
     )
 
     # 绘制Large flows' normalized FCT
     plot_cnt += 1
     data_to_plot = {
-    'DCQCN_inter':    (x_data, dcqcn_inter[plot_cnt]),
-    'DCQCN_inter with wide-area ECN': (x_data, dcqcn_ecn_inter[plot_cnt]),
-    'GSCC_inter': (x_data, gscc_inter[plot_cnt])
+        'DCQCN_inter': (x_data, process_y_data(dcqcn_inter[plot_cnt])),
+        'DCQCN_intra': (x_data, process_y_data(dcqcn_intra[plot_cnt])),
+        'DCQCN_inter with wide-area ECN': (x_data, process_y_data(dcqcn_ecn_inter[plot_cnt])),
+        'DCQCN_intra with wide-area ECN': (x_data, process_y_data(dcqcn_ecn_intra[plot_cnt])),
+        'GSCC_inter': (x_data, process_y_data(gscc_inter[plot_cnt])),
+        'GSCC_intra': (x_data, process_y_data(gscc_intra[plot_cnt]))
     }
 
     plot_auto_lines(
         data_to_plot,
         xlabel="Average inter-DC Throughput (Gbps)",
         ylabel="Large flows' normalized FCT",
-        filename="Large-flows'-normalized-FCT.pdf",
+        filename="Large-flows-normalized-FCT.pdf",
         xticks=x_data,
-        xlim=(x_data[0],x_data[-1])
+        xlim=(x_data[0], x_data[-1])
     )
+
     quit()
 
 if __name__ == "__main__":

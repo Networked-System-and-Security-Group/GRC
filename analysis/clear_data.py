@@ -1,2 +1,2 @@
 from deep_analyse import *
-clear_data("1-199")
+clear_data("201-236")

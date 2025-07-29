@@ -271,6 +271,10 @@ class Analyser:
         for (switch_id, src_as, dst_as), count in grouped.items():
             print(f'Switch ID: {switch_id}, Src AS: {src_as}, Dst AS: {dst_as}, Drop Count: {count}')
 
+    def get_drop_number(self):
+        self.__read_drop_info()
+        return len(self.drop_info)
+
     @auto_save_plot
     def plot_link_utilization(self, src_id, dst_id, monitor_interval=500e-6, smooth_window=1):
         self.__read_link_info()
