@@ -142,6 +142,9 @@ def main():
     no_rtt_diff_expr = '396,399,402,405,411'
     new_result = get_avg_inter(no_rtt_diff_expr)
 
+    diff_norm = (np.array(new_result).mean() - np.array(result).mean()) / np.array(new_result).mean()
+    print(diff_norm)
+
     period_expr = '481-485'
     period_result = get_avg_inter(period_expr)
 

@@ -4,6 +4,7 @@ import os.path as op
 import numpy as np
 import matplotlib.pyplot as plt
 from itertools import cycle
+import numpy as np
 
 from matplotlib import cm
 from mpl_toolkits.mplot3d import Axes3D
@@ -101,9 +102,9 @@ def plot_3d_surface(data, xlabel, ylabel, zlabel, filename,
         ax.set_yticks(yticks)
 
     # 关键修改2：增加Z轴标签的距离（labelpad）
-    ax.set_xlabel(xlabel, fontsize=13, labelpad=2)  # X轴标签距离
-    ax.set_ylabel(ylabel, fontsize=13, labelpad=2)  # Y轴标签距离
-    ax.set_zlabel(zlabel, fontsize=13, labelpad=2)   # Z轴标签距离增大（重点）
+    ax.set_xlabel(xlabel, fontsize=15, labelpad=2)  # X轴标签距离
+    ax.set_ylabel(ylabel, fontsize=15, labelpad=2)  # Y轴标签距离
+    ax.set_zlabel(zlabel, fontsize=15, labelpad=2)   # Z轴标签距离增大（重点）
     ax.xaxis._axinfo["tick"]["pad"] = 1  # X轴刻度距离
     ax.yaxis._axinfo["tick"]["pad"] = 1  # Y轴刻度距离
     ax.zaxis._axinfo["tick"]["pad"] = 1  # Z轴刻度距离（3D图需单独设置Z轴）
@@ -144,6 +145,12 @@ def get_avg_inter(expr):
         result.append(avg_inter)
     return result
 
+def calculate_variation(data):
+    data_np = np.array(data)
+    avg = np.mean(data_np)
+    range_val = np.ptp(data_np)
+    cv = (range_val / avg) * 100
+    print(cv)
 
 # 使用示例
 if __name__ == "__main__":
@@ -151,6 +158,9 @@ if __name__ == "__main__":
     beta_vals = [0.5, 0.6, 0.7]
     result_150_100 = get_avg_inter('503-514')
     result_150_200 = get_avg_inter('515-526')
+    calculate_variation(result_150_100)
+    calculate_variation(result_150_200)
+
 
     # 生成数据列表
     x_list = []

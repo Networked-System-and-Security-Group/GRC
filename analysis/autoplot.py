@@ -220,6 +220,8 @@ def main():
         'GSCC_inter': (x_data, process_y_data(gscc_inter[plot_cnt])),
         'GSCC_intra': (x_data, process_y_data(gscc_intra[plot_cnt]))
     }
+    print((dcqcn_inter[plot_cnt][2] - gscc_inter[plot_cnt][2]) / dcqcn_inter[plot_cnt][2])
+    print((dcqcn_intra[plot_cnt][2] - gscc_intra[plot_cnt][2]) / dcqcn_intra[plot_cnt][2])
 
     plot_auto_lines(
         data_to_plot,
