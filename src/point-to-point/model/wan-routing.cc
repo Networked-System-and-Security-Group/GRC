@@ -89,6 +89,7 @@ void WanRouting::HandleUdpReceived(Ptr<Packet> p, CustomHeader& ch) {
     if (ack_req) {
         uint32_t hashed_seq = Hash5tupleSeq(ch.sip, ch.dip, ch.udp.sport, ch.udp.dport, ch.udp.pg, ch.udp.seq + p->GetSize() - ch.GetSerializedSize());
         uint32_t index = (flow_hash_value ^ (hashed_seq % 16)) % rtt_table_size;
+        //uint32_t index = hashed_seq % rtt_table_size;
         //printf("[%ld]Udp passed, %u->%u, index:%u, hashed_seq:%u\n", 
         //    Simulator::Now().GetNanoSeconds(), cur_as, dst_as, index, hashed_seq);
         if (rtt_table[index].hashed_seq == hashed_seq) {
@@ -143,6 +144,7 @@ void WanRouting::HandleAckReceived(Ptr<Packet> p, CustomHeader& ch) {
     auto& dcHandler = m_dcHandler.at(src_as).at(out_port);
     uint32_t hashed_seq = Hash5tupleSeq(ch.dip, ch.sip, ch.ack.dport, ch.ack.sport, ch.ack.pg, ch.ack.seq);
     uint32_t index = (flow_hash_value ^ (hashed_seq % 16)) % rtt_table_size;
+    //uint32_t index = hashed_seq % rtt_table_size;
     //printf("[%ld]Ack Passed! %u->%u, index:%u, hashed_seq:%u\n", 
     //    Simulator::Now().GetNanoSeconds(), cur_as, src_as, index, hashed_seq);
     if (rtt_table[index].hashed_seq == hashed_seq) {

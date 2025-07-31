@@ -100,7 +100,7 @@ def plot_auto_lines(data, xlabel, ylabel, filename, xticks=None, xlim=None, logt
     # 轴标签、图例、网格、去除多余边框
     plt.xlabel(xlabel, fontsize=16)
     plt.ylabel(ylabel, fontsize=16)
-    plt.legend(frameon=False, fontsize=16, loc='upper left', bbox_to_anchor=(0,1.1))
+    #plt.legend(frameon=False, fontsize=16, loc='upper left', bbox_to_anchor=(0,1.1))
     plt.grid(axis='y', alpha=0.3)
     ax = plt.gca()
     ax.spines['top'].set_visible(False)
@@ -205,8 +205,10 @@ def main():
 
     if flow_type == 'd':
         x_data = dynamic_flow
+        x_label = 'Dynamic traffic throughput (Gbps)'
     else:
         x_data = static_flow
+        x_label = 'Average inter-DC Throughput (Gbps)'
 
     plot_cnt = 0
     # 绘制Average normalized FCT
@@ -221,7 +223,7 @@ def main():
 
     plot_auto_lines(
         data_to_plot,
-        xlabel="Average inter-DC Throughput (Gbps)",
+        xlabel=x_label,
         ylabel="Average normalized FCT",
         filename="Average-normalized-FCT.pdf",
         xticks=x_data,
@@ -241,7 +243,7 @@ def main():
 
     plot_auto_lines(
         data_to_plot,
-        xlabel="Average inter-DC Throughput (Gbps)",
+        xlabel=x_label,
         ylabel="P99 normalized FCT",
         filename="P99-normalized-FCT.pdf",
         xticks=x_data,
@@ -261,7 +263,7 @@ def main():
 
     plot_auto_lines(
         data_to_plot,
-        xlabel="Average inter-DC Throughput (Gbps)",
+        xlabel=x_label,
         ylabel="Small flows' normalized FCT",
         filename="Small-flows-normalized-FCT.pdf",
         xticks=x_data,
@@ -281,7 +283,7 @@ def main():
 
     plot_auto_lines(
         data_to_plot,
-        xlabel="Average inter-DC Throughput (Gbps)",
+        xlabel=x_label,
         ylabel="Large flows' normalized FCT",
         filename="Large-flows-normalized-FCT.pdf",
         xticks=x_data,
