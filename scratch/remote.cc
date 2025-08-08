@@ -1284,6 +1284,7 @@ int main(int argc, char *argv[]) {
             }
             sw->m_mmu->ConfigNPort(sw->GetNDevices() - 1);
             sw->m_mmu->ConfigBufferSize(160 * 1024 * 1024);  // Magic Number
+            //sw->m_mmu->ConfigBufferSize(4U * 1000 * 1000 * 1000); // 改为4GB
             sw->m_mmu->node_id = sw->GetId();
             sw->m_mmu->InitSwitch();
 
@@ -1308,6 +1309,7 @@ int main(int argc, char *argv[]) {
             }
             sw->m_mmu->ConfigNPort(sw->GetNDevices() - 1);
             sw->m_mmu->ConfigBufferSize(320 * 1024 * 1024);  // Magic Number
+            //sw->m_mmu->ConfigBufferSize(4U * 1000 * 1000 * 1000); // 改为4GB
             sw->m_mmu->node_id = sw->GetId();
             sw->m_mmu->InitSwitch();
 

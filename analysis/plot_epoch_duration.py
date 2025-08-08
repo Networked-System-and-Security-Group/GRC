@@ -7,11 +7,8 @@ from itertools import cycle
 
 gscc_c = (130/255, 0, 180/255)
 _style_list = [
-    ('--', 'r', 'o'),
-    ('--', 'g', 'o'),
-    ('--', 'b', 'o'),
-    ('--', 'c', 'o'),
-    ('--', 'm', 'o'),
+    ('-.', gscc_c, 'd'),
+    (':', gscc_c, '^')
 ]
 
 def plot_auto_lines(data, xlabel, ylabel, filename, xticks=None, xlim=None, logtag=0):
@@ -54,8 +51,10 @@ def plot_auto_lines(data, xlabel, ylabel, filename, xticks=None, xlim=None, logt
 
     # 计算y轴范围：ymin向下取整，ymax向上取整
     if y_values:  # 确保有有效数据
-        y_min = np.floor(min(y_values))  # 向下取整
-        y_max = np.ceil(max(y_values))   # 向上取整
+        # y_min = np.floor(min(y_values))  # 向下取整
+        # y_max = np.ceil(max(y_values))   # 向上取整
+        y_min = 0
+        y_max = 8
     else:  # 没有有效数据时使用默认范围
         y_min, y_max = 0, 1
 
@@ -100,42 +99,42 @@ def plot_auto_lines(data, xlabel, ylabel, filename, xticks=None, xlim=None, logt
     plt.close()
     print(f"Saved figure to {filepath}")
 
-def get_avg_inter(expr):
-    result = []
+def get_avg_fct(expr):
+    res = []
+    resn = []
     for ana in analyser_iter(expr):
         try:
-            avg, avg_intra, avg_inter = ana.get_avg_fct()
-            result.append(avg_inter)
+            avg,avg_intra,avg_inter = ana.get_avg_fct()
+            res.append(avg_inter)
+            resn.append(avg_intra)
         except:
-            result.append(None)
-    return result
+            res.append(None)
+            resn.append(None)
+    return res,resn
 
 def main():
-    T1ms = get_avg_inter('449,452,455,458,461')
-    T15ms = get_avg_inter('607-611')
-    T2ms = get_avg_inter('612-616')
-    T25ms = get_avg_inter('617-621')
-    T3ms = get_avg_inter('622-626')
+    expr = '461,642-645'
+    x_data = [1,1.5,2,2.5,3]
 
+    inter_res, intra_res = get_avg_fct(expr)
+    x_label = 'Epoch duration (ms)'
 
-    x_data = [0,50,100,150,200]
+    # 绘制Average normalized FCT
     data_to_plot = {
-        'T=1ms': (x_data, T1ms),
-        'T=1.5ms': (x_data, T15ms),
-        'T=2ms': (x_data, T2ms),
-        'T=2.5ms': (x_data, T25ms),
-        'T=3ms': (x_data, T3ms)
+        "Inter": (x_data, inter_res),
+        "Intra": (x_data, intra_res)
     }
-    
+
     plot_auto_lines(
         data_to_plot,
-        xlabel="Dynamic traffic throughput (Gbps)",
-        ylabel="Average-normalized-FCT",
-        filename="gscc_parameter.pdf",
+        xlabel=x_label,
+        ylabel="Average normalized FCT",
+        filename=f"epoch_duration.pdf",
         xticks=x_data,
         xlim=(x_data[0], x_data[-1])
     )
-    return
 
-if __name__ == "__main__":
+
+
+if __name__ == '__main__':
     main()

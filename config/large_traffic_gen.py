@@ -135,6 +135,7 @@ def generate_dynamic_flows(as_list, cdf_file, total_rate, duration,
             flows += generate_flows(src_as, dst_as, cdf_file, f'{slice_rate_f/len(src_as)/1e9}G', slice_duration , cur_time, restrict=False)
             cur_time += poisson(avg_interval * 1e9) / 1e9
 
+
     return flows
 
 

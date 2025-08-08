@@ -10,14 +10,13 @@ gscc_c = (130/255,0,180/255)
 
 # 关键：为每个算法绑定固定样式（而非按顺序循环）
 ALGO_STYLES = {
-    "DCQCN-inter": (':', "orange", 'o'),
-    "DCQCN-intra": ('--', "orange", 's'),
-    "DCQCN-ECN-inter": (':', "c", 'o'),
-    "DCQCN-ECN-intra": ('--', "c", 's'),
-    "GSCC-inter": (':', gscc_c, '^'),
-    "GSCC-intra": ('--', gscc_c, 'd'),
+    "w/o-GSCC-inter": ('-.', "orange", 'd'),
+    "w/o-GSCC-intra": (':', "orange", '^'),
+    "inf-w/o-GSCC-inter": ('-.', "c", 'd'),
+    "inf-w/o-GSCC-intra": (':', "c", '^'),
+    "GSCC-inter": ('-.', gscc_c, 'd'),
+    "GSCC-intra": (':', gscc_c, '^')
 }
-
 
 def plot_auto_lines(data, ylabel, filename,  
                     xticks=None, xlim=None, 
@@ -134,6 +133,32 @@ def plot_auto_lines(data, ylabel, filename,
     plt.close()
     print(f"Saved figure to {filename} (图例显示: {show_legend})")
 
+def get_avg_fct(expr):
+    inter = []
+    intra = []
+    for ana in analyser_iter(expr):
+        try:
+            _,avg_inter,avg_intra = ana.get_avg_fct()
+            inter.append(avg_inter)
+            intra.append(avg_intra)
+        except:
+            inter.append(None)
+            intra.append(None)
+    return inter,intra
+
+def get_p99_fct(expr):
+    inter = []
+    intra = []
+    for ana in analyser_iter(expr):
+        try:
+            _,avg_inter,avg_intra = ana.get_p99_fct()
+            inter.append(avg_inter)
+            intra.append(avg_intra)
+        except:
+            inter.append(None)
+            intra.append(None)
+    return inter,intra
+
 def main():
     # 负责绘制
     parser = argparse.ArgumentParser()
@@ -146,122 +171,53 @@ def main():
     flow_type = args.flow_type
     expr = args.expr
     show_legend = args.legend
-    figure = 4
+    figure = 2
 
-    dcqcn_inter = [[] for _ in range(0,figure)]
-    dcqcn_intra = [[] for _ in range(0,figure)]
-    dcqcn_ecn_inter = [[] for _ in range(0,figure)]
-    dcqcn_ecn_intra = [[] for _ in range(0,figure)]
-    gscc_intra = [[] for _ in range(0,figure)]
-    gscc_inter = [[] for _ in range(0,figure)]
+    dcqcn_expr = '448,451,454,457,460'
+    gscc_expr = '449,452,455,458,461'
+    dcqcn_inf_expr = '562-566'
 
+    dcqcn_inter, dcqcn_intra = get_avg_fct(dcqcn_expr)
+    gscc_inter, gscc_intra = get_avg_fct(gscc_expr)
+    get_avg_fct(dcqcn_inf_expr)
 
-    wan_cc_mode = 0
-    for ana in analyser_iter(expr):
-        try:
-            #print(ana.id)
-            drop_cnt = ana.get_drop_number()
-            
-            avg_vals, avg_intra, avg_inter = ana.get_avg_fct()
-            p99_vals, p99_intra, p99_inter = ana.get_p99_fct()
-
-            lavg, l_inter_avg, l_inter_p99, l_intra_avg = ana.get_large_flow_fct()
-            savg, s_inter_avg, s_inter_p99, s_intra_avg = ana.get_small_flow_fct()
-
-            if wan_cc_mode == 0:
-                dcqcn_inter[0].append(avg_inter)
-                dcqcn_inter[1].append(p99_inter)
-                dcqcn_inter[2].append(s_inter_avg)
-                dcqcn_inter[3].append(l_inter_avg)
-
-                dcqcn_intra[0].append(avg_intra)
-                dcqcn_intra[1].append(p99_intra)
-
-            elif wan_cc_mode == 2:
-                dcqcn_ecn_inter[0].append(avg_inter)
-                dcqcn_ecn_inter[1].append(p99_inter)
-                dcqcn_ecn_inter[2].append(s_inter_avg)
-                dcqcn_ecn_inter[3].append(l_inter_avg)
-
-                dcqcn_ecn_intra[0].append(avg_intra)
-                dcqcn_ecn_intra[1].append(p99_intra)
-
-            else:
-                gscc_intra[0].append(avg_intra)
-                gscc_intra[1].append(p99_intra)
-
-                gscc_inter[0].append(avg_inter)
-                gscc_inter[1].append(p99_inter)
-                gscc_inter[2].append(s_inter_avg)
-                gscc_inter[3].append(l_inter_avg)
-
-
-        except Exception as e:
-            print(f'Error processing {ana.id}: {e}')
-            if wan_cc_mode == 0:
-                dcqcn_inter[0].append(None)
-                dcqcn_inter[1].append(None)
-                dcqcn_inter[2].append(None)
-                dcqcn_inter[3].append(None)
-
-                dcqcn_intra[0].append(None)
-                dcqcn_intra[1].append(None)
-
-            elif wan_cc_mode == 2:
-                dcqcn_ecn_inter[0].append(None)
-                dcqcn_ecn_inter[1].append(None)
-                dcqcn_ecn_inter[2].append(None)
-                dcqcn_ecn_inter[3].append(None)
-
-                dcqcn_ecn_intra[0].append(None)
-                dcqcn_ecn_intra[1].append(None)
-            else:
-                gscc_intra[0].append(None)
-                gscc_intra[1].append(None)
-
-                gscc_inter[0].append(None)
-                gscc_inter[1].append(None)
-                gscc_inter[2].append(None)
-                gscc_inter[3].append(None)
-        
-        wan_cc_mode = (wan_cc_mode + 1) % 3
-
-    static_flow = [30,40,50,60, 70]
-    dynamic_flow = [0, 50, 100, 150, 200]
-
-    if flow_type == 'd':
-        x_data = dynamic_flow
-    else:
-        x_data = static_flow
+    x_data= [0, 50, 100, 150, 200]
 
 
     data = {
         'f1':{
-            'DCQCN-inter': (x_data, dcqcn_inter[0]),
-            'DCQCN-intra': (x_data, dcqcn_intra[0]),
-            'DCQCN-ECN-inter': (x_data, dcqcn_ecn_inter[0]),
-            'DCQCN-ECN-intra': (x_data, dcqcn_ecn_intra[0]),
-            'GSCC-inter': (x_data, gscc_inter[0]),
-            'GSCC-intra': (x_data, gscc_intra[0])
+            "w/o-GSCC-inter": (x_data, []),
+            "w/o-GSCC-intra": (x_data, []),
+            "inf-w/o-GSCC-inter": (x_data, []),
+            "inf-w/o-GSCC-intra": (x_data, []),
+            "GSCC-inter": (x_data, []),
+            "GSCC-intra": (x_data, [])
         },
         'f2':{
-            'DCQCN-inter': (x_data, dcqcn_inter[1]),
-            'DCQCN-intra': (x_data, dcqcn_intra[1]),
-            'DCQCN-ECN-inter': (x_data, dcqcn_ecn_inter[1]),
-            'DCQCN-ECN-intra': (x_data, dcqcn_ecn_intra[1]),
-            'GSCC-inter': (x_data, gscc_inter[1]),
-            'GSCC-intra': (x_data, gscc_intra[1])
+            "w/o-GSCC-inter": (x_data, []),
+            "w/o-GSCC-intra": (x_data, []),
+            "inf-w/o-GSCC-inter": (x_data, []),
+            "inf-w/o-GSCC-intra": (x_data, []),
+            "GSCC-inter": (x_data, []),
+            "GSCC-intra": (x_data, [])
         },
         'f3':{
-            'DCQCN-inter': (x_data, dcqcn_inter[2]),
-            'DCQCN-ECN-inter': (x_data, dcqcn_ecn_inter[2]),
-            'GSCC-inter': (x_data, gscc_inter[2]),
+            "w/o-GSCC-inter": (x_data, []),
+            "w/o-GSCC-intra": (x_data, []),
+            "inf-w/o-GSCC-inter": (x_data, []),
+            "inf-w/o-GSCC-intra": (x_data, []),
+            "GSCC-inter": (x_data, []),
+            "GSCC-intra": (x_data, [])
         },
         'f4':{
-            'DCQCN-inter': (x_data, dcqcn_inter[3]),
-            'DCQCN-ECN-inter': (x_data, dcqcn_ecn_inter[3]),
-            'GSCC-inter': (x_data, gscc_inter[3]),
-        }
+            "w/o-GSCC-inter": (x_data, []),
+            "w/o-GSCC-intra": (x_data, []),
+            "inf-w/o-GSCC-inter": (x_data, []),
+            "inf-w/o-GSCC-intra": (x_data, []),
+            "GSCC-inter": (x_data, []),
+            "GSCC-intra": (x_data, [])
+        },
+
     }
 
     flow_cats = [

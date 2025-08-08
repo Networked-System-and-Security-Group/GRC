@@ -7,11 +7,12 @@ from itertools import cycle
 
 gscc_c = (130/255, 0, 180/255)
 _style_list = [
-    ('--', 'r', 'o'),
-    ('--', 'g', 'o'),
-    ('--', 'b', 'o'),
-    ('--', 'c', 'o'),
-    ('--', 'm', 'o'),
+    ('-.', "orange", 'd'),
+    (':', "orange", '^'),
+    ('-.', "c", 'd'),
+    (':', "c", '^'),
+    ('-.', gscc_c, 'd'),
+    (':', gscc_c, '^')
 ]
 
 def plot_auto_lines(data, xlabel, ylabel, filename, xticks=None, xlim=None, logtag=0):
@@ -83,7 +84,7 @@ def plot_auto_lines(data, xlabel, ylabel, filename, xticks=None, xlim=None, logt
     # 轴标签、图例、网格、去除多余边框
     plt.xlabel(xlabel, fontsize=16)
     plt.ylabel(ylabel, fontsize=16)
-    plt.legend(frameon=False, fontsize=16, loc='upper left', bbox_to_anchor=(0,1.1))
+    #plt.legend(frameon=False, fontsize=16, loc='upper left', bbox_to_anchor=(0,1.1))
     plt.grid(axis='y', alpha=0.3)
     ax = plt.gca()
     ax.spines['top'].set_visible(False)
@@ -100,42 +101,112 @@ def plot_auto_lines(data, xlabel, ylabel, filename, xticks=None, xlim=None, logt
     plt.close()
     print(f"Saved figure to {filepath}")
 
-def get_avg_inter(expr):
-    result = []
+def get_avg_fct(expr):
+    inter = []
+    intra = []
+    all = []
     for ana in analyser_iter(expr):
         try:
-            avg, avg_intra, avg_inter = ana.get_avg_fct()
-            result.append(avg_inter)
+            avg,avg_intra,avg_inter = ana.get_avg_fct()
+            inter.append(avg_inter)
+            intra.append(avg_intra)
+            all.append(avg)
         except:
-            result.append(None)
-    return result
+            inter.append(None)
+            intra.append(None)
+            all.append(None)
+    return inter,intra,all
+
+def get_p99_fct(expr):
+    inter = []
+    intra = []
+    for ana in analyser_iter(expr):
+        try:
+            _,avg_intra,avg_inter = ana.get_p99_fct()
+            inter.append(avg_inter)
+            intra.append(avg_intra)
+        except:
+            inter.append(None)
+            intra.append(None)
+    return inter,intra
 
 def main():
-    T1ms = get_avg_inter('449,452,455,458,461')
-    T15ms = get_avg_inter('607-611')
-    T2ms = get_avg_inter('612-616')
-    T25ms = get_avg_inter('617-621')
-    T3ms = get_avg_inter('622-626')
+    parser = argparse.ArgumentParser()
+    parser.add_argument('-f', '--flow_set', default='w')
+    args = parser.parse_args()
+    flow_set = args.flow_set
+    if flow_set == 'a':
+        file_name = 'alistorage'
+    else:
+        file_name = 'websearch'
+        
+    # websearch
+    # dcqcn_expr = '448,451,454,457,460'
+    # gscc_expr = '449,452,455,458,461'
+    # dcqcn_inf_expr = '562-566'
+
+    # dcqcn_expr = '350,353,356,359,362'
+    # gscc_expr = '351,354,357,360,363'
+    # dcqcn_inf_expr = '562-566'
+
+    # alistorage
+    dcqcn_expr = '380,383,386,389,392'
+    gscc_expr = '381,384,387,390,393'
+    dcqcn_inf_expr = '567-569,605,606'
+
+    dcqcn_inter, dcqcn_intra, dcqcn_all = get_avg_fct(dcqcn_expr)
+    gscc_inter, gscc_intra, gscc_all = get_avg_fct(gscc_expr)
+    dcqcn_inf_inter, dcqcn_inf_intra, dcqcn_inf_all = get_avg_fct(dcqcn_inf_expr)
+
+    print((dcqcn_inf_all[4] - gscc_all[4])/ dcqcn_inf_all[4])
 
 
-    x_data = [0,50,100,150,200]
+    x_data = [0, 50, 100, 150, 200]
+    x_label = 'Dynamic traffic throughput (Gbps)'
+
+    # 绘制Average normalized FCT
     data_to_plot = {
-        'T=1ms': (x_data, T1ms),
-        'T=1.5ms': (x_data, T15ms),
-        'T=2ms': (x_data, T2ms),
-        'T=2.5ms': (x_data, T25ms),
-        'T=3ms': (x_data, T3ms)
+        "w/o-GSCC-inter": (x_data, dcqcn_inter),
+        "w/o-GSCC-intra": (x_data, dcqcn_intra),
+        "inf-w/o-GSCC-inter": (x_data, dcqcn_inf_inter),
+        "inf-w/o-GSCC-intra": (x_data, dcqcn_inf_intra),
+        "GSCC-inter": (x_data, gscc_inter),
+        "GSCC-intra": (x_data, gscc_intra)
     }
-    
+
     plot_auto_lines(
         data_to_plot,
-        xlabel="Dynamic traffic throughput (Gbps)",
-        ylabel="Average-normalized-FCT",
-        filename="gscc_parameter.pdf",
+        xlabel=x_label,
+        ylabel="Average normalized FCT",
+        filename=f"{file_name}-Average-normalized-FCT.pdf",
         xticks=x_data,
         xlim=(x_data[0], x_data[-1])
     )
-    return
+
+    dcqcn_inter, dcqcn_intra = get_p99_fct(dcqcn_expr)
+    gscc_inter, gscc_intra = get_p99_fct(gscc_expr)
+    dcqcn_inf_inter, dcqcn_inf_intra = get_p99_fct(dcqcn_inf_expr)
+
+    # 绘制 P99 normalized FCT
+    data_to_plot = {
+        "w/o-GSCC-inter": (x_data, dcqcn_inter),
+        "w/o-GSCC-intra": (x_data, dcqcn_intra),
+        "inf-w/o-GSCC-inter": (x_data, dcqcn_inf_inter),
+        "inf-w/o-GSCC-intra": (x_data, dcqcn_inf_intra),
+        "GSCC-inter": (x_data, gscc_inter),
+        "GSCC-intra": (x_data, gscc_intra)
+    }
+
+    plot_auto_lines(
+        data_to_plot,
+        xlabel=x_label,
+        ylabel="P99 normalized FCT",
+        filename=f"{file_name}-P99-normalized-FCT.pdf",
+        xticks=x_data,
+        xlim=(x_data[0], x_data[-1])
+    )
+
+    quit()
 
 if __name__ == "__main__":
     main()

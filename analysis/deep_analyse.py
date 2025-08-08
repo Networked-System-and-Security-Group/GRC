@@ -274,6 +274,13 @@ class Analyser:
     def get_drop_number(self):
         self.__read_drop_info()
         return len(self.drop_info)
+    
+    def get_drop_rate(self):
+        drop_cnt = self.get_drop_number()
+        self.__read_flow_info()
+
+        total_cnt = np.ceil(self.flow_df['fsize'] / 1000).sum()
+        return drop_cnt/total_cnt
 
     @auto_save_plot
     def plot_link_utilization(self, src_id, dst_id, monitor_interval=500e-6, smooth_window=1):
@@ -372,6 +379,13 @@ class Analyser:
                 df[ df['src_as'] != df['dst_as'] ]['fct_slowdown'].quantile(.99), 
                 df[ df['src_as'] == df['dst_as'] ]['fct_slowdown'].mean())
     
+    def get_buffer_information(self):
+        self.__read_buffer_info()
+        df = self.buffer_info[
+            (self.buffer_info['timestamp_ns'] >= 2010000000) & (self.buffer_info['timestamp_ns'] <= 2100000000)
+        ].groupby(['timestamp_ns', 'switch_id'])['egress_bytes'].sum().reset_index()
+        return df['egress_bytes'].mean()
+
     def get_fct(self):
         return (self.get_avg_fct(), self.get_p99_fct())
     

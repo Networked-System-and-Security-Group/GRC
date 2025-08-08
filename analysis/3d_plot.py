@@ -97,21 +97,21 @@ def plot_3d_surface(data, xlabel, ylabel, zlabel, filename,
     if xticks is not None:
         ax.set_xticks(xticks)
         if xlabel == 'H':
-            ax.set_xticklabels([f'1/{int(1 / h)}' for h in xticks])
+            ax.set_xticklabels([f'$\\frac{{1}}{{{int(1 / h)}}}$' for h in xticks])
     if yticks is not None:
         ax.set_yticks(yticks)
 
     # 关键修改2：增加Z轴标签的距离（labelpad）
-    ax.set_xlabel(xlabel, fontsize=15, labelpad=2)  # X轴标签距离
-    ax.set_ylabel(ylabel, fontsize=15, labelpad=2)  # Y轴标签距离
-    ax.set_zlabel(zlabel, fontsize=15, labelpad=2)   # Z轴标签距离增大（重点）
-    ax.xaxis._axinfo["tick"]["pad"] = 1  # X轴刻度距离
-    ax.yaxis._axinfo["tick"]["pad"] = 1  # Y轴刻度距离
-    ax.zaxis._axinfo["tick"]["pad"] = 1  # Z轴刻度距离（3D图需单独设置Z轴）
+    #ax.set_xlabel(xlabel, fontsize=14, labelpad=4)  # X轴标签距离
+    #ax.set_ylabel(ylabel, fontsize=14, labelpad=4)  # Y轴标签距离
+    ax.set_zlabel(zlabel, fontsize=14, labelpad=4)   # Z轴标签距离增大（重点）
+    ax.xaxis._axinfo["tick"]["pad"] = 0  # X轴刻度距离
+    ax.yaxis._axinfo["tick"]["pad"] = 0  # Y轴刻度距离
+    ax.zaxis._axinfo["tick"]["pad"] = 0  # Z轴刻度距离（3D图需单独设置Z轴）
     # 设置坐标轴刻度字体大小（关键修改）
-    ax.tick_params(axis='x', labelsize=10)  # x轴刻度字体大小
-    ax.tick_params(axis='y', labelsize=10)  # y轴刻度字体大小
-    ax.tick_params(axis='z', labelsize=10)  # z轴刻度字体大小
+    ax.tick_params(axis='x', labelsize=14)  # x轴刻度字体大小
+    ax.tick_params(axis='y', labelsize=14)  # y轴刻度字体大小
+    ax.tick_params(axis='z', labelsize=14)  # z轴刻度字体大小
 
     # 设置轴范围
     if xlim:
