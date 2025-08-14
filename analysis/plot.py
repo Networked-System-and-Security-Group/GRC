@@ -5,8 +5,7 @@ from itertools import cycle
 from deep_analyse import *
 from matplotlib.font_manager import FontProperties
 
-# 假设你把字体文件放在当前工作目录下，名字是 SourceHanSansSC-Regular.otf
-font_path = "/home/LAB/zhangjue25/myfont/simsun.ttc"
+font_path = ""
 font_prop = FontProperties(fname=font_path)
 _style_list = [
     ('--',              (0,   0,   179/255), 'o'),
