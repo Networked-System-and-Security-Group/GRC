@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 from itertools import cycle
 from deep_analyse import *
 from matplotlib.font_manager import FontProperties
-font_path = "/home/LAB/zhangjue25/myfont/simsun.ttc"
+font_path = ""
 font_prop = FontProperties(fname=font_path)
 _style_list = [
     ('--',              (0,   0,   179/255), 'o'),

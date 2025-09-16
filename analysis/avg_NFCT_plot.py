@@ -3,16 +3,19 @@ import numpy as np
 import matplotlib.pyplot as plt
 from itertools import cycle
 from deep_analyse import *
-from matplotlib.font_manager import FontProperties
+# 这里绘制均匀流量
+# 纵轴为FCT，横轴为inter_load，即150/5，200/5，250/5，300/5 （Gbps）
+# 动态流量设置为0
 
-font_path = ""
-font_prop = FontProperties(fname=font_path)
+gscc_c = (130/255,0,180/255)
+dcqcn_c = "orange"
 _style_list = [
-    ('--',              (0,   0,   179/255), 'o'),
-    ('-.',              'green',           's'),
-    (':',               'orange',          '^'),
-    ((0, (3,1,1,1,1,1)), (179/255,0,   0),  'D'),
-    ('-',               (102/255,8/255,116/255), '*'),
+    ('--',              "b", 'o'),
+    ('--',              "g",           's'),
+    (':',               "r",          'o'),
+    (':',               "c",  's'),
+    ('-.',              "m", '^'),
+    ('-.',              "y", 'd'),
 ]
 
 def plot_auto_lines(data, xlabel, ylabel, filename, xticks=None, xlim=None):
@@ -26,7 +29,7 @@ def plot_auto_lines(data, xlabel, ylabel, filename, xticks=None, xlim=None):
       xticks: 自定义 x 轴刻度列表（可选）
       xlim: 自定义 x 轴范围 (xmin, xmax)（可选）
     """
-    plt.figure(figsize=(6, 4), dpi=300)
+    plt.figure(figsize=(5, 4), dpi=300)
     style_cycle = cycle(_style_list)
     y_max = 0
 
@@ -40,8 +43,8 @@ def plot_auto_lines(data, xlabel, ylabel, filename, xticks=None, xlim=None):
             linestyle=ls,
             color=col,
             marker=mk,
-            linewidth=3.5,
-            markersize=6
+            linewidth=2.5,
+            markersize=4
         )
         if y:
             y_max = max(y_max, max(y))
@@ -49,9 +52,9 @@ def plot_auto_lines(data, xlabel, ylabel, filename, xticks=None, xlim=None):
     # X 轴刻度
     if xticks is None:
         all_x = sorted({xi for xs, _ in data.values() for xi in xs})
-        plt.xticks(all_x, fontsize=18)
+        plt.xticks(all_x, fontsize=14)
     else:
-        plt.xticks(xticks, fontsize=18)
+        plt.xticks(xticks, fontsize=14)
 
     # Y 轴刻度：0 到 y_max，分 10 段，隔行显示
     raw_step = (y_max or 1) / 10
@@ -59,22 +62,21 @@ def plot_auto_lines(data, xlabel, ylabel, filename, xticks=None, xlim=None):
     all_ticks = np.arange(0, y_max + step, step)
     visible = [t if True or i % 2 != len(all_ticks) % 2 else ''
                for i, t in enumerate(all_ticks)]
-    all_ticks = [1, 2, 4, 8]
-    plt.yscale('log', base=2)
-    plt.yticks(all_ticks,  [1,2,4,8],fontsize=18)
+    #plt.yscale('log', base=2)
+    plt.yticks(all_ticks, visible, fontsize=14)
 
     # 轴标签、图例、网格、去除多余边框
-    plt.xlabel(xlabel, fontsize=22, fontproperties=font_prop)
-    plt.ylabel(ylabel, fontsize=22, fontproperties=font_prop)
-    plt.legend(frameon=False, fontsize=20, loc='upper left', bbox_to_anchor=(0,1.1))
+    plt.xlabel(xlabel, fontsize=16)
+    plt.ylabel(ylabel, fontsize=16)
+    plt.legend(frameon=False, fontsize=16, loc='upper left', bbox_to_anchor=(0,1.1))
     plt.grid(axis='y', alpha=0.3)
     ax = plt.gca()
     ax.spines['top'].set_visible(False)
     ax.spines['right'].set_visible(False)
 
     # 设置范围
-    #plt.ylim(0.8, all_ticks[-1])
-    plt.ylim(0.9, 8)
+    plt.ylim(0.8, all_ticks[-1])
+    #plt.ylim(0.9, 10)
     if xlim:
         plt.xlim(*xlim)
 
@@ -84,23 +86,25 @@ def plot_auto_lines(data, xlabel, ylabel, filename, xticks=None, xlim=None):
     plt.close()
     print(f"Saved figure to {filepath}")
 
-df = get_basic_result('428-442')
-avg_fct = np.array(df['Avg_FCT']).reshape(5, 3).T
-print(avg_fct)
-disable_ecn_avg = avg_fct[0].tolist()
-enable_ecn_avg = avg_fct[1].tolist()
-ours_avg = avg_fct[2].tolist()
 
-data = {
-    'DCQCN':    ([50,60,70,80,90], disable_ecn_avg),
-    'DCQCN-ECN':   ([50,60,70,80,90], enable_ecn_avg),
-    'OURS':   ([50,60,70,80,90], ours_avg),
+
+result = get_basic_result('1-4')
+print(result)
+data = result.T.values.tolist()
+
+
+data_to_plot = {
+    'Avg FCT':    ([30,40,50,60], data[1]),
+    'Avg intra_flow FCT': ([30,40,50,60], data[2]),
+    'Avg inter_flow FCT': ([30,40,50,60], data[3])
 }
+
 plot_auto_lines(
-    data,
-    xlabel="平均DC间吞吐 (Gbps)",
-    ylabel="平均归一化FCT",
-    filename="auto_styled_lines.png",
-    xticks=[50,60,70,80,90],
-    xlim=(45,92)
+    data_to_plot,
+    xlabel="Avg. inter-DC Throughput (Gbps)",
+    ylabel="Avg. FCT Slowdown",
+    filename="uniform_flow_analysis.pdf",
+    xticks=[30,40,50,60],
+    xlim=(25,65)
 )
+quit()

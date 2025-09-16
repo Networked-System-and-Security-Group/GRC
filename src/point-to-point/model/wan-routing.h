@@ -70,14 +70,20 @@ private:
     void HandleAckReceived(Ptr<Packet> p, CustomHeader& ch);
 
     /************数据平面延迟检测*********/
+    static const inline int rtt_table_size = 64 * 16;
+    struct RttEntry {
+        uint32_t hashed_seq = 0;
+        Time timestamp = Seconds(0);
+    } rtt_table[rtt_table_size];
+
     void periodic_decrease_bytes();
     double bytes_decrease_coefficient = 0.25;
-    Time bytes_decreace_interval = MicroSeconds(50);
-    struct RttMonitor {
-        RttMonitor() {
+    Time bytes_decreace_interval = MicroSeconds(100);
+    struct DstDCHandler {
+        DstDCHandler() {
             //assert(false);
         };
-        inline RttMonitor(int64_t max_rate) : 
+        inline DstDCHandler(int64_t max_rate) : 
             max_rate(max_rate),
             guaranteed_rate(max_rate * 0.3){
             std::cout << max_rate << "maxrate!" << std::endl;
@@ -91,28 +97,14 @@ private:
         //GSCC rtt监测
         Time rtt_sum = Seconds(0);
         int rtt_num = 0;
-        struct RttEntry {
-            uint32_t hashed_seq = 0;
-            Time timestamp;
-        } rtt_table[8][16];
-        inline int get_entries_number() const {
-            int count = 0;
-            for (int i = 0; i < 8; ++i) {
-                for (int j = 0; j < 16; ++j) {
-                    if (rtt_table[i][j].hashed_seq != 0) {
-                        ++count;
-                    }
-                }
-            }
-            return count;
-        }
-        inline void print_rtt_table() const {
-            for (int i = 0; i < 8; ++i) {
-                for (int j = 0; j < 16; ++j) {
-                    printf("%x|%.1lf ", rtt_table[i][j].hashed_seq, rtt_table[i][j].timestamp.GetSeconds() * 1000);
-                }
-                printf("\n");
-            }
+        void inline record_rtt(Time rtt) {
+            rtt_sum += rtt;
+            rtt_num ++;
+            //记录EWMA RTT
+            Time delta_t = Simulator::Now() - last_update_time;
+            last_update_time = Simulator::Now();
+            double weight1 = std::min(delta_t.GetSeconds() / tau1.GetSeconds(), 1.0);
+            sensitive_rtt = Seconds((1 - weight1) * sensitive_rtt.GetSeconds() + weight1 * rtt.GetSeconds());
         }
 
         //速率检测        
@@ -126,6 +118,7 @@ private:
         Time min_rtt = Seconds(0);
         Time rtt_diff = Seconds(0);
         Time prev_rtt = Seconds(0);
+        int rtt_miss_counter = 0;
         void update_ref_rate();
         std::vector<uint64_t> send_bytes_history;
         std::vector<Time> rtt_history;
@@ -166,49 +159,8 @@ private:
             return false;
         }
 
-        inline void try_record_rtt(uint32_t hashed_flow, uint32_t hashed_seq, bool t) {
-            uint32_t bucket = (hashed_flow >> 3) % 8;
-            uint32_t e_index1 = hashed_seq % 16;
-            uint32_t e_index2 = (e_index1 + 1) % 16;
-            uint32_t e_index3 = (e_index1 + 2) % 16;
-            //printf("Ack bucket:%u, index:%u\n", bucket, e_index1);
-            try_update_rtt(bucket, e_index1, hashed_seq, t);
-            try_update_rtt(bucket, e_index2, hashed_seq, t);
-            try_update_rtt(bucket, e_index3, hashed_seq, t);
-        }
-        private:
-        inline void try_update_rtt(uint32_t bucket, uint32_t index, uint32_t hashed_seq, bool t) {
-            //printf("%u %u\n", rtt_table[bucket][index].hashed_seq, hashed_seq);
-            if (rtt_table[bucket][index].hashed_seq == hashed_seq) {
-                //找到匹配的AckReq报文
-                Time rtt = Simulator::Now() - rtt_table[bucket][index].timestamp;
-                rtt_table[bucket][index].hashed_seq = 0;
-                rtt_table[bucket][index].timestamp = Seconds(0);
-                Time delta_t = Simulator::Now() - last_update_time;
-                last_update_time = Simulator::Now();
-                double weight1 = std::min(delta_t.GetSeconds() / tau1.GetSeconds(), 1.0);
-                sensitive_rtt = Seconds((1 - weight1) * sensitive_rtt.GetSeconds() + weight1 * rtt.GetSeconds());
-                rtt_sum += rtt;
-                rtt_num += 1;
-                if (t) fprintf(logfile::wan_log, "Now: %lf, RTT: %lf, Sensitive RTT: %lf, Count: %d\n",
-                    Simulator::Now().GetSeconds(), rtt.GetSeconds(), sensitive_rtt.GetSeconds(), rtt_num);
-                if (Simulator::Now() > Seconds(2.4)) {
-                    printf("[%ld]Update RTT %.3lf\n", 
-                        Simulator::Now().GetNanoSeconds(), rtt.GetSeconds() * 1000);
-                }
-            } else if (rtt_table[bucket][index].hashed_seq != 0
-                        && Simulator::Now() - rtt_table[bucket][index].timestamp > MilliSeconds(20)) {
-                //没找到匹配的报文，尝试去除该项
-                if (Simulator::Now() > Seconds(2.4)) {
-                    printf("[%ld]Erase RTT %x|%.1lf\n", 
-                        Simulator::Now().GetNanoSeconds(), rtt_table[bucket][index].hashed_seq, rtt_table[bucket][index].timestamp.GetSeconds() * 1000);
-                }
-                rtt_table[bucket][index].hashed_seq = 0;
-                entry_timeout_count++;
-            }
-        }
     };
-    std::map<uint32_t, std::map<uint32_t, RttMonitor>> m_rttTable;  // (dst_as, outport) -> rtt monitor
+    std::map<uint32_t, std::map<uint32_t, DstDCHandler>> m_dcHandler;  // (dst_as, outport) -> rtt monitor
     uint32_t Hash5Tuple(uint32_t sip, uint32_t dip, uint16_t sport, uint16_t dport, uint16_t pg);
     uint32_t Hash5tupleSeq(uint32_t sip, uint32_t dip, uint16_t sport, uint16_t dport, uint16_t pg, uint32_t seq);
     static uint32_t ECMPHash(const uint8_t *key, size_t len, uint32_t seed);

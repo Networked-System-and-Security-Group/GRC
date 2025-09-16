@@ -18,8 +18,7 @@ from matplotlib.font_manager import FontProperties
 import traceback
 from pathlib import Path
 
-font_path = "/home/LAB/zhangjue25/myfont/simsun.ttc"
-font_prop = FontProperties(fname=font_path)
+font_prop = None
 
 def auto_save_plot(func):
     @functools.wraps(func)
@@ -103,9 +102,16 @@ class Analyser:
             self.accumulated_bytes_info = pd.read_csv(op.join(self.dir, 'accumulated_bytes_log'))
 
     @auto_save_plot
-    def plot_accumulated_bytes(self, switch_id, dst_as):
+    def plot_accumulated_bytes(self, src_as, dst_as):
         """绘制指定 switch_id 和 dst_as 的 accumulated_bytes 变化曲线"""
         self.__read_accumulated_bytes_info()
+        for as_obj in self.topo['as_topologies']:
+            if as_obj['as_id'] == src_as:
+                switch_id = as_obj['dci_switch']
+                break
+        else:
+            print(f'No switch found for src_as {src_as}')
+            return
         df = self.accumulated_bytes_info[
             (self.accumulated_bytes_info['switch_id'] == switch_id) &
             (self.accumulated_bytes_info['dst_as'] == dst_as)
@@ -265,6 +271,17 @@ class Analyser:
         for (switch_id, src_as, dst_as), count in grouped.items():
             print(f'Switch ID: {switch_id}, Src AS: {src_as}, Dst AS: {dst_as}, Drop Count: {count}')
 
+    def get_drop_number(self):
+        self.__read_drop_info()
+        return len(self.drop_info)
+    
+    def get_drop_rate(self):
+        drop_cnt = self.get_drop_number()
+        self.__read_flow_info()
+
+        total_cnt = np.ceil(self.flow_df['fsize'] / 1000).sum()
+        return drop_cnt/total_cnt
+
     @auto_save_plot
     def plot_link_utilization(self, src_id, dst_id, monitor_interval=500e-6, smooth_window=1):
         self.__read_link_info()
@@ -346,6 +363,29 @@ class Analyser:
             self.get_inter_df()['fct_slowdown'].quantile(.99)
         )
     
+    def get_large_flow_fct(self):
+        self.__read_flow_info()
+        df = self.get_large_flow_df().copy()
+        return ( df['fct_slowdown'].mean(), 
+                df[ df['src_as'] != df['dst_as'] ]['fct_slowdown'].mean(),
+                df[ df['src_as'] != df['dst_as'] ]['fct_slowdown'].quantile(.99), 
+                df[ df['src_as'] == df['dst_as'] ]['fct_slowdown'].mean())
+    
+    def get_small_flow_fct(self):
+        self.__read_flow_info()
+        df = self.get_small_flow_df().copy()
+        return ( df['fct_slowdown'].mean(), 
+                df[ df['src_as'] != df['dst_as'] ]['fct_slowdown'].mean(),
+                df[ df['src_as'] != df['dst_as'] ]['fct_slowdown'].quantile(.99), 
+                df[ df['src_as'] == df['dst_as'] ]['fct_slowdown'].mean())
+    
+    def get_buffer_information(self):
+        self.__read_buffer_info()
+        df = self.buffer_info[
+            (self.buffer_info['timestamp_ns'] >= 2010000000) & (self.buffer_info['timestamp_ns'] <= 2100000000)
+        ].groupby(['timestamp_ns', 'switch_id'])['egress_bytes'].sum().reset_index()
+        return df['egress_bytes'].mean()
+
     def get_fct(self):
         return (self.get_avg_fct(), self.get_p99_fct())
     
@@ -423,6 +463,14 @@ class Analyser:
     def get_inter_df(self):
         self.__read_flow_info()
         return self.flow_df[self.flow_df['src_as'] != self.flow_df['dst_as']]
+    
+    def get_large_flow_df(self):
+        self.__read_flow_info()
+        return self.flow_df[self.flow_df['fsize'] >= 5000000]
+    
+    def get_small_flow_df(self):
+        self.__read_flow_info()
+        return self.flow_df[self.flow_df['fsize'] < 1000000]
 
     def __read_drop_info(self):
         self.__read_flow_info()

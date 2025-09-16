@@ -19,3 +19,5 @@ config/wan_traffic.txt
 *.txt
 !config/wan_simple_topo.txt
 !config/wan_topo_json.txt
+autokill.log
+autokill.pid

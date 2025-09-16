@@ -192,8 +192,8 @@ namespace logfile {
         }
 
         // 为所有文件调用宏
-        OPEN_FILE(pfc_file);
-        fprintf(pfc_file, "timestamp_ns,node_id,is_switch,nbr_id,is_pause\n");
+        OPEN_EMPTY_FILE(pfc_file);
+        //fprintf(pfc_file, "timestamp_ns,node_id,is_switch,nbr_id,is_pause\n");
         OPEN_FILE(flow_output);
         OPEN_FILE(wan_log);
         OPEN_FILE(rtt_log);
