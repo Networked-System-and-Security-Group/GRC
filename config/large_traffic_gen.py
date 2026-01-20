@@ -5,7 +5,26 @@ import random
 import os.path as op
 import argparse
 from pathlib import Path
-import matplotlib.pyplot as plt
+
+
+def _lazy_import_matplotlib_pyplot():
+    """Import matplotlib only when plotting is actually needed.
+
+    This repo primarily uses this script to *generate flow files*.
+    Some environments (e.g., NumPy 2.x with older system matplotlib wheels)
+    can fail to import matplotlib due to binary ABI mismatch. Keeping this
+    import lazy avoids breaking flow generation.
+    """
+    try:
+        import matplotlib.pyplot as plt  # type: ignore
+
+        return plt
+    except Exception as e:
+        raise RuntimeError(
+            "matplotlib could not be imported (optional dependency). "
+            "If you need plotting, install/upgrade a compatible matplotlib+numpy pair. "
+            f"Original error: {e}"
+        ) from e
 
 
 class Flow:
@@ -190,6 +209,7 @@ def plot_concurrent_flows(flows: list[Flow], bw: float, output_filename: str = "
             flow_counts.append(current_flows)
 
     # 4. 绘图
+    plt = _lazy_import_matplotlib_pyplot()
     plt.figure(figsize=(10, 6))
     # 使用 'post' 方式绘制阶梯图，表示值在每个时间点之后保持不变
     plt.step(time_points, flow_counts, where='post')

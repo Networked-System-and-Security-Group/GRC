@@ -21,3 +21,5 @@ config/wan_traffic.txt
 !config/wan_topo_json.txt
 autokill.log
 autokill.pid
+.github
+.venv

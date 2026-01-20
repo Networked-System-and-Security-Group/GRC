@@ -94,6 +94,8 @@ unordered_map<uint64_t, double> rate2pmax;
 
 // config of link-down scenario, ACK priority, and buffer
 uint32_t buffer_size = 0;  // 0 to set buffer size automatically
+uint32_t dci_buffer_size = 0;  // MB, 0 keeps default
+uint32_t wan_buffer_size = 0;  // MB, 0 keeps default
 
 // Added from Here
 double load = 10.0;
@@ -1004,6 +1006,12 @@ int main(int argc, char *argv[]) {
             } else if (key.compare("BUFFER_SIZE") == 0) {
                 conf >> buffer_size;
                 std::cerr << "BUFFER_SIZE\t\t\t\t" << buffer_size << '\n';
+            } else if (key.compare("DCI_BUFFER_SIZE") == 0) {
+                conf >> dci_buffer_size;
+                std::cerr << "DCI_BUFFER_SIZE\t\t\t" << dci_buffer_size << '\n';
+            } else if (key.compare("WAN_BUFFER_SIZE") == 0) {
+                conf >> wan_buffer_size;
+                std::cerr << "WAN_BUFFER_SIZE\t\t\t" << wan_buffer_size << '\n';
             } else if (key.compare("QLEN_MON_START") == 0) {
                 conf >> qlen_mon_start;
                 std::cerr << "QLEN_MON_START\t\t\t\t" << qlen_mon_start << '\n';
@@ -1283,8 +1291,11 @@ int main(int argc, char *argv[]) {
                 sw->m_mmu->ConfigHdrm(j, headroom);
             }
             sw->m_mmu->ConfigNPort(sw->GetNDevices() - 1);
-            sw->m_mmu->ConfigBufferSize(160 * 1024 * 1024);  // Magic Number
-            //sw->m_mmu->ConfigBufferSize(4U * 1000 * 1000 * 1000); // 改为4GB
+            if (dci_buffer_size > 0) {
+                sw->m_mmu->ConfigBufferSize(dci_buffer_size * 1024 * 1024);
+            } else {
+                sw->m_mmu->ConfigBufferSize(160 * 1024 * 1024);  // Magic Number
+            }
             sw->m_mmu->node_id = sw->GetId();
             sw->m_mmu->InitSwitch();
 
@@ -1308,8 +1319,11 @@ int main(int argc, char *argv[]) {
                 sw->m_mmu->ConfigHdrm(j, 0);
             }
             sw->m_mmu->ConfigNPort(sw->GetNDevices() - 1);
-            sw->m_mmu->ConfigBufferSize(320 * 1024 * 1024);  // Magic Number
-            //sw->m_mmu->ConfigBufferSize(4U * 1000 * 1000 * 1000); // 改为4GB
+            if (wan_buffer_size > 0) {
+                sw->m_mmu->ConfigBufferSize(wan_buffer_size * 1024 * 1024);
+            } else {
+                sw->m_mmu->ConfigBufferSize(320 * 1024 * 1024);  // Magic Number
+            }
             sw->m_mmu->node_id = sw->GetId();
             sw->m_mmu->InitSwitch();
 

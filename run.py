@@ -32,6 +32,8 @@ SW_MONITORING_INTERVAL {sw_monitoring_interval}
 FLOWGEN_START_TIME {flowgen_start_time}
 FLOWGEN_STOP_TIME {flowgen_stop_time}
 BUFFER_SIZE {buffer_size}
+DCI_BUFFER_SIZE {dci_buffer_size}
+WAN_BUFFER_SIZE {wan_buffer_size}
 
 CC_MODE {cc_mode}
 LB_MODE {lb_mode}
@@ -148,6 +150,12 @@ def main():
                         default='0.05', help="traffic time to simulate (up to 3 seconds) (default: 0.1)")#
     parser.add_argument('--buffer', dest="buffer", action='store',
                         default='9', help="the switch buffer size (MB) (default: 9)")
+    parser.add_argument('--dci_buffer', dest='dci_buffer', action='store',
+                        type=int, default=0,
+                        help="DCI switch buffer size (MB). 0 keeps the C++ default (default: 0)")
+    parser.add_argument('--wan_buffer', dest='wan_buffer', action='store',
+                        type=int, default=0,
+                        help="WAN switch buffer size (MB). 0 keeps the C++ default (default: 0)")
     parser.add_argument('--bw', dest="bw", action='store',
                         default='100', help="the NIC bandwidth (Gbps) (default: 100)")
     parser.add_argument('--topo', dest='topo', action='store',
@@ -197,6 +205,8 @@ def main():
     enabled_irn = int(args.irn)
     bw = int(args.bw)
     buffer = args.buffer
+    dci_buffer = int(args.dci_buffer)
+    wan_buffer = int(args.wan_buffer)
     topo = args.topo
     enforce_win = args.enforce_win
     cdf = args.cdf
@@ -309,7 +319,7 @@ def main():
         config = config_template.format(id=config_ID, topo=topo, flow=flow,
                                         qlen_mon_start=qlen_mon_start, qlen_mon_end=qlen_mon_end, flowgen_start_time=flowgen_start_time,
                                         flowgen_stop_time=flowgen_stop_time, sw_monitoring_interval=sw_monitoring_interval,
-                                        buffer_size=buffer, lb_mode=lb_mode, 
+                                        buffer_size=buffer, dci_buffer_size=dci_buffer, wan_buffer_size=wan_buffer, lb_mode=lb_mode, 
                                         enabled_pfc=enabled_pfc, enabled_irn=enabled_irn,
                                         cc_mode=cc_mode,
                                         ai=ai, hai=hai, dctcp_ai=dctcp_ai,
@@ -329,7 +339,7 @@ def main():
         config = config_template.format(id=config_ID, topo=topo, flow=flow,
                                         qlen_mon_start=qlen_mon_start, qlen_mon_end=qlen_mon_end, flowgen_start_time=flowgen_start_time,
                                         flowgen_stop_time=flowgen_stop_time, sw_monitoring_interval=sw_monitoring_interval,
-                                        buffer_size=buffer, lb_mode=lb_mode, 
+                                        buffer_size=buffer, dci_buffer_size=dci_buffer, wan_buffer_size=wan_buffer, lb_mode=lb_mode, 
                                         enabled_pfc=enabled_pfc, enabled_irn=enabled_irn,
                                         cc_mode=cc_mode,
                                         ai=ai, hai=hai, dctcp_ai=dctcp_ai,
@@ -350,6 +360,19 @@ def main():
                 existing_config = existing_file.read()
             existing_config = re.sub(r'^OUTPUT_DIR_PATH.*$', f'OUTPUT_DIR_PATH mix/output/{config_ID}', existing_config, flags=re.MULTILINE)
             existing_config = re.sub(r'^TIME .*$' , f'TIME {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}', existing_config, flags=re.MULTILINE)
+
+            # Keep run.py knobs authoritative even when reusing a config file.
+            def _upsert_line(cfg: str, key: str, value: str) -> str:
+                pattern = rf'^{re.escape(key)}\\s+.*$'
+                line = f'{key} {value}'
+                if re.search(pattern, cfg, flags=re.MULTILINE):
+                    return re.sub(pattern, line, cfg, flags=re.MULTILINE)
+                if not cfg.endswith('\n'):
+                    cfg += '\n'
+                return cfg + line + '\n'
+
+            existing_config = _upsert_line(existing_config, 'DCI_BUFFER_SIZE', str(dci_buffer))
+            existing_config = _upsert_line(existing_config, 'WAN_BUFFER_SIZE', str(wan_buffer))
             file.write(existing_config)
 
     if msg:

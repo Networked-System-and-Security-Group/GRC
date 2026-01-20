@@ -1,0 +1,102 @@
+t=  0.000ms | q=  0.0000MB p=0.00001 arr=   0.000MB ct=   0.000MB (arr-ct)=    0.000KB waste=   0.000MB | sender_A:RC=40.000Gbps a=0.0000 sender_B:RC=40.000Gbps a=0.0000
+t=  1.000ms | q=  3.9476MB p=0.99999 arr=   8.716MB ct=   4.768MB (arr-ct)= 4042.328KB waste=   0.000MB | sender_A:RC=29.605Gbps a=0.0671 sender_B:RC=30.146Gbps a=0.0651
+t=  2.000ms | q=  4.1219MB p=0.99999 arr=  13.659MB ct=   9.537MB (arr-ct)= 4220.843KB waste=   0.000MB | sender_A:RC=11.986Gbps a=0.1310 sender_B:RC=12.420Gbps a=0.1292
+t=  3.000ms | q=  0.9555MB p=0.99999 arr=  15.261MB ct=  14.305MB (arr-ct)=  978.454KB waste=   0.000MB | sender_A:RC=2.764Gbps a=0.1906 sender_B:RC=2.911Gbps a=0.1889
+t=  4.000ms | q=  0.0000MB p=0.00001 arr=  16.104MB ct=  19.073MB (arr-ct)=-3041.178KB waste=   0.312MB | sender_A:RC=2.501Gbps a=0.1930 sender_B:RC=2.476Gbps a=0.1935
+t=  5.000ms | q=  0.0000MB p=0.00001 arr=  17.455MB ct=  23.842MB (arr-ct)=-6540.018KB waste=   0.984MB | sender_A:RC=3.228Gbps a=0.1798 sender_B:RC=3.204Gbps a=0.1802
+t=  6.000ms | q=  0.0000MB p=0.00001 arr=  19.289MB ct=  28.610MB (arr-ct)=-9545.305KB waste=   1.964MB | sender_A:RC=3.955Gbps a=0.1675 sender_B:RC=3.930Gbps a=0.1679
+t=  7.000ms | q=  0.0000MB p=0.00001 arr=  21.558MB ct=  33.379MB (arr-ct)=-12104.026KB waste=   3.208MB | sender_A:RC=4.682Gbps a=0.1560 sender_B:RC=4.657Gbps a=0.1564
+t=  8.000ms | q=  0.0000MB p=0.00001 arr=  24.222MB ct=  38.147MB (arr-ct)=-14258.693KB waste=   4.672MB | sender_A:RC=5.408Gbps a=0.1453 sender_B:RC=5.384Gbps a=0.1457
+t=  9.000ms | q=  0.0000MB p=0.00001 arr=  27.244MB ct=  42.915MB (arr-ct)=-16047.772KB waste=   6.320MB | sender_A:RC=6.135Gbps a=0.1354 sender_B:RC=6.111Gbps a=0.1357
+t= 10.000ms | q=  0.0000MB p=0.00001 arr=  30.588MB ct=  47.684MB (arr-ct)=-17506.069KB waste=   8.118MB | sender_A:RC=6.862Gbps a=0.1261 sender_B:RC=6.837Gbps a=0.1264
+t= 11.000ms | q=  0.0000MB p=0.00001 arr=  34.224MB ct=  52.452MB (arr-ct)=-18665.077KB waste=  10.035MB | sender_A:RC=7.588Gbps a=0.1175 sender_B:RC=7.564Gbps a=0.1178
+t= 12.000ms | q=  0.0000MB p=0.00001 arr=  38.125MB ct=  57.220MB (arr-ct)=-19553.292KB waste=  12.043MB | sender_A:RC=8.315Gbps a=0.1095 sender_B:RC=8.291Gbps a=0.1098
+t= 13.000ms | q=  0.0000MB p=0.00001 arr=  42.266MB ct=  61.989MB (arr-ct)=-20196.498KB waste=  14.118MB | sender_A:RC=9.041Gbps a=0.1020 sender_B:RC=9.017Gbps a=0.1023
+t= 14.000ms | q=  0.0000MB p=0.00001 arr=  46.622MB ct=  66.757MB (arr-ct)=-20618.026KB waste=  16.235MB | sender_A:RC=9.768Gbps a=0.0951 sender_B:RC=9.743Gbps a=0.0953
+t= 15.000ms | q=  0.0000MB p=0.00001 arr=  51.175MB ct=  71.526MB (arr-ct)=-20838.985KB waste=  18.376MB | sender_A:RC=10.494Gbps a=0.0886 sender_B:RC=10.470Gbps a=0.0888
+t= 16.000ms | q=  0.0000MB p=0.00001 arr=  55.905MB ct=  76.294MB (arr-ct)=-20878.476KB waste=  20.520MB | sender_A:RC=11.220Gbps a=0.0826 sender_B:RC=11.196Gbps a=0.0828
+t= 17.000ms | q=  0.0000MB p=0.00001 arr=  60.795MB ct=  81.062MB (arr-ct)=-20753.782KB waste=  22.652MB | sender_A:RC=11.946Gbps a=0.0770 sender_B:RC=11.922Gbps a=0.0772
+t= 18.000ms | q=  0.0000MB p=0.00001 arr=  65.830MB ct=  85.831MB (arr-ct)=-20480.543KB waste=  24.755MB | sender_A:RC=12.673Gbps a=0.0718 sender_B:RC=12.648Gbps a=0.0719
+t= 19.000ms | q=  0.0000MB p=0.00001 arr=  70.997MB ct=  90.599MB (arr-ct)=-20072.908KB waste=  26.817MB | sender_A:RC=13.399Gbps a=0.0669 sender_B:RC=13.374Gbps a=0.0671
+t= 20.000ms | q=  0.0000MB p=0.00001 arr=  76.282MB ct=  95.367MB (arr-ct)=-19543.681KB waste=  28.824MB | sender_A:RC=14.125Gbps a=0.0624 sender_B:RC=14.100Gbps a=0.0625
+t= 21.000ms | q=  0.0000MB p=0.00001 arr=  81.674MB ct= 100.136MB (arr-ct)=-18904.447KB waste=  30.765MB | sender_A:RC=14.850Gbps a=0.0582 sender_B:RC=14.826Gbps a=0.0583
+t= 22.000ms | q=  0.0000MB p=0.00001 arr=  87.164MB ct= 104.904MB (arr-ct)=-18165.689KB waste=  32.631MB | sender_A:RC=15.576Gbps a=0.0542 sender_B:RC=15.552Gbps a=0.0544
+t= 23.000ms | q=  0.0000MB p=0.00001 arr=  92.742MB ct= 109.673MB (arr-ct)=-17336.892KB waste=  34.412MB | sender_A:RC=16.302Gbps a=0.0506 sender_B:RC=16.278Gbps a=0.0507
+t= 24.000ms | q=  0.0000MB p=0.00001 arr=  98.399MB ct= 114.441MB (arr-ct)=-16426.639KB waste=  36.099MB | sender_A:RC=17.028Gbps a=0.0472 sender_B:RC=17.004Gbps a=0.0473
+t= 25.000ms | q=  0.0000MB p=0.00001 arr= 104.129MB ct= 119.209MB (arr-ct)=-15442.695KB waste=  37.685MB | sender_A:RC=17.754Gbps a=0.0441 sender_B:RC=17.729Gbps a=0.0442
+t= 26.000ms | q=  0.0000MB p=0.00001 arr= 109.923MB ct= 123.978MB (arr-ct)=-14392.087KB waste=  39.163MB | sender_A:RC=18.479Gbps a=0.0411 sender_B:RC=18.455Gbps a=0.0412
+t= 27.000ms | q=  0.0000MB p=0.00001 arr= 115.776MB ct= 128.746MB (arr-ct)=-13281.173KB waste=  40.527MB | sender_A:RC=19.205Gbps a=0.0384 sender_B:RC=19.180Gbps a=0.0385
+t= 28.000ms | q=  0.0000MB p=0.00001 arr= 121.683MB ct= 133.514MB (arr-ct)=-12115.706KB waste=  41.772MB | sender_A:RC=19.930Gbps a=0.0358 sender_B:RC=19.906Gbps a=0.0359
+t= 29.000ms | q=  0.0000MB p=0.00001 arr= 127.637MB ct= 138.283MB (arr-ct)=-10900.892KB waste=  42.891MB | sender_A:RC=20.656Gbps a=0.0335 sender_B:RC=20.631Gbps a=0.0336
+t= 30.000ms | q=  0.0000MB p=0.00001 arr= 133.636MB ct= 143.051MB (arr-ct)=-9641.441KB waste=  43.881MB | sender_A:RC=21.381Gbps a=0.0313 sender_B:RC=21.357Gbps a=0.0313
+t= 31.000ms | q=  0.0000MB p=0.00001 arr= 139.673MB ct= 147.820MB (arr-ct)=-8341.614KB waste=  44.738MB | sender_A:RC=22.106Gbps a=0.0292 sender_B:RC=22.082Gbps a=0.0293
+t= 32.000ms | q=  0.0000MB p=0.00001 arr= 145.747MB ct= 152.588MB (arr-ct)=-7005.269KB waste=  45.458MB | sender_A:RC=22.831Gbps a=0.0273 sender_B:RC=22.807Gbps a=0.0274
+t= 33.000ms | q=  0.0000MB p=0.00001 arr= 151.852MB ct= 157.356MB (arr-ct)=-5635.893KB waste=  46.036MB | sender_A:RC=23.557Gbps a=0.0256 sender_B:RC=23.532Gbps a=0.0256
+t= 34.000ms | q=  0.0000MB p=0.00001 arr= 157.987MB ct= 162.125MB (arr-ct)=-4236.646KB waste=  46.472MB | sender_A:RC=24.282Gbps a=0.0239 sender_B:RC=24.257Gbps a=0.0240
+t= 35.000ms | q=  0.0000MB p=0.00001 arr= 164.148MB ct= 166.893MB (arr-ct)=-2810.384KB waste=  46.760MB | sender_A:RC=25.007Gbps a=0.0224 sender_B:RC=24.982Gbps a=0.0224
+t= 36.000ms | q=  0.0000MB p=0.00001 arr= 170.334MB ct= 171.661MB (arr-ct)=-1359.691KB waste=  46.900MB | sender_A:RC=25.732Gbps a=0.0210 sender_B:RC=25.707Gbps a=0.0210
+t= 37.000ms | q=  0.1210MB p=0.12198 arr= 176.551MB ct= 176.430MB (arr-ct)=  123.931KB waste=  46.900MB | sender_A:RC=26.153Gbps a=0.0233 sender_B:RC=26.310Gbps a=0.0213
+t= 38.000ms | q=  0.5084MB p=0.99999 arr= 181.707MB ct= 181.198MB (arr-ct)=  520.588KB waste=  46.900MB | sender_A:RC=15.550Gbps a=0.0903 sender_B:RC=15.932Gbps a=0.0884
+t= 39.000ms | q=  0.0000MB p=0.00001 arr= 184.815MB ct= 185.966MB (arr-ct)=-1179.585KB waste=  47.021MB | sender_A:RC=12.317Gbps a=0.1075 sender_B:RC=12.291Gbps a=0.1077
+t= 40.000ms | q=  0.0000MB p=0.00001 arr= 188.111MB ct= 190.735MB (arr-ct)=-2687.057KB waste=  47.297MB | sender_A:RC=13.045Gbps a=0.1002 sender_B:RC=13.019Gbps a=0.1004
+t= 41.000ms | q=  0.0000MB p=0.00001 arr= 191.704MB ct= 195.503MB (arr-ct)=-3890.652KB waste=  47.697MB | sender_A:RC=13.771Gbps a=0.0934 sender_B:RC=13.745Gbps a=0.0936
+t= 42.000ms | q=  0.0000MB p=0.00001 arr= 195.565MB ct= 200.272MB (arr-ct)=-4819.337KB waste=  48.192MB | sender_A:RC=14.497Gbps a=0.0870 sender_B:RC=14.471Gbps a=0.0872
+t= 43.000ms | q=  0.0000MB p=0.00001 arr= 199.670MB ct= 205.040MB (arr-ct)=-5499.288KB waste=  48.756MB | sender_A:RC=15.222Gbps a=0.0811 sender_B:RC=15.197Gbps a=0.0813
+t= 44.000ms | q=  0.0000MB p=0.00001 arr= 203.994MB ct= 209.808MB (arr-ct)=-5954.189KB waste=  49.368MB | sender_A:RC=15.948Gbps a=0.0756 sender_B:RC=15.923Gbps a=0.0758
+t= 45.000ms | q=  0.0000MB p=0.00001 arr= 208.517MB ct= 214.577MB (arr-ct)=-6205.469KB waste=  50.005MB | sender_A:RC=16.674Gbps a=0.0705 sender_B:RC=16.648Gbps a=0.0707
+t= 46.000ms | q=  0.0000MB p=0.00001 arr= 213.220MB ct= 219.345MB (arr-ct)=-6272.521KB waste=  50.649MB | sender_A:RC=17.400Gbps a=0.0658 sender_B:RC=17.374Gbps a=0.0659
+t= 47.000ms | q=  0.0000MB p=0.00001 arr= 218.085MB ct= 224.113MB (arr-ct)=-6172.889KB waste=  51.283MB | sender_A:RC=18.125Gbps a=0.0613 sender_B:RC=18.100Gbps a=0.0615
+t= 48.000ms | q=  0.0000MB p=0.00001 arr= 223.098MB ct= 228.882MB (arr-ct)=-5922.450KB waste=  51.892MB | sender_A:RC=18.851Gbps a=0.0572 sender_B:RC=18.825Gbps a=0.0573
+t= 49.000ms | q=  0.0000MB p=0.00001 arr= 228.244MB ct= 233.650MB (arr-ct)=-5535.569KB waste=  52.460MB | sender_A:RC=19.576Gbps a=0.0534 sender_B:RC=19.551Gbps a=0.0535
+t= 50.000ms | q=  0.0000MB p=0.00001 arr= 233.511MB ct= 238.419MB (arr-ct)=-5025.244KB waste=  52.976MB | sender_A:RC=20.302Gbps a=0.0498 sender_B:RC=20.276Gbps a=0.0499
+t= 51.000ms | q=  0.0000MB p=0.00001 arr= 238.887MB ct= 243.187MB (arr-ct)=-4403.235KB waste=  53.429MB | sender_A:RC=21.027Gbps a=0.0465 sender_B:RC=21.002Gbps a=0.0466
+t= 52.000ms | q=  0.0000MB p=0.00001 arr= 244.361MB ct= 247.955MB (arr-ct)=-3680.187KB waste=  53.807MB | sender_A:RC=21.752Gbps a=0.0434 sender_B:RC=21.727Gbps a=0.0435
+t= 53.000ms | q=  0.0000MB p=0.00001 arr= 249.925MB ct= 252.724MB (arr-ct)=-2865.726KB waste=  54.101MB | sender_A:RC=22.478Gbps a=0.0405 sender_B:RC=22.452Gbps a=0.0406
+t= 54.000ms | q=  0.0000MB p=0.00001 arr= 255.570MB ct= 257.492MB (arr-ct)=-1968.567KB waste=  54.303MB | sender_A:RC=23.203Gbps a=0.0379 sender_B:RC=23.177Gbps a=0.0379
+t= 55.000ms | q=  0.0000MB p=0.00001 arr= 261.287MB ct= 262.260MB (arr-ct)= -996.594KB waste=  54.405MB | sender_A:RC=23.928Gbps a=0.0354 sender_B:RC=23.902Gbps a=0.0354
+t= 56.000ms | q=  0.0464MB p=0.04362 arr= 267.075MB ct= 267.029MB (arr-ct)=   47.525KB waste=  54.405MB | sender_A:RC=24.560Gbps a=0.0339 sender_B:RC=24.627Gbps a=0.0331
+t= 57.000ms | q=  0.0000MB p=0.00001 arr= 271.731MB ct= 271.797MB (arr-ct)=  -67.660KB waste=  54.412MB | sender_A:RC=14.047Gbps a=0.0972 sender_B:RC=13.893Gbps a=0.0974
+t= 58.000ms | q=  0.0000MB p=0.00001 arr= 275.371MB ct= 276.566MB (arr-ct)=-1223.410KB waste=  54.538MB | sender_A:RC=15.166Gbps a=0.0906 sender_B:RC=15.139Gbps a=0.0908
+t= 59.000ms | q=  0.0000MB p=0.00001 arr= 279.285MB ct= 281.334MB (arr-ct)=-2097.858KB waste=  54.753MB | sender_A:RC=15.892Gbps a=0.0845 sender_B:RC=15.865Gbps a=0.0847
+t= 60.000ms | q=  0.0000MB p=0.00001 arr= 283.437MB ct= 286.102MB (arr-ct)=-2728.760KB waste=  55.034MB | sender_A:RC=16.617Gbps a=0.0788 sender_B:RC=16.591Gbps a=0.0789
+t= 61.000ms | q=  0.0000MB p=0.00001 arr= 287.805MB ct= 290.871MB (arr-ct)=-3139.308KB waste=  55.356MB | sender_A:RC=17.343Gbps a=0.0734 sender_B:RC=17.316Gbps a=0.0736
+t= 62.000ms | q=  0.0000MB p=0.00001 arr= 292.367MB ct= 295.639MB (arr-ct)=-3350.484KB waste=  55.700MB | sender_A:RC=18.069Gbps a=0.0685 sender_B:RC=18.042Gbps a=0.0686
+t= 63.000ms | q=  0.0000MB p=0.00001 arr= 297.105MB ct= 300.407MB (arr-ct)=-3381.275KB waste=  56.048MB | sender_A:RC=18.794Gbps a=0.0639 sender_B:RC=18.767Gbps a=0.0640
+t= 64.000ms | q=  0.0000MB p=0.00001 arr= 302.003MB ct= 305.176MB (arr-ct)=-3248.861KB waste=  56.381MB | sender_A:RC=19.520Gbps a=0.0596 sender_B:RC=19.493Gbps a=0.0597
+t= 65.000ms | q=  0.0000MB p=0.00001 arr= 307.045MB ct= 309.944MB (arr-ct)=-2968.788KB waste=  56.686MB | sender_A:RC=20.245Gbps a=0.0556 sender_B:RC=20.218Gbps a=0.0557
+t= 66.000ms | q=  0.0000MB p=0.00001 arr= 312.217MB ct= 314.713MB (arr-ct)=-2555.120KB waste=  56.949MB | sender_A:RC=20.970Gbps a=0.0519 sender_B:RC=20.944Gbps a=0.0520
+t= 67.000ms | q=  0.0000MB p=0.00001 arr= 317.508MB ct= 319.481MB (arr-ct)=-2020.584KB waste=  57.156MB | sender_A:RC=21.696Gbps a=0.0484 sender_B:RC=21.669Gbps a=0.0485
+t= 68.000ms | q=  0.0000MB p=0.00001 arr= 322.905MB ct= 324.249MB (arr-ct)=-1376.698KB waste=  57.297MB | sender_A:RC=22.421Gbps a=0.0452 sender_B:RC=22.394Gbps a=0.0453
+t= 69.000ms | q=  0.0000MB p=0.00001 arr= 328.399MB ct= 329.018MB (arr-ct)= -633.880KB waste=  57.363MB | sender_A:RC=23.146Gbps a=0.0422 sender_B:RC=23.119Gbps a=0.0423
+t= 70.000ms | q=  0.1715MB p=0.17494 arr= 333.957MB ct= 333.786MB (arr-ct)=  175.568KB waste=  57.363MB | sender_A:RC=21.744Gbps a=0.0538 sender_B:RC=22.055Gbps a=0.0518
+t= 71.000ms | q=  0.0000MB p=0.00001 arr= 338.132MB ct= 338.554MB (arr-ct)= -432.779KB waste=  57.407MB | sender_A:RC=15.932Gbps a=0.0881 sender_B:RC=15.900Gbps a=0.0883
+t= 72.000ms | q=  0.0000MB p=0.00001 arr= 342.140MB ct= 343.323MB (arr-ct)=-1211.547KB waste=  57.531MB | sender_A:RC=16.667Gbps a=0.0821 sender_B:RC=16.639Gbps a=0.0823
+t= 73.000ms | q=  0.0000MB p=0.00001 arr= 346.377MB ct= 348.091MB (arr-ct)=-1755.616KB waste=  57.712MB | sender_A:RC=17.393Gbps a=0.0766 sender_B:RC=17.365Gbps a=0.0768
+t= 74.000ms | q=  0.0000MB p=0.00001 arr= 350.821MB ct= 352.859MB (arr-ct)=-2087.608KB waste=  57.926MB | sender_A:RC=18.119Gbps a=0.0714 sender_B:RC=18.090Gbps a=0.0716
+t= 75.000ms | q=  0.0000MB p=0.00001 arr= 355.452MB ct= 357.628MB (arr-ct)=-2227.721KB waste=  58.155MB | sender_A:RC=18.844Gbps a=0.0666 sender_B:RC=18.816Gbps a=0.0668
+t= 76.000ms | q=  0.0000MB p=0.00001 arr= 360.253MB ct= 362.396MB (arr-ct)=-2194.226KB waste=  58.380MB | sender_A:RC=19.570Gbps a=0.0621 sender_B:RC=19.541Gbps a=0.0623
+t= 77.000ms | q=  0.0000MB p=0.00001 arr= 365.208MB ct= 367.165MB (arr-ct)=-2003.659KB waste=  58.586MB | sender_A:RC=20.295Gbps a=0.0580 sender_B:RC=20.267Gbps a=0.0581
+t= 78.000ms | q=  0.0000MB p=0.00001 arr= 370.301MB ct= 371.933MB (arr-ct)=-1670.982KB waste=  58.758MB | sender_A:RC=21.020Gbps a=0.0541 sender_B:RC=20.992Gbps a=0.0542
+t= 79.000ms | q=  0.0000MB p=0.00001 arr= 375.520MB ct= 376.701MB (arr-ct)=-1209.731KB waste=  58.882MB | sender_A:RC=21.746Gbps a=0.0505 sender_B:RC=21.717Gbps a=0.0506
+t= 80.000ms | q=  0.0000MB p=0.00001 arr= 380.852MB ct= 381.470MB (arr-ct)= -632.156KB waste=  58.947MB | sender_A:RC=22.471Gbps a=0.0471 sender_B:RC=22.443Gbps a=0.0472
+t= 81.000ms | q=  0.0538MB p=0.05141 arr= 386.292MB ct= 386.238MB (arr-ct)=   55.124KB waste=  58.947MB | sender_A:RC=22.827Gbps a=0.0466 sender_B:RC=23.088Gbps a=0.0447
+t= 82.000ms | q=  0.0000MB p=0.00001 arr= 390.690MB ct= 391.006MB (arr-ct)= -324.149KB waste=  58.980MB | sender_A:RC=16.579Gbps a=0.0849 sender_B:RC=16.543Gbps a=0.0851
+t= 83.000ms | q=  0.0000MB p=0.00001 arr= 394.828MB ct= 395.775MB (arr-ct)= -969.367KB waste=  59.080MB | sender_A:RC=17.320Gbps a=0.0792 sender_B:RC=17.290Gbps a=0.0794
+t= 84.000ms | q=  0.0000MB p=0.00001 arr= 399.183MB ct= 400.543MB (arr-ct)=-1392.441KB waste=  59.223MB | sender_A:RC=18.046Gbps a=0.0738 sender_B:RC=18.016Gbps a=0.0740
+t= 85.000ms | q=  0.0000MB p=0.00001 arr= 403.734MB ct= 405.312MB (arr-ct)=-1614.966KB waste=  59.389MB | sender_A:RC=18.771Gbps a=0.0689 sender_B:RC=18.741Gbps a=0.0690
+t= 86.000ms | q=  0.0000MB p=0.00001 arr= 408.463MB ct= 410.080MB (arr-ct)=-1656.040KB waste=  59.559MB | sender_A:RC=19.497Gbps a=0.0642 sender_B:RC=19.467Gbps a=0.0644
+t= 87.000ms | q=  0.0000MB p=0.00001 arr= 413.351MB ct= 414.848MB (arr-ct)=-1532.945KB waste=  59.716MB | sender_A:RC=20.222Gbps a=0.0599 sender_B:RC=20.192Gbps a=0.0600
+t= 88.000ms | q=  0.0000MB p=0.00001 arr= 418.385MB ct= 419.617MB (arr-ct)=-1261.317KB waste=  59.846MB | sender_A:RC=20.948Gbps a=0.0559 sender_B:RC=20.918Gbps a=0.0560
+t= 89.000ms | q=  0.0000MB p=0.00001 arr= 423.550MB ct= 424.385MB (arr-ct)= -855.305KB waste=  59.934MB | sender_A:RC=21.673Gbps a=0.0522 sender_B:RC=21.643Gbps a=0.0523
+t= 90.000ms | q=  0.0000MB p=0.00001 arr= 428.833MB ct= 429.153MB (arr-ct)= -327.711KB waste=  59.967MB | sender_A:RC=22.398Gbps a=0.0487 sender_B:RC=22.368Gbps a=0.0488
+t= 91.000ms | q=  0.0868MB p=0.08602 arr= 434.009MB ct= 433.922MB (arr-ct)=   88.874KB waste=  59.967MB | sender_A:RC=17.832Gbps a=0.0762 sender_B:RC=18.194Gbps a=0.0742
+t= 92.000ms | q=  0.0000MB p=0.00001 arr= 438.122MB ct= 438.690MB (arr-ct)= -581.401KB waste=  60.027MB | sender_A:RC=17.383Gbps a=0.0800 sender_B:RC=17.350Gbps a=0.0802
+t= 93.000ms | q=  0.0000MB p=0.00001 arr= 442.455MB ct= 443.459MB (arr-ct)=-1027.794KB waste=  60.133MB | sender_A:RC=18.108Gbps a=0.0746 sender_B:RC=18.076Gbps a=0.0748
+t= 94.000ms | q=  0.0000MB p=0.00001 arr= 446.985MB ct= 448.227MB (arr-ct)=-1271.415KB waste=  60.263MB | sender_A:RC=18.834Gbps a=0.0696 sender_B:RC=18.802Gbps a=0.0698
+t= 95.000ms | q=  0.0000MB p=0.00001 arr= 451.695MB ct= 452.995MB (arr-ct)=-1331.579KB waste=  60.400MB | sender_A:RC=19.559Gbps a=0.0649 sender_B:RC=19.527Gbps a=0.0651
+t= 96.000ms | q=  0.0000MB p=0.00001 arr= 456.567MB ct= 457.764MB (arr-ct)=-1225.758KB waste=  60.526MB | sender_A:RC=20.285Gbps a=0.0606 sender_B:RC=20.253Gbps a=0.0607
+t= 97.000ms | q=  0.0000MB p=0.00001 arr= 461.585MB ct= 462.532MB (arr-ct)= -969.762KB waste=  60.625MB | sender_A:RC=21.010Gbps a=0.0565 sender_B:RC=20.978Gbps a=0.0566
+t= 98.000ms | q=  0.0000MB p=0.00001 arr= 466.736MB ct= 467.300MB (arr-ct)= -577.896KB waste=  60.685MB | sender_A:RC=21.736Gbps a=0.0527 sender_B:RC=21.703Gbps a=0.0529
+t= 99.000ms | q=  0.0000MB p=0.00001 arr= 472.007MB ct= 472.069MB (arr-ct)=  -63.103KB waste=  60.691MB | sender_A:RC=22.461Gbps a=0.0492 sender_B:RC=22.429Gbps a=0.0493
+t=100.000ms | q=  0.0000MB p=0.00001 arr= 476.618MB ct= 476.837MB (arr-ct)= -224.133KB waste=  60.714MB | sender_A:RC=17.253Gbps a=0.0818 sender_B:RC=17.210Gbps a=0.0820
+t=100.002ms | q=  0.0000MB p=0.00001 arr= 476.626MB ct= 476.847MB (arr-ct)= -225.484KB waste=  60.714MB | sender_A:RC=17.255Gbps a=0.0818 sender_B:RC=17.212Gbps a=0.0820
