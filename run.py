@@ -18,7 +18,7 @@ import json
 import re
 
 # randomID
-random.seed(datetime.now())
+#random.seed(datetime.now())
 MAX_RAND_RANGE = 1000000000
 
 # config template

@@ -8,13 +8,11 @@
 #include <ns3/random-variable.h>
 #include <ns3/ppp-header.h>
 #include <ns3/qbb-net-device.h>
+
+#include <algorithm>
 namespace ns3 {
 
 Time WanRouting::epoch_duration = MicroSeconds(1000); // 1ms
-
-uint64_t WanRouting::GetQpKey(uint32_t dip, uint16_t sport, uint16_t dport, uint16_t pg) {
-    return ((uint64_t)dip << 32) | ((uint64_t)sport << 16) | (uint64_t)pg | (uint64_t)dport;
-}
 
 WanRouting::WanRouting() {
     // 初始化回调函数为空
@@ -22,22 +20,105 @@ WanRouting::WanRouting() {
     m_hash_seed2 = rand();
 }
 
+void WanRouting::DstDCHandler::Init(WanRouting* wan_routing, int64_t max_rate) {
+    m_wanRouting = wan_routing;
+    this->max_rate = max_rate;
+    guaranteed_rate = static_cast<int64_t>(max_rate * 0.3);
+
+    sensitive_rtt = MicroSeconds(0);
+    last_update_time = Seconds(0);
+    entry_timeout_count = 0;
+
+    rtt_sum = Seconds(0);
+    rtt_num = 0;
+    min_rtt = Seconds(0);
+    rtt_diff = Seconds(0);
+    prev_rtt = Seconds(0);
+    rtt_miss_counter = 0;
+    send_bytes_history.clear();
+    rtt_history.clear();
+
+    cc_last_update = Simulator::Now();
+    cur_rate = 0;
+
+    last_cnp_send_time = Seconds(0);
+    ref_rate = guaranteed_rate;
+    total_send_bytes = 0;
+
+    start_bytes = 0;
+    end_bytes = static_cast<int64_t>(ref_rate * WanRouting::epoch_duration.GetSeconds());
+    cur_bytes = 0;
+}
+
+void WanRouting::DstDCHandler::record_rtt(Time rtt) {
+    rtt_sum += rtt;
+    rtt_num++;
+
+    // 记录EWMA RTT
+    Time delta_t = Simulator::Now() - last_update_time;
+    last_update_time = Simulator::Now();
+    double weight1 = std::min(delta_t.GetSeconds() / rtt_tau.GetSeconds(), 1.0);
+    sensitive_rtt = Seconds((1 - weight1) * sensitive_rtt.GetSeconds() + weight1 * rtt.GetSeconds());
+}
+
+int64_t WanRouting::DstDCHandler::get_std_bytes() const {
+    Time epoch_elapsed = Simulator::Now() - m_wanRouting->m_epoch_start_time;
+    double ratio = 0.0;
+    if (epoch_elapsed > Seconds(0)) {
+        ratio = epoch_elapsed.GetSeconds() / WanRouting::epoch_duration.GetSeconds();
+        ratio = std::min(ratio, 1.0);
+    }
+    return start_bytes + static_cast<int64_t>((end_bytes - start_bytes) * ratio);
+}
+
+bool WanRouting::DstDCHandler::update_and_check_cnp(uint32_t pkt_size) {
+    cur_bytes += pkt_size;
+    int64_t std_bytes = get_std_bytes();
+    if (cur_bytes <= std_bytes) {
+        cur_bytes = std_bytes;
+    }
+    int64_t bytes_diff = cur_bytes - std_bytes;
+    uint32_t kmin = 100 * 1024; // 100KB
+    uint32_t kmax = 2048 * 1024; // 2MB
+    double pmax = 1;
+    if (bytes_diff > kmin) {
+        double p = std::min(pmax, pmax * (bytes_diff - kmin) / (kmax - kmin));
+        double rand_val = std::rand() / (RAND_MAX + 1.0);
+        if (rand_val < p) {
+            return true;
+        }
+    }
+    return false;
+
+    //if (bytes_diff > cnp_gen_threshold &&
+    //    (Simulator::Now() - last_cnp_send_time).GetSeconds() >
+    //        cnp_gen_interval.GetSeconds() * (1.0 * cnp_gen_threshold / bytes_diff)) {
+    //    last_cnp_send_time = Simulator::Now();
+    //    return true;
+    //}
+    //return false;
+}
+
 void WanRouting::init() {
     assert(m_switch_id != -1);
     for (const auto& [dst_as, next_hops] : Settings::wan_routing[m_switch_id]) {
-        dst2path_selector[dst_as].routing_table = &m_rtTable[dst_as];
-        for (auto next_dev : next_hops) {
-            dst2path_selector[dst_as].path2weight[next_dev] = 1.0;
-            m_dcHandler[dst_as][next_dev] = DstDCHandler(DynamicCast<QbbNetDevice>(Settings::nodeContainer.Get(m_switch_id)->GetDevice(next_dev))->GetDataRate().GetBitRate() / 8);
+        if (next_hops.empty()) {
+            continue;
         }
-        dst2path_selector[dst_as].set_routing_table();
-        //printf("Switch %u, AS %u, RtTable: ", m_switch_id, dst_as);
-        for (const auto& entry : m_rtTable[dst_as].entries) {
-            //printf("%u ", entry.out_port);
+        uint32_t next_dev = static_cast<uint32_t>(next_hops.front());
+        if (next_hops.size() > 1) {
+            printf("[Warn] wan_routing has %zu next hops for switch %u -> dst_as %u; using the first dev %u (single-path mode)\n",
+                   next_hops.size(), m_switch_id, dst_as, next_dev);
         }
-        //printf("\n");
+        m_rtTable[dst_as] = next_dev;
+        int64_t max_rate = DynamicCast<QbbNetDevice>(Settings::nodeContainer.Get(m_switch_id)->GetDevice(next_dev))
+                               ->GetDataRate()
+                               .GetBitRate() /
+                           8;
+        m_dcHandler[dst_as].Init(this, max_rate);
     }
-    Simulator::Schedule(epoch_duration, &WanRouting::controlplane_logic, this);
+    m_epoch_start_time = Seconds(2);
+    Simulator::Schedule(Seconds(2), &WanRouting::controlplane_logic, this);
     Simulator::Schedule(Seconds(2), &WanRouting::periodic_decrease_bytes, this);
 }
 
@@ -69,19 +150,16 @@ void WanRouting::HandleUdpReceived(Ptr<Packet> p, CustomHeader& ch) {
         return;
     }
 
-    // 获取出端口
+    // 获取出端口（单路径）
     uint32_t flow_hash_value = (Hash5Tuple(ch.sip, ch.dip, ch.udp.sport, ch.udp.dport, ch.udp.pg));
-    uint64_t flow_key = static_cast<uint64_t>(ch.dip) << 32 | flow_hash_value;
-    auto& flowlet_item = m_flowletTable[flow_key];
-    if (flowlet_item.update_time + flowlet_elapsed_time < Simulator::Now()) {
-        flowlet_item.out_port = m_rtTable[dst_as].entries[flow_hash_value % 64].out_port;
-        //printf("Switch %u, dst_as %u, flow_hash_value %u, out_port %u\n", m_switch_id, dst_as, flow_hash_value % 64, flowlet_item.out_port);
-        flowlet_item.create_time = Simulator::Now();
+    auto it = m_rtTable.find(dst_as);
+    if (it == m_rtTable.end()) {
+        m_switchSendToDevCallback(p, ch);
+        return;
     }
-    flowlet_item.update_time = Simulator::Now();
-    uint32_t out_port = flowlet_item.out_port;
+    uint32_t out_port = it->second;
 
-    auto& dc_handler = m_dcHandler.at(dst_as).at(out_port);
+    auto& dc_handler = m_dcHandler.at(dst_as);
     // RTT过滤
     FlowIDNUMTag fit;
     assert(p->PeekPacketTag(fit));
@@ -132,16 +210,18 @@ void WanRouting::HandleAckReceived(Ptr<Packet> p, CustomHeader& ch) {
         return;
     }
     uint32_t flow_hash_value = (Hash5Tuple(ch.dip, ch.sip, ch.ack.dport, ch.ack.sport, ch.ack.pg)); // 这里ack的源和目的地要反过来
-    uint64_t flow_key = static_cast<uint64_t>(ch.sip) << 32 | flow_hash_value;
-    if (m_flowletTable.find(flow_key) == m_flowletTable.end()) {
-        //printf("Switch %u, flowlet not found\n", m_switch_id);
+    auto rtIt = m_rtTable.find(src_as);
+    if (rtIt == m_rtTable.end()) {
         m_switchSendToDevCallback(p, ch);
         return;
     }
-    auto& flowlet_item = m_flowletTable[flow_key];
-    uint32_t out_port = flowlet_item.out_port;
-
-    auto& dcHandler = m_dcHandler.at(src_as).at(out_port);
+    uint32_t out_port = rtIt->second;
+    auto dcIt = m_dcHandler.find(src_as);
+    if (dcIt == m_dcHandler.end()) {
+        m_switchSendToDevCallback(p, ch);
+        return;
+    }
+    auto& dcHandler = dcIt->second;
     uint32_t hashed_seq = Hash5tupleSeq(ch.dip, ch.sip, ch.ack.dport, ch.ack.sport, ch.ack.pg, ch.ack.seq);
     uint32_t index = (flow_hash_value ^ (hashed_seq % 16)) % rtt_table_size;
     //uint32_t index = hashed_seq % rtt_table_size;
@@ -174,68 +254,69 @@ void WanRouting::HandleAckReceived(Ptr<Packet> p, CustomHeader& ch) {
 
 void WanRouting::periodic_decrease_bytes() {
     Simulator::Schedule(bytes_decreace_interval, &WanRouting::periodic_decrease_bytes, this);
-    for (auto& [dst_as, port_map] : m_dcHandler) {
-        for (auto& [port, dc_handler] : port_map) {
-            int64_t bytes_diff = dc_handler.cur_bytes - dc_handler.get_std_bytes();
-            fprintf(logfile::accumulated_bytes_log, "%ld,%u,%u,%ld\n", 
-                Simulator::Now().GetNanoSeconds(), m_switch_id, dst_as, bytes_diff);
-            if (bytes_diff < 500*1000) {
-                dc_handler.cur_bytes = dc_handler.get_std_bytes() + bytes_diff * 0.75;
-                //dc_handler.cur_bytes = dc_handler.get_std_bytes() + bytes_diff * 0.75;
-            } /*else if (bytes_diff >= 500*1000) {
-                dc_handler.cur_bytes -= 125 * 1000;
-            } */
-        }
+    for (auto& [dst_as, dc_handler] : m_dcHandler) {
+        int64_t bytes_diff = dc_handler.cur_bytes - dc_handler.get_std_bytes();
+        fprintf(logfile::accumulated_bytes_log, "%ld,%u,%u,%ld\n", 
+            Simulator::Now().GetNanoSeconds(), m_switch_id, dst_as, bytes_diff);
+        //if (bytes_diff < 500*1000) {
+        //    dc_handler.cur_bytes = dc_handler.get_std_bytes() + bytes_diff * 0.75;
+        //    //dc_handler.cur_bytes = dc_handler.get_std_bytes() + bytes_diff * 0.75;
+        //} /*else if (bytes_diff >= 500*1000) {
+        //    dc_handler.cur_bytes -= 125 * 1000;
+        //} */
     }
 }
 
 void WanRouting::controlplane_logic() {
     Simulator::Schedule(epoch_duration, &WanRouting::controlplane_logic, this);
-    if (Simulator::Now() < Seconds(2)) {
-        return;
-    }
-    for (auto& [dst_as, port_map] : m_dcHandler) {
-        for (auto& [port, dc_handler] : port_map) {
-            //logging
-            fprintf(logfile::rtt_log, 
-                "%" PRIu64 ",%" PRIu32 ",%" PRIu32 ",%" PRIu32 ",%.3f,%" PRIu32 "\n",  // 格式说明符
-                Simulator::Now().GetNanoSeconds(), m_switch_id, dst_as,
-                Settings::if2id.at(Settings::nodeContainer.Get(m_switch_id)).at(port),
-                dc_handler.sensitive_rtt.GetSeconds() * 1000.0, dc_handler.entry_timeout_count
-            );
-            dc_handler.entry_timeout_count = 0;
-            fprintf(logfile::rate_monitor, "%lu,%u,%u,%lu,%lu\n", 
-                Simulator::Now().GetNanoSeconds(), Settings::nodeInfos[m_switch_id].as_id, dst_as, 
-                dc_handler.get_normalize_cur_rate(), dc_handler.ref_rate);
-
-            
-            //速率调整
-            //if (dc_handler.rtt_num == 0) {
-            //    printf("No RTT information %u->%u\n", Settings::nodeInfos[m_switch_id].as_id, dst_as);
-            //    dc_handler.rtt_num = 1;
-            //    dc_handler.rtt_sum = dc_handler.prev_rtt;
-            //}
-            //if (dc_handler.rtt_sum > NanoSeconds(1)) {
-            //    dc_handler.rtt_history.push_back(Seconds(dc_handler.rtt_sum.GetSeconds() / dc_handler.rtt_num));
-            //}
-            //continue;
-            if (Settings::wan_cc_mode == Settings::WanCCMode::WAN_OPT) {
-                if (dc_handler.sensitive_rtt >= MicroSeconds(600)) {//rtt已经接收到第一个数据
-                    printf("[%ld]AS%u->%u, SenRtt%.2lf ", 
-                        Simulator::Now().GetNanoSeconds(), Settings::nodeInfos[m_switch_id].as_id, dst_as, 
-                        dc_handler.sensitive_rtt.GetSeconds() * 1000);
-                    dc_handler.send_bytes_history.push_back(dc_handler.total_send_bytes);
-                    dc_handler.update_ref_rate();
-                }
-                dc_handler.start_bytes = dc_handler.end_bytes - dc_handler.cur_bytes;
-                dc_handler.end_bytes = dc_handler.start_bytes + dc_handler.ref_rate * epoch_duration.GetSeconds();
-                dc_handler.cur_bytes = 0;
-                
-                dc_handler.rtt_sum = Seconds(0);
-                dc_handler.rtt_num = 0;
-            }
-            dc_handler.total_send_bytes = 0;
+    m_epoch_start_time = Simulator::Now();
+    for (auto& [dst_as, dc_handler] : m_dcHandler) {
+        auto rtIt = m_rtTable.find(dst_as);
+        if (rtIt == m_rtTable.end()) {
+            continue;
         }
+        uint32_t out_port = rtIt->second;
+
+        //logging
+        fprintf(logfile::rtt_log, 
+            "%" PRIu64 ",%" PRIu32 ",%" PRIu32 ",%" PRIu32 ",%.3f,%" PRIu32 "\n",  // 格式说明符
+            Simulator::Now().GetNanoSeconds(), m_switch_id, dst_as,
+            Settings::if2id.at(Settings::nodeContainer.Get(m_switch_id)).at(out_port),
+            dc_handler.sensitive_rtt.GetSeconds() * 1000.0, dc_handler.entry_timeout_count
+        );
+        dc_handler.entry_timeout_count = 0;
+        fprintf(logfile::rate_monitor, "%lu,%u,%u,%lu,%lu\n", 
+            Simulator::Now().GetNanoSeconds(), Settings::nodeInfos[m_switch_id].as_id, dst_as, 
+            dc_handler.get_normalize_cur_rate(), dc_handler.ref_rate);
+
+        
+        //速率调整
+        //if (dc_handler.rtt_num == 0) {
+        //    printf("No RTT information %u->%u\n", Settings::nodeInfos[m_switch_id].as_id, dst_as);
+        //    dc_handler.rtt_num = 1;
+        //    dc_handler.rtt_sum = dc_handler.prev_rtt;
+        //}
+        //if (dc_handler.rtt_sum > NanoSeconds(1)) {
+        //    dc_handler.rtt_history.push_back(Seconds(dc_handler.rtt_sum.GetSeconds() / dc_handler.rtt_num));
+        //}
+        //continue;
+        if (Settings::wan_cc_mode == Settings::WanCCMode::WAN_OPT) {
+            if (dc_handler.sensitive_rtt >= MicroSeconds(600)) {//rtt已经接收到第一个数据
+                printf("[%ld]AS%u->%u, SenRtt%.2lf ", 
+                    Simulator::Now().GetNanoSeconds(), Settings::nodeInfos[m_switch_id].as_id, dst_as, 
+                    dc_handler.sensitive_rtt.GetSeconds() * 1000);
+                dc_handler.send_bytes_history.push_back(dc_handler.total_send_bytes);
+                dc_handler.update_ref_rate();
+            }
+            //将参考速率下发给速率控制模块
+            dc_handler.start_bytes = dc_handler.end_bytes - dc_handler.cur_bytes;
+            dc_handler.end_bytes = dc_handler.start_bytes + dc_handler.ref_rate * epoch_duration.GetSeconds();
+            dc_handler.cur_bytes = 0;
+            
+            dc_handler.rtt_sum = Seconds(0);
+            dc_handler.rtt_num = 0;
+        }
+        dc_handler.total_send_bytes = 0;
     }
     fflush(logfile::rate_monitor);
 }
@@ -271,12 +352,12 @@ void WanRouting::DstDCHandler::update_ref_rate() {
     rtt_miss_counter = 0;
     Time new_rtt_diff = cur_rtt - prev_rtt;
     prev_rtt = cur_rtt;
-    rtt_diff = Seconds((1 - alpha) * rtt_diff.GetSeconds() + alpha * new_rtt_diff.GetSeconds());
-    Time threshold = min_rtt + MicroSeconds(1000); //Magic Number
+    rtt_diff = Seconds((1 - m_wanRouting->m_alpha) * rtt_diff.GetSeconds() + m_wanRouting->m_alpha * new_rtt_diff.GetSeconds());
+    Time threshold = min_rtt + m_wanRouting->m_T;
 
     double epochs_per_rtt = min_rtt.GetSeconds() / WanRouting::epoch_duration.GetSeconds();
-    int64_t ai = max_rate / epochs_per_rtt * h;
-    double md = std::pow(beta, 1 / epochs_per_rtt);
+    int64_t ai = max_rate / epochs_per_rtt * m_wanRouting->m_h;
+    double md = std::pow(m_wanRouting->m_beta, 1 / epochs_per_rtt);
     printf("ai: %.2lf, md: %.2lf, ", ai / 1e9, md);
     if (cur_rtt > threshold) {
         //double md_factor = std::pow(0.6, 0.001 / )

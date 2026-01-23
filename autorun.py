@@ -35,7 +35,7 @@ def main():
     p.add_argument("--dynamic_list", default="0,50,100,150,200")
     p.add_argument("--modes", default="wo_gscc,inf_wo_gscc,gscc")
     p.add_argument("--inf_buffer_mb", type=int, default=4000)
-    p.add_argument("--sleep", type=float, default=0.0)
+    p.add_argument("--sleep", type=float, default=1)
     p.add_argument("--dry_run", action="store_true")
     args, extra = p.parse_known_args()
 
