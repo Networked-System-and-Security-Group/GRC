@@ -10,6 +10,7 @@
 #include <ns3/qbb-net-device.h>
 
 #include <algorithm>
+const int rate_control_ver = 1;
 namespace ns3 {
 
 Time WanRouting::epoch_duration = MicroSeconds(1000); // 1ms
@@ -72,31 +73,36 @@ int64_t WanRouting::DstDCHandler::get_std_bytes() const {
 }
 
 bool WanRouting::DstDCHandler::update_and_check_cnp(uint32_t pkt_size) {
-    cur_bytes += pkt_size;
-    int64_t std_bytes = get_std_bytes();
-    if (cur_bytes <= std_bytes) {
-        cur_bytes = std_bytes;
-    }
-    int64_t bytes_diff = cur_bytes - std_bytes;
-    uint32_t kmin = 100 * 1024; // 100KB
-    uint32_t kmax = 2048 * 1024; // 2MB
-    double pmax = 1;
-    if (bytes_diff > kmin) {
-        double p = std::min(pmax, pmax * (bytes_diff - kmin) / (kmax - kmin));
-        double rand_val = std::rand() / (RAND_MAX + 1.0);
-        if (rand_val < p) {
+    if (rate_control_ver == 1) {
+        cur_bytes += pkt_size;
+        int64_t std_bytes = get_std_bytes();
+        if (cur_bytes <= std_bytes) {
+            cur_bytes = std_bytes;
+        }
+        int64_t bytes_diff = cur_bytes - std_bytes;
+        uint32_t kmin = 100 * 1024; // 100KB
+        uint32_t kmax = 2048 * 1024; // 2MB
+        double pmax = 1;
+        if (bytes_diff > kmin) {
+            double p = std::min(pmax, pmax * (bytes_diff - kmin) / (kmax - kmin));
+            double rand_val = std::rand() / (RAND_MAX + 1.0);
+            if (rand_val < p) {
+                return true;
+            }
+        }
+        return false;
+    } else {
+        cur_bytes += pkt_size;
+        int64_t std_bytes = get_std_bytes();
+        int64_t bytes_diff = cur_bytes - std_bytes;
+        if (bytes_diff > cnp_gen_threshold &&
+            (Simulator::Now() - last_cnp_send_time).GetSeconds() >
+                cnp_gen_interval.GetSeconds() * (1.0 * cnp_gen_threshold / bytes_diff)) {
+            last_cnp_send_time = Simulator::Now();
             return true;
         }
+        return false;
     }
-    return false;
-
-    //if (bytes_diff > cnp_gen_threshold &&
-    //    (Simulator::Now() - last_cnp_send_time).GetSeconds() >
-    //        cnp_gen_interval.GetSeconds() * (1.0 * cnp_gen_threshold / bytes_diff)) {
-    //    last_cnp_send_time = Simulator::Now();
-    //    return true;
-    //}
-    //return false;
 }
 
 void WanRouting::init() {
@@ -258,12 +264,12 @@ void WanRouting::periodic_decrease_bytes() {
         int64_t bytes_diff = dc_handler.cur_bytes - dc_handler.get_std_bytes();
         fprintf(logfile::accumulated_bytes_log, "%ld,%u,%u,%ld\n", 
             Simulator::Now().GetNanoSeconds(), m_switch_id, dst_as, bytes_diff);
-        //if (bytes_diff < 500*1000) {
-        //    dc_handler.cur_bytes = dc_handler.get_std_bytes() + bytes_diff * 0.75;
-        //    //dc_handler.cur_bytes = dc_handler.get_std_bytes() + bytes_diff * 0.75;
-        //} /*else if (bytes_diff >= 500*1000) {
-        //    dc_handler.cur_bytes -= 125 * 1000;
-        //} */
+        if (bytes_diff < 500*1000 && rate_control_ver != 1) {
+            dc_handler.cur_bytes = dc_handler.get_std_bytes() + bytes_diff * 0.75;
+            //dc_handler.cur_bytes = dc_handler.get_std_bytes() + bytes_diff * 0.75;
+        } /*else if (bytes_diff >= 500*1000) {
+            dc_handler.cur_bytes -= 125 * 1000;
+        } */
     }
 }
 
