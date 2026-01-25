@@ -25,8 +25,6 @@ MAX_RAND_RANGE = 1000000000
 config_template = """TOPOLOGY_FILE config/{topo}.txt
 FLOW_FILE config/{flow}.txt
 OUTPUT_DIR_PATH mix/output/{id}
-QLEN_MON_START {qlen_mon_start}
-QLEN_MON_END {qlen_mon_end}
 SW_MONITORING_INTERVAL {sw_monitoring_interval}
 
 FLOWGEN_START_TIME {flowgen_start_time}
@@ -174,6 +172,12 @@ def main():
     parser.add_argument('--wan_cc_mode', type=int, default=1, help="DC间拥塞控制方案")#
     parser.add_argument('--msg', type=str, default='', help="message")
     parser.add_argument('--config', type=str, default='', help="config.txt file to use, if '', generate a new config.txt file")
+    parser.add_argument(
+        '--extra',
+        action='append',
+        default=[],
+        help="temporary passthrough config knob, format KEY=VALUE; can be repeated",
+    )
 
     args = parser.parse_args()
 
@@ -222,6 +226,18 @@ def main():
     inter_load_all = args.inter_load_all
     wan_cc_mode = args.wan_cc_mode
     msg = args.msg
+
+    # Parse passthrough extras: KEY=VALUE (VALUE kept as raw string)
+    extra_kv = {}
+    for item in args.extra:
+        if '=' not in item:
+            raise Exception(f"CONFIG ERROR : --extra expects KEY=VALUE, got: {item}")
+        k, v = item.split('=', 1)
+        k = k.strip()
+        v = v.strip()
+        if not k:
+            raise Exception(f"CONFIG ERROR : --extra has empty KEY in: {item}")
+        extra_kv[k] = v
 
     # get over-subscription ratio from topoogy name
 
@@ -303,10 +319,6 @@ def main():
     pmax_map = "6 %d %d %d %d %d %.2f %d %.2f %d %.2f %d %.2f" % (
         bw*200000000, 0.2, bw*500000000, 0.2, bw*1000000000, 0.2, bw*2*1000000000, 0.2, bw*2500000000, 0.2, bw*4*1000000000, 0.2)
 
-    # queue monitoring
-    qlen_mon_start = flowgen_start_time
-    qlen_mon_end = flowgen_stop_time
-
     if (cc_mode == 1):  # DCQCN
         ai = 10 * bw / 25
         hai = 25 * bw / 25
@@ -317,7 +329,7 @@ def main():
         ewma_gain = 0.00390625
 
         config = config_template.format(id=config_ID, topo=topo, flow=flow,
-                                        qlen_mon_start=qlen_mon_start, qlen_mon_end=qlen_mon_end, flowgen_start_time=flowgen_start_time,
+                        flowgen_start_time=flowgen_start_time,
                                         flowgen_stop_time=flowgen_stop_time, sw_monitoring_interval=sw_monitoring_interval,
                                         buffer_size=buffer, dci_buffer_size=dci_buffer, wan_buffer_size=wan_buffer, lb_mode=lb_mode, 
                                         enabled_pfc=enabled_pfc, enabled_irn=enabled_irn,
@@ -337,7 +349,7 @@ def main():
         ewma_gain = 0.00390625
 
         config = config_template.format(id=config_ID, topo=topo, flow=flow,
-                                        qlen_mon_start=qlen_mon_start, qlen_mon_end=qlen_mon_end, flowgen_start_time=flowgen_start_time,
+                        flowgen_start_time=flowgen_start_time,
                                         flowgen_stop_time=flowgen_stop_time, sw_monitoring_interval=sw_monitoring_interval,
                                         buffer_size=buffer, dci_buffer_size=dci_buffer, wan_buffer_size=wan_buffer, lb_mode=lb_mode, 
                                         enabled_pfc=enabled_pfc, enabled_irn=enabled_irn,
@@ -352,6 +364,11 @@ def main():
 
     with open(config_name, "w") as file:
         if not args.config:
+            if extra_kv:
+                if not config.endswith('\n'):
+                    config += '\n'
+                for k, v in extra_kv.items():
+                    config += f"{k} {v}\n"
             file.write(config)
         else:
             # 先读入已有的config文件，将其中的OUTPUT_DIR_PATH替换为新的目录, TIME替换为当前时间
@@ -373,6 +390,9 @@ def main():
 
             existing_config = _upsert_line(existing_config, 'DCI_BUFFER_SIZE', str(dci_buffer))
             existing_config = _upsert_line(existing_config, 'WAN_BUFFER_SIZE', str(wan_buffer))
+
+            for k, v in extra_kv.items():
+                existing_config = _upsert_line(existing_config, k, v)
             file.write(existing_config)
 
     if msg:

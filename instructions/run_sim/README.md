@@ -59,6 +59,9 @@ python3 run.py --simul_time 0.05 --cdf WebSearch --intra_load 30 --inter_load_al
 	- 对应 `Settings::WanCCMode`：`0 NONE` / `1 WAN_OPT` / `2 WITH_ECN`
 - `--my_flow`（默认空字符串）：指定自定义 flow 文件名（不带 `.txt`）；为空则用仓库默认命名规则
 - `--config`（默认空字符串）：复用已有的 config.txt（会自动替换新的 `OUTPUT_DIR_PATH` 和 `TIME`）
+- `--extra`（默认空）：临时参数透传（不需要改 C++ 解析也不会破坏解析流）
+	- 用法：`--extra KEY=VALUE`，可重复多次
+	- 行为：写入 `config.txt` 为 `KEY VALUE`；如果 `scratch/remote.cc` 不认识该 key，会自动把原始字符串保存到 `Settings` 的哈希表中（见 `Settings::GetRawParam(...)`）
 - `--stdout`（默认 `False`）：不重定向日志，直接前台输出
 - `--debug`（默认 `False`）：用 gdb 启动 `scratch/remote`（用于调 C++）
 - `--msg`（默认空字符串）：追加记录到 `mix/history.txt`

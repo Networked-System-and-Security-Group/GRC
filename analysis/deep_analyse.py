@@ -163,8 +163,8 @@ class Analyser:
         plt.figure(figsize=(5, 4), dpi=300)
         plt.plot(df['timestamp_ns'] / 1e9, df['real_rate'] / 1e9, label='Real Rate', color='blue')
         plt.plot(df['timestamp_ns'] / 1e9, df['ref_rate'] / 1e9, label='Base Rate', color='red', linestyle='--')
-        plt.xlabel('时间轴(s)', fontsize=14, fontproperties=font_prop)
-        plt.ylabel('速率(GB/s)', fontsize=14, fontproperties=font_prop)
+        plt.xlabel('Time (s)', fontsize=14)
+        plt.ylabel('Rate (GB/s)', fontsize=14)
         #plt.title(f'DC Rate Monitor: {src_as}->{dst_as}', fontsize=14)
         plt.grid(True, linestyle='--', alpha=0.7)
         plt.legend(fontsize=10)
@@ -197,8 +197,8 @@ class Analyser:
                 return
             else:
                 plt.plot(df['timestamp_ns'] / 1e9, df['rate'] / 1e9, label=f'Flow {flow_id}')
-        plt.xlabel('时间轴(s)', fontsize=14, fontproperties=font_prop)
-        plt.ylabel('速率(GB/s)', fontsize=14, fontproperties=font_prop)
+        plt.xlabel('Time (s)', fontsize=14)
+        plt.ylabel('Rate (GB/s)', fontsize=14)
         plt.xticks(fontsize=12)
         plt.yticks(fontsize=12)
         #plt.title('QP Rate for Selected Flows', fontsize=14)
@@ -320,8 +320,8 @@ class Analyser:
         plt.figure(figsize=(5,4), dpi=300)
         for next_hop, group in df.groupby('next_hop'):
             plt.plot(group['timestamp_ns'] / 1e9, group['bytes'] / 1e6, label=f'Hop {next_hop}')
-        plt.xlabel('时间戳(s)', fontsize=16, fontproperties=font_prop)
-        plt.ylabel('队列长度(MB)', fontsize=16, fontproperties=font_prop)
+        plt.xlabel('Timestamp (s)', fontsize=16)
+        plt.ylabel('Queue Length (MB)', fontsize=16)
         plt.title(f"Buffer Utilization switch {switch_id}, {'egress' if egress else 'ingress'}")
         plt.legend()
 
@@ -339,7 +339,7 @@ class Analyser:
             y += 1
             y_tickets.append(nbr)
         plt.yticks(range(1, y), y_tickets)
-        plt.xlabel('时间戳(s)', fontsize=12, fontproperties=font_prop)
+        plt.xlabel('Timestamp (s)', fontsize=12)
         plt.title(f'PFC Timeline: node {node}')
         plt.legend()
         plt.tight_layout()

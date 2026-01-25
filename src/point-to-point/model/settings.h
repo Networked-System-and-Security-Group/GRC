@@ -237,6 +237,32 @@ class Settings {
 
     static uint32_t dropped_flow_id;
 
+    // Temporary parameter passthrough: unknown config keys are stored here
+    // as raw string values for easy access during experimentation.
+    static inline void SetRawParam(const std::string& key, const std::string& value) {
+        raw_params[key] = value;
+    }
+    static inline bool HasRawParam(const std::string& key) {
+        return raw_params.find(key) != raw_params.end();
+    }
+    static inline std::string GetRawParam(const std::string& key,
+                                          const std::string& defaultValue = "") {
+        auto it = raw_params.find(key);
+        if (it == raw_params.end()) {
+            return defaultValue;
+        }
+        return it->second;
+    }
+    static inline const std::unordered_map<std::string, std::string>& GetRawParams() {
+        return raw_params;
+    }
+    static inline void ClearRawParams() {
+        raw_params.clear();
+    }
+
+   private:
+    static std::unordered_map<std::string, std::string> raw_params;
+
 
 };
 

@@ -105,6 +105,8 @@ void Settings::record_flow_distribution(Ptr<Packet> p, CustomHeader &ch, Ptr<Nod
 
 uint32_t Settings::dropped_flow_id = -1;
 
+std::unordered_map<std::string, std::string> Settings::raw_params;
+
 
 void Settings::print_flow_distribution(Time interval) {
     for (auto it = flowCounter.begin(); it != flowCounter.end(); ++it) {

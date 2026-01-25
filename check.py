@@ -3,6 +3,72 @@ import os
 from datetime import datetime
 import sys
 import re
+import subprocess
+from dataclasses import dataclass
+from typing import Iterable, Optional
+
+
+@dataclass(frozen=True)
+class RemoteProcess:
+    pid: int
+    command: str
+    config_path: Optional[str]
+
+
+def _repo_root() -> str:
+    return os.path.dirname(os.path.abspath(__file__))
+
+
+def _abs_from_repo(path: str) -> str:
+    if os.path.isabs(path):
+        return os.path.abspath(path)
+    return os.path.abspath(os.path.join(_repo_root(), path))
+
+
+def _extract_config_path(command: str) -> Optional[str]:
+    # Best-effort: scratch/remote is launched with a config.txt path argument.
+    for token in command.split():
+        if token.endswith("config.txt"):
+            return token
+    return None
+
+
+def _list_remote_processes_for_this_repo() -> list[RemoteProcess]:
+    repo = _repo_root()
+    ps = subprocess.run(["ps", "aux"], capture_output=True, text=True, check=False)
+    lines = ps.stdout.splitlines()
+
+    procs: list[RemoteProcess] = []
+    for line in lines:
+        if "scratch/remote" not in line:
+            continue
+        if " grep " in f" {line} ":
+            continue
+        parts = line.split(None, 10)
+        if len(parts) < 11:
+            continue
+
+        try:
+            pid = int(parts[1])
+        except ValueError:
+            continue
+
+        command = parts[10]
+        config_path = _extract_config_path(command)
+
+        # Filter by the current repo root.
+        if config_path is not None:
+            abs_cfg = _abs_from_repo(config_path)
+            if not abs_cfg.startswith(repo + os.sep):
+                continue
+        else:
+            # Fallback: if we can't find config.txt, at least ensure the command contains this repo path.
+            if repo not in command:
+                continue
+
+        procs.append(RemoteProcess(pid=pid, command=command, config_path=config_path))
+
+    return procs
 
 def check_folders_for_log(n=5):
     # 获取当前目录下的所有子文件夹
@@ -33,14 +99,11 @@ def check_folders_for_log(n=5):
                     print(f"{os.path.basename(folder)}: \tNot finished.\t{log_content.count('已导入') * 1000}")                    
         else:
             print(f"{os.path.basename(folder)}: \tconfig.log file not found.")
-    # 使用 ps aux | grep scratch/remote 检查所有相关进程
-    processes = os.popen("ps aux | grep scratch/remote | grep -v grep").read().strip().split('\n')
-    for process in processes:
-        if 'python2' in process or 'grep' in process or process == '':
-            continue
-        pid = process.split()[1]
-        experiment_name = process.split()[-1]
-        print(f"Process ID: {pid}, Experiment Name: {experiment_name}")
+
+    # Only show scratch/remote processes belonging to THIS repo.
+    for proc in _list_remote_processes_for_this_repo():
+        experiment = proc.config_path or "(unknown config)"
+        print(f"Process ID: {proc.pid}, Experiment: {experiment}")
 
 def convert_str_to_id(config_ids_str: str) -> list[int]:
     ids = []
@@ -54,15 +117,11 @@ def convert_str_to_id(config_ids_str: str) -> list[int]:
 
 def kill_process_by_id(config_ids_str: str):
     ids = convert_str_to_id(config_ids_str)
-    processes = os.popen("ps aux | grep scratch/remote | grep -v grep").read().strip().split('\n')
-    for process in processes:
-        if 'python2' in process or 'grep' in process:
-            continue
-        pid = process.split()[1]
-        experiment_name = process.split()[-1]
+    for proc in _list_remote_processes_for_this_repo():
+        experiment_name = proc.config_path or proc.command
         if any(f'[{id}]' in experiment_name for id in ids):
-            print(f"Process ID: {pid}, Experiment Name: {experiment_name}")
-            os.system(f"kill -9 {pid}")
+            print(f"Killing PID: {proc.pid}, Experiment: {experiment_name}")
+            os.kill(proc.pid, 9)
 
 if __name__ == "__main__":
     command = sys.argv[1]

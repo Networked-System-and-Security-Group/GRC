@@ -11,6 +11,7 @@
 #include <iostream>
 #include <unordered_map>
 #include <filesystem>
+#include <cctype>
 
 #include "ns3/applications-module.h"
 #include "ns3/broadcom-node.h"
@@ -40,6 +41,13 @@
 using namespace ns3;
 using namespace std;
 
+static inline std::string _TrimWs(std::string s) {
+    auto notSpace = [](unsigned char ch) { return !std::isspace(ch); };
+    s.erase(s.begin(), std::find_if(s.begin(), s.end(), notSpace));
+    s.erase(std::find_if(s.rbegin(), s.rend(), notSpace).base(), s.end());
+    return s;
+}
+
 NS_LOG_COMPONENT_DEFINE("GENERIC_SIMULATION");
 
 /*------Load balancing parameters-----*/
@@ -58,8 +66,6 @@ double pause_time = 5;  // PFC pause, microseconds
 double flowgen_start_time = 2.0, flowgen_stop_time = 2.5, simulator_extra_time = 3.0;//0.15;
 // queue length monitoring time is not used in this simulator
 // uint32_t qlen_dump_interval = 100000000, qlen_mon_interval = 1000;  // ns
-uint64_t qlen_mon_start;               // ns
-uint64_t qlen_mon_end;                 // ns
 uint32_t switch_mon_interval = 10000;  // ns
 uint32_t server_rtt_mon_interval = 100000;  //ns
 uint64_t cnp_mon_start;                // ns
@@ -757,9 +763,8 @@ int main(int argc, char *argv[]) {
 #else
         conf.open(PATH_TO_PGO_CONFIG);
 #endif
-        while (!conf.eof()) {
-            std::string key;
-            conf >> key;
+        std::string key;
+        while (conf >> key) {
             if (key.compare("OUTPUT_DIR_PATH") == 0) {
                 std::string v;
                 conf >> v;
@@ -878,8 +883,6 @@ int main(int argc, char *argv[]) {
                 double v;
                 conf >> v;
                 flowgen_start_time = v;
-                qlen_mon_start = v;
-                qlen_mon_end = v;
                 cnp_mon_start = v;
                 irn_mon_start = v;
                 std::cerr << "FLOWGEN_START_TIME\t\t" << flowgen_start_time << "\n";
@@ -1012,12 +1015,6 @@ int main(int argc, char *argv[]) {
             } else if (key.compare("WAN_BUFFER_SIZE") == 0) {
                 conf >> wan_buffer_size;
                 std::cerr << "WAN_BUFFER_SIZE\t\t\t" << wan_buffer_size << '\n';
-            } else if (key.compare("QLEN_MON_START") == 0) {
-                conf >> qlen_mon_start;
-                std::cerr << "QLEN_MON_START\t\t\t\t" << qlen_mon_start << '\n';
-            } else if (key.compare("QLEN_MON_END") == 0) {
-                conf >> qlen_mon_end;
-                std::cerr << "QLEN_MON_END\t\t\t\t" << qlen_mon_end << '\n';
             } else if (key.compare("MULTI_RATE") == 0) {
                 int v;
                 conf >> v;
@@ -1043,7 +1040,15 @@ int main(int argc, char *argv[]) {
                 conf >> v;
                 Settings::wan_cc_mode = static_cast<Settings::WanCCMode>(v);
                 std::cerr << "WAN_CC_MODE\t\t\t" << v << "\n";
-            } 
+            } else {
+                // Unknown key: consume the rest of the line and store as raw string.
+                // This enables quick experimentation without plumbing every knob.
+                std::string rawValue;
+                std::getline(conf, rawValue);
+                rawValue = _TrimWs(rawValue);
+                Settings::SetRawParam(key, rawValue);
+                std::cerr << "RAW_PARAM\t\t\t" << key << "\t" << rawValue << "\n";
+            }
 
             fflush(stdout);
         }
