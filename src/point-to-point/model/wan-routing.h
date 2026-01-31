@@ -97,9 +97,6 @@ private:
         int64_t max_rate = 0;
         int64_t guaranteed_rate = 0;
         //int64_t ai;//addition increase
-        Time min_rtt = Seconds(0);
-        Time rtt_diff = Seconds(0);
-        Time prev_rtt = Seconds(0);
         int rtt_miss_counter = 0;
         void update_ref_rate();
         std::vector<uint64_t> send_bytes_history;
@@ -111,6 +108,10 @@ private:
         Time cnp_gen_interval = MicroSeconds(40); //生成cnp的时间间隔
         int64_t ref_rate = 0;//每秒发送的基准字节数，从10GB/s开始
         uint64_t total_send_bytes = 0;
+
+        // CNP trigger statistics per epoch
+        uint64_t epoch_pkt_cnt = 0;
+        uint64_t epoch_cnp_cnt = 0;
 
         int64_t start_bytes = 0;
         int64_t end_bytes = 0;
@@ -133,12 +134,6 @@ private:
 
     // Epoch starts at 2s; updated at the beginning of each epoch.
     Time m_epoch_start_time = Seconds(2);
-
-    // Control parameters (moved from DstDCHandler)
-    double m_alpha = 0.5;
-    double m_beta = 0.6;
-    double m_h = 1.0 / 16.0;
-    Time m_T = MicroSeconds(1000);
 
     static Time epoch_duration;
     void controlplane_logic();

@@ -90,6 +90,7 @@ class Analyser:
         self.qp_rate_info: pd.DataFrame = None #timestamp_ns,flow_id,rate,alpha,target_rate
         self.as_rate_info: pd.DataFrame = None #timestamp_ns,src_as,dst_as,real_rate,ref_rate
         self.cnp_info: pd.DataFrame = None #timestamp_ns,switch_id,flow_id
+        self.cnp_trigger_prob_info: pd.DataFrame = None #timestamp_ns,switch_id,src_as,dst_as,cnp_cnt,pkt_cnt,prob
         self.accumulated_bytes_info: pd.DataFrame = None #timestamp_ns,switch_id,dst_as,accumulated_bytes
         self.pfc_info: pd.DataFrame = None #timestamp_ns,node_id,is_switch,nbr_id,is_pause
         self.config: map[str, object] = {}
@@ -132,9 +133,13 @@ class Analyser:
         if self.cnp_info is None:
             self.cnp_info = pd.read_csv(op.join(self.dir, 'cnp_log'))
 
+    def __read_cnp_trigger_prob_info(self):
+        if self.cnp_trigger_prob_info is None:
+            self.cnp_trigger_prob_info = pd.read_csv(op.join(self.dir, 'cnp_trigger_prob_log'))
+
     @auto_save_plot
-    def plot_cnp_timestamps(self, flow_id:int, start_time:float=2.0, end_time:float=2.05):
-        """绘制指定流ID的CNP发送时间点"""
+    def plot_cnp_timestamps(self, flow_id:int, start_time:float=2.0, end_time:float=2.05, bin_ms:float=1.0):
+        """按时间槽统计 CNP 数量（折线图）"""
         self.__read_cnp_info()
         df = self.cnp_info[(self.cnp_info['flow_id'] == flow_id) &
                            (self.cnp_info['timestamp_ns'] >= start_time*1e9) &
@@ -142,11 +147,57 @@ class Analyser:
         if df.empty:
             print(f'No CNP info for flow_id {flow_id}')
             return
+
+        start_ns = int(start_time * 1e9)
+        end_ns = int(end_time * 1e9)
+        bin_ns = int(bin_ms * 1e6)
+        if bin_ns <= 0:
+            raise ValueError('bin_ms must be > 0')
+
+        edges = np.arange(start_ns, end_ns + bin_ns, bin_ns)
+        counts, _ = np.histogram(df['timestamp_ns'].to_numpy(), bins=edges)
+        centers = (edges[:-1] + edges[1:]) / 2
+
         plt.figure(figsize=(10, 3))
-        plt.scatter(df['timestamp_ns'], np.zeros_like(df['timestamp_ns']), alpha=0.6, s=3)
-        plt.xlabel('Timestamp (ns)', fontsize=12)
-        plt.title(f'CNP Timestamps for Flow {flow_id}', fontsize=14)
+        plt.plot(centers / 1e9, counts, linewidth=1.2)
+        plt.xlabel('Time (s)', fontsize=12)
+        plt.ylabel(f'CNP count / {bin_ms:g} ms', fontsize=12)
+        plt.title(f'CNP Counts for Flow {flow_id}', fontsize=14)
         plt.grid(True, linestyle='--', alpha=0.7)
+
+    @auto_save_plot
+    def plot_cnp_trigger_prob(self, src_as:int, dst_as:int, ewma_span:int=1):
+        """绘制 epoch 粒度的 CNP 触发概率：prob = cnp_cnt / pkt_cnt"""
+        self.__read_cnp_trigger_prob_info()
+
+        for as_obj in self.topo['as_topologies']:
+            if as_obj['as_id'] == src_as:
+                switch_id = as_obj['dci_switch']
+                break
+        else:
+            print(f'No switch found for src_as {src_as}')
+            return
+
+        df = self.cnp_trigger_prob_info[
+            (self.cnp_trigger_prob_info['switch_id'] == switch_id) &
+            (self.cnp_trigger_prob_info['src_as'] == src_as) &
+            (self.cnp_trigger_prob_info['dst_as'] == dst_as)
+        ].sort_values('timestamp_ns')
+        if df.empty:
+            print(f'No cnp_trigger_prob_log for {src_as}->{dst_as} (switch {switch_id})')
+            return
+
+        prob = df['prob']
+        if ewma_span and ewma_span > 1:
+            prob = prob.ewm(span=ewma_span, adjust=False).mean()
+
+        plt.figure(figsize=(5, 4), dpi=300)
+        plt.plot(df['timestamp_ns'] / 1e9, prob, label='CNP trigger prob')
+        xlabel_kwargs = {'fontproperties': font_prop} if font_prop is not None else {}
+        plt.xlabel('Time (s)', fontsize=14, **xlabel_kwargs)
+        plt.ylabel('prob', fontsize=14, **xlabel_kwargs)
+        plt.grid(True, linestyle='--', alpha=0.7)
+        plt.legend(fontsize=10)
 
     @auto_save_plot
     def plot_as_rate(self, src_as, dst_as):
@@ -495,6 +546,306 @@ class Analyser:
     def __read_buffer_info(self):
         if self.buffer_info is None:
             self.buffer_info = pd.read_csv(op.join(self.dir,'buffer_monitor'))
+
+    def wan_high_buffer_intervals(
+        self,
+        *,
+        quantile: float = 0.90,
+        direction: str = 'both',
+        start_time_s: float | None = None,
+        end_time_s: float | None = None,
+        min_duration_s: float = 0.0,
+        max_gap_s: float | None = None,
+        return_samples: bool = False,
+    ) -> pd.DataFrame | tuple[pd.DataFrame, pd.DataFrame]:
+        """找出 WAN 交换机在“哪些时间段、哪些队列(端口->next_hop)”buffer 占用非常高。
+
+        - 把所有时刻、所有 WAN 交换机、所有队列的 used_bytes 收集
+        - 取 used_bytes 的 quantile 作为阈值
+        - 对每条队列，输出超过阈值的连续时间段 (t_start,t_end)
+
+        参数：
+        - quantile: 分位数阈值，例如 0.9 表示 >= P90（最拥挤 10%）
+        - direction: 'ingress'|'egress'|'both'
+        - start_time_s/end_time_s: 时间窗过滤（秒）
+        - min_duration_s: 过滤太短的事件段
+        - max_gap_s: 允许把相邻采样点合并为同一段的最大间隔（默认用 SW_MONITORING_INTERVAL*1.5）
+        - return_samples: True 时额外返回筛选后的采样（便于自定义画图）
+
+        返回：events_df（每行一个高占用时间段）；可选 (events_df, samples_df)
+        """
+        self.__read_buffer_info()
+
+        if not (0.0 < float(quantile) <= 1.0):
+            raise ValueError('quantile must be in (0,1]')
+
+        direction = str(direction).lower().strip()
+        if direction not in {'ingress', 'egress', 'both'}:
+            raise ValueError("direction must be 'ingress', 'egress', or 'both'")
+
+        wan_set = set(map(int, self.topo.get('wan_switches', [])))
+        if not wan_set:
+            raise ValueError('topology has no wan_switches')
+
+        df = self.buffer_info.copy()
+        df = df[df['switch_id'].isin(wan_set)]
+        if start_time_s is not None:
+            df = df[df['timestamp_ns'] >= start_time_s * 1e9]
+        if end_time_s is not None:
+            df = df[df['timestamp_ns'] <= end_time_s * 1e9]
+        if df.empty:
+            events = pd.DataFrame(
+                columns=[
+                    'switch_id', 'next_hop', 'direction',
+                    't_start_s', 't_end_s', 'duration_s',
+                    'peak_bytes', 't_peak_s',
+                    'threshold_bytes', 'quantile'
+                ]
+            )
+            return (events, df) if return_samples else events
+
+        # default continuity gap from SW_MONITORING_INTERVAL
+        try:
+            interval_ns = int(float(self.config.get('SW_MONITORING_INTERVAL', 0)))
+        except Exception:
+            interval_ns = 0
+        if max_gap_s is None:
+            max_gap_ns = int(interval_ns * 1.5) if interval_ns > 0 else 0
+        else:
+            max_gap_ns = int(float(max_gap_s) * 1e9)
+
+        # long-form samples
+        samples: list[pd.DataFrame] = []
+        if direction in {'ingress', 'both'}:
+            s = df[['timestamp_ns', 'switch_id', 'next_hop', 'ingress_bytes']].copy()
+            s = s.rename(columns={'ingress_bytes': 'used_bytes'})
+            s['direction'] = 'ingress'
+            samples.append(s)
+        if direction in {'egress', 'both'}:
+            s = df[['timestamp_ns', 'switch_id', 'next_hop', 'egress_bytes']].copy()
+            s = s.rename(columns={'egress_bytes': 'used_bytes'})
+            s['direction'] = 'egress'
+            samples.append(s)
+        samples_df = pd.concat(samples, axis=0, ignore_index=True)
+
+        # Deduplicate: keep max usage for a (queue,time)
+        samples_df = (
+            samples_df
+            .groupby(['timestamp_ns', 'switch_id', 'next_hop', 'direction'], as_index=False)['used_bytes']
+            .max()
+        )
+
+        threshold_bytes = float(samples_df['used_bytes'].quantile(float(quantile)))
+        samples_df['over'] = samples_df['used_bytes'] >= threshold_bytes
+        samples_df = samples_df.sort_values(['switch_id', 'next_hop', 'direction', 'timestamp_ns']).reset_index(drop=True)
+
+        events: list[dict] = []
+        min_dur_ns = int(float(min_duration_s) * 1e9)
+        for (sw, nh, d), g in samples_df.groupby(['switch_id', 'next_hop', 'direction'], sort=False):
+            ts = g['timestamp_ns'].to_numpy()
+            used = g['used_bytes'].to_numpy()
+            over = g['over'].to_numpy()
+
+            in_seg = False
+            seg_start_i = 0
+            last_over_ts = 0
+            seg_peak_i = 0
+            for i in range(len(g)):
+                if over[i]:
+                    if not in_seg:
+                        in_seg = True
+                        seg_start_i = i
+                        seg_peak_i = i
+                    else:
+                        if max_gap_ns > 0 and (ts[i] - last_over_ts) > max_gap_ns:
+                            start_ts = ts[seg_start_i]
+                            end_ts = last_over_ts
+                            if end_ts - start_ts >= min_dur_ns:
+                                events.append({
+                                    'switch_id': int(sw),
+                                    'next_hop': int(nh),
+                                    'direction': d,
+                                    't_start_s': float(start_ts / 1e9),
+                                    't_end_s': float(end_ts / 1e9),
+                                    'duration_s': float((end_ts - start_ts) / 1e9),
+                                    'peak_bytes': int(used[seg_peak_i]),
+                                    't_peak_s': float(ts[seg_peak_i] / 1e9),
+                                    'threshold_bytes': float(threshold_bytes),
+                                    'quantile': float(quantile),
+                                })
+                            seg_start_i = i
+                            seg_peak_i = i
+
+                    if used[i] >= used[seg_peak_i]:
+                        seg_peak_i = i
+                    last_over_ts = ts[i]
+                else:
+                    if in_seg:
+                        start_ts = ts[seg_start_i]
+                        end_ts = last_over_ts
+                        if end_ts - start_ts >= min_dur_ns:
+                            events.append({
+                                'switch_id': int(sw),
+                                'next_hop': int(nh),
+                                'direction': d,
+                                't_start_s': float(start_ts / 1e9),
+                                't_end_s': float(end_ts / 1e9),
+                                'duration_s': float((end_ts - start_ts) / 1e9),
+                                'peak_bytes': int(used[seg_peak_i]),
+                                't_peak_s': float(ts[seg_peak_i] / 1e9),
+                                'threshold_bytes': float(threshold_bytes),
+                                'quantile': float(quantile),
+                            })
+                        in_seg = False
+
+            if in_seg:
+                start_ts = ts[seg_start_i]
+                end_ts = last_over_ts
+                if end_ts - start_ts >= min_dur_ns:
+                    events.append({
+                        'switch_id': int(sw),
+                        'next_hop': int(nh),
+                        'direction': d,
+                        't_start_s': float(start_ts / 1e9),
+                        't_end_s': float(end_ts / 1e9),
+                        'duration_s': float((end_ts - start_ts) / 1e9),
+                        'peak_bytes': int(used[seg_peak_i]),
+                        't_peak_s': float(ts[seg_peak_i] / 1e9),
+                        'threshold_bytes': float(threshold_bytes),
+                        'quantile': float(quantile),
+                    })
+
+        events_df = pd.DataFrame(events)
+        if not events_df.empty:
+            events_df = events_df.sort_values(['t_start_s', 'switch_id', 'peak_bytes'], ascending=[True, True, False]).reset_index(drop=True)
+
+        return (events_df, samples_df) if return_samples else events_df
+
+    def _get_dci_switch_id(self, as_id: int) -> int:
+        for as_obj in self.topo.get('as_topologies', []):
+            if int(as_obj.get('as_id')) == int(as_id):
+                return int(as_obj.get('dci_switch'))
+        raise ValueError(f'No dci_switch found for as_id {as_id}')
+
+    def _build_wan_graph(self) -> dict[int, set[int]]:
+        graph: dict[int, set[int]] = defaultdict(set)
+        for link in self.topo.get('wan_links', []):
+            u = int(link['src'])
+            v = int(link['dst'])
+            graph[u].add(v)
+            graph[v].add(u)
+        return graph
+
+    def _shortest_path(self, graph: dict[int, set[int]], src: int, dst: int) -> list[int]:
+        if src == dst:
+            return [src]
+        q = [src]
+        prev: dict[int, int | None] = {src: None}
+        for u in q:
+            for v in graph.get(u, []):
+                if v in prev:
+                    continue
+                prev[v] = u
+                if v == dst:
+                    q = []
+                    break
+                q.append(v)
+
+        if dst not in prev:
+            return []
+        path = [dst]
+        cur = dst
+        while prev[cur] is not None:
+            cur = prev[cur]
+            path.append(cur)
+        path.reverse()
+        return path
+
+    def get_wan_key_path(self, src_as: int, dst_as: int) -> list[int]:
+        """Return hop-minimal WAN path between src_as's and dst_as's DCI switches (node id list)."""
+        src = self._get_dci_switch_id(src_as)
+        dst = self._get_dci_switch_id(dst_as)
+        graph = self._build_wan_graph()
+        return self._shortest_path(graph, src, dst)
+
+    @auto_save_plot
+    def plot_wan_path_buffer(
+        self,
+        src_as: int,
+        dst_as: int,
+        *,
+        egress: bool = True,
+        start_time_s: float | None = None,
+        end_time_s: float | None = None,
+        unit: str = 'MB',
+    ):
+        """Plot per-hop WAN queue length overlay along the shortest WAN path."""
+        self.__read_buffer_info()
+
+        path = self.get_wan_key_path(src_as, dst_as)
+        if not path or len(path) < 2:
+            print(f'No WAN path found for AS {src_as}->{dst_as}')
+            return
+
+        wan_set = set(map(int, self.topo.get('wan_switches', [])))
+        col = 'egress_bytes' if egress else 'ingress_bytes'
+
+        df = self.buffer_info.copy()
+        if start_time_s is not None:
+            df = df[df['timestamp_ns'] >= start_time_s * 1e9]
+        if end_time_s is not None:
+            df = df[df['timestamp_ns'] <= end_time_s * 1e9]
+        if df.empty:
+            print('No buffer_monitor samples in the selected time range')
+            return
+
+        unit = str(unit).upper()
+        if unit == 'B':
+            scale = 1.0
+        elif unit == 'KB':
+            scale = 1e3
+        elif unit == 'MB':
+            scale = 1e6
+        elif unit == 'GB':
+            scale = 1e9
+        else:
+            print(f'Unknown unit {unit}, fallback to MB')
+            scale = 1e6
+            unit = 'MB'
+
+        hop_series: dict[str, pd.Series] = {}
+        for u, v in zip(path[:-1], path[1:]):
+            # only plot WAN switch queues
+            if int(u) not in wan_set:
+                continue
+            hop_df = df[(df['switch_id'] == int(u)) & (df['next_hop'] == int(v))]
+            if hop_df.empty:
+                continue
+            series = (
+                hop_df.groupby('timestamp_ns')[col]
+                .mean()
+                .sort_index()
+                / scale
+            )
+            hop_series[f'{u}->{v}'] = series
+
+        if not hop_series:
+            print(f'No WAN-hop buffer data found on path: {path}')
+            return
+
+        aligned = pd.concat(hop_series, axis=1).ffill().fillna(0.0)
+        total = aligned.sum(axis=1)
+
+        plt.figure(figsize=(10, 5))
+        x = aligned.index / 1e9
+        for label, series in aligned.items():
+            plt.plot(x, series.values, linewidth=1.0, label=label)
+        plt.plot(x, total.values, linewidth=2.0, color='black', label='SUM')
+        plt.xlabel('Timestamp (s)', fontsize=12)
+        plt.ylabel(f'Queue ({unit})', fontsize=12)
+        plt.title(f'WAN path buffer: AS {src_as}->{dst_as} | path {path}')
+        plt.grid(True, linestyle='--', alpha=0.7)
+        plt.legend(fontsize=9, ncol=2)
 
     def __read_qp_rate_info(self):
         if self.qp_rate_info is None:

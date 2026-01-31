@@ -175,6 +175,7 @@ namespace logfile {
     FILE* buffer_monitor = nullptr;
     FILE* rate_monitor = nullptr;
     FILE* cnp_log = nullptr;
+    FILE* cnp_trigger_prob_log = nullptr;
     FILE* accumulated_bytes_log = nullptr;
 
     
@@ -212,6 +213,8 @@ namespace logfile {
         fprintf(qp_rate_log, "timestamp_ns,flow_id,rate,alpha,target_rate\n");
         OPEN_EMPTY_FILE(cnp_log);
         fprintf(cnp_log, "timestamp_ns,switch_id,flow_id\n");
+        OPEN_FILE(cnp_trigger_prob_log);
+        fprintf(cnp_trigger_prob_log, "timestamp_ns,switch_id,src_as,dst_as,cnp_cnt,pkt_cnt,prob\n");
         OPEN_EMPTY_FILE(accumulated_bytes_log);
         fprintf(accumulated_bytes_log, "timestamp_ns,switch_id,dst_as,accumulated_bytes\n");
 

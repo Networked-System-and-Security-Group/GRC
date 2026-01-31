@@ -278,6 +278,7 @@ namespace logfile {
     extern FILE* buffer_monitor;
     extern FILE* rate_monitor;
     extern FILE* cnp_log;
+    extern FILE* cnp_trigger_prob_log;
     extern FILE* accumulated_bytes_log;
 
     extern FILE* cnp_output;
