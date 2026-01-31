@@ -107,10 +107,9 @@ uint32_t SwitchNode::DoLbFlowECMP(Ptr<const Packet> p, const CustomHeader &ch,
     else if (ch.l3Prot == 0xFF)
         buf.u32[2] = ch.cnp.sport | ((uint32_t)ch.cnp.dport << 16);
     else {
-        std::cout << "[ERROR] Sw(" << m_id << ")," << PARSE_FIVE_TUPLE(ch)
-                  << "Cannot support other protoocls than TCP/UDP (l3Prot:" << ch.l3Prot << ")"
-                  << std::endl;
-        assert(false && "Cannot support other protoocls than TCP/UDP");
+        // For other L4 protocols (e.g. ICMP), fall back to an ECMP hash using
+        // just the L3 tuple + protocol number.
+        buf.u32[2] = (uint32_t)ch.l3Prot;
     }
 
     uint32_t hashVal = EcmpHash(buf.u8, 12, m_ecmpSeed);
@@ -359,8 +358,16 @@ void SwitchNode::SendToDevContinue(Ptr<Packet> p, CustomHeader &ch) {
               ch.l3Prot == 0xFC))) {  // QCN or PFC or ACK/NACK, go highest priority
             qIndex = 0;               // high priority
         } else {
-            qIndex = (ch.l3Prot == 0x06 ? 1 : ch.udp.pg);  // if TCP, put to queue 1. Otherwise, it
-                                                           // would be 3 (refer to trafficgen)
+            // Data traffic: TCP uses a fixed queue, UDP uses its pg field.
+            // Other L4 protocols (e.g. ICMP) do not have a valid UDP pg, so
+            // fall back to the TCP queue to avoid using uninitialized fields.
+            if (ch.l3Prot == 0x06) {
+                qIndex = 1;
+            } else if (ch.l3Prot == 0x11) {
+                qIndex = ch.udp.pg;
+            } else {
+                qIndex = 1;
+            }
         }
         DoSwitchSend(p, ch, idx, qIndex);  // m_devices[idx]->SwitchSend(qIndex, p, ch);
         return;

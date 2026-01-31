@@ -82,6 +82,8 @@ RdmaEgressQueue::RdmaEgressQueue() {
     m_rrlast = 0;
     m_qlast = 0;
     m_mtu = 1000;
+    qb_dev = 0;
+    hostDequeueIndex = 0;
     m_ackQ = CreateObject<DropTailQueue>();
     m_ackQ->SetAttribute("MaxBytes",
                          UintegerValue(0xffffffff));  // queue limit is on a higher level, not here
@@ -104,12 +106,24 @@ Ptr<Packet> RdmaEgressQueue::DequeueQindex(int qIndex) {
     return 0;
 }
 int RdmaEgressQueue::GetNextQindex(bool paused[]) {
-    bool found = false;
-    uint32_t qIndex;
+    // Host-side TX scheduler.
+    // Return codes:
+    //  -1     : dequeue from the high-priority ACK/CNP queue (ack_q_idx).
+    //  -2     : dequeue from the BEgressQueue (TCP/IP traffic), hard-mapped to queue index 1.
+    //  >= 0   : dequeue from the RDMA QP group with that qIndex.
+    //  -1024  : nothing can be sent now.
+    // Arbitration policy (minimal): ACK/CNP first, then pick an RDMA candidate; if TCP is ready,
+    // alternate between RDMA and TCP to reduce starvation (or serve TCP if RDMA has none).
     if (!paused[ack_q_idx] && m_ackQ->GetNPackets() > 0) return -1;
+
+    // TCP/IP traffic is always mapped to queue index 1.
+    const bool tcp_ready = (qb_dev != 0 && qb_dev->GetQueue() != 0 &&
+                            !paused[1] && qb_dev->GetQueue()->GetNBytes(1) > 0);
 
     // no pkt in highest priority queue, do rr for each qp
     uint32_t fcount = m_qpGrp->GetN();
+    int rdma_candidate = -1024;
+    uint32_t qIndex;
     for (qIndex = 1; qIndex <= fcount; qIndex++) {
         if (m_qpGrp->IsQpFinished((qIndex + m_rrlast) % fcount)) continue;
         Ptr<RdmaQueuePair> qp = m_qpGrp->Get((qIndex + m_rrlast) % fcount);
@@ -148,8 +162,22 @@ int RdmaEgressQueue::GetNextQindex(bool paused[]) {
                     current_pause_time.erase(flowid);
                 }
             }
-            return (qIndex + m_rrlast) % fcount;
+            rdma_candidate = (qIndex + m_rrlast) % fcount;
+            break;
         }
+    }
+
+    if (tcp_ready) {
+        // If RDMA has nothing to send, serve TCP; otherwise alternate to avoid starvation.
+        if (rdma_candidate == -1024 || (hostDequeueIndex % 2 == 0)) {
+            hostDequeueIndex++;
+            return -2; // special value: dequeue from BEgressQueue (TCP/IP)
+        }
+    }
+
+    if (rdma_candidate != -1024) {
+        hostDequeueIndex++;
+        return rdma_candidate;
     }
     return -1024;
 }
@@ -233,6 +261,7 @@ QbbNetDevice::QbbNetDevice() {
     }
 
     m_rdmaEQ = CreateObject<RdmaEgressQueue>();
+    m_rdmaEQ->qb_dev = this;
 }
 
 QbbNetDevice::~QbbNetDevice() { NS_LOG_FUNCTION(this); }
@@ -271,6 +300,16 @@ void QbbNetDevice::DequeueAndTransmit(void) {
                 p = m_rdmaEQ->DequeueQindex(qIndex);
                 m_traceDequeue(p, 0);
                 TransmitStart(p);
+                return;
+            }
+
+            if (qIndex == -2) {  // TCP/IP traffic (from BEgressQueue)
+                p = m_queue->DequeueRR(m_paused);
+                if (p != 0) {
+                    uint32_t q = m_queue->GetLastQueue();
+                    m_traceDequeue(p, q);
+                    TransmitStart(p);
+                }
                 return;
             }
             // a qp dequeue a packet
@@ -373,6 +412,25 @@ void QbbNetDevice::Receive(Ptr<Packet> packet) {
     }
 
     m_macRxTrace(packet);
+
+    // Fast-path for standard IP traffic on end hosts only.
+    // Switch nodes must keep using the CustomHeader-based pipeline so packets
+    // carry the expected switch-side tags (e.g., FlowIdTag for admission/PFC).
+    if (m_node->GetNodeType() == 0) {
+        Ptr<Packet> tmp = packet->Copy();
+        uint16_t proto = 0;
+        ProcessHeader(tmp, proto);
+        if (proto == 0x0800) {
+            Ipv4Header ipv4;
+            if (tmp->PeekHeader(ipv4) > 0 && (ipv4.GetProtocol() == 0x06 || ipv4.GetProtocol() == 0x01)) {
+                uint16_t upProto = 0;
+                ProcessHeader(packet, upProto);
+                m_rxCallback(this, packet, upProto, GetRemote());
+                return;
+            }
+        }
+    }
+
     CustomHeader ch(CustomHeader::L2_Header | CustomHeader::L3_Header | CustomHeader::L4_Header);
     ch.getInt = 1;  // parse INT header
     packet->PeekHeader(ch);
@@ -407,9 +465,32 @@ void QbbNetDevice::Receive(Ptr<Packet> packet) {
 }
 
 bool QbbNetDevice::Send(Ptr<Packet> packet, const Address &dest, uint16_t protocolNumber) {
-    // std::cout << "Send: " << m_node->GetNodeType() <<std::endl;
-    NS_ASSERT_MSG(false, "QbbNetDevice::Send not implemented yet\n");
-    return false;
+    NS_LOG_FUNCTION(this << packet << &dest << protocolNumber);
+
+    if (IsLinkUp() == false) {
+        m_macTxDropTrace(packet);
+        return false;
+    }
+
+    // Encapsulate with PPP header, consistent with PointToPointNetDevice.
+    AddHeader(packet, protocolNumber);
+
+    // Classify: TCP packets are served by a dedicated egress queue.
+    // TCP/IP traffic uses queue index 1.
+    uint32_t qIndex = 1;
+    // FlowIDNUMTag is not added here for TCP/ICMP; Settings::get_flowid() provides
+    // a TCP/ICMP fallback (srcId*1000+dstId) when needed by switch-side modules.
+
+    m_macTxTrace(packet);
+    m_traceEnqueue(packet, qIndex);
+    if (!m_queue->Enqueue(packet, qIndex)) {
+        m_traceDrop(packet, qIndex);
+        m_macTxDropTrace(packet);
+        return false;
+    }
+
+    DequeueAndTransmit();
+    return true;
 }
 
 bool QbbNetDevice::SwitchSend(uint32_t qIndex, Ptr<Packet> packet, CustomHeader &ch) {

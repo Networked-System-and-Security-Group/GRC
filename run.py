@@ -165,8 +165,11 @@ def main():
     parser.add_argument('--sw_monitoring_interval', dest='sw_monitoring_interval', action='store',
                         type=int, default=10000, help="interval of sampling statistics for queue status (default: 10000ns)")
     parser.add_argument('--my_flow', type=str, default='', help="use my own flow, if '', use default flow")#
-    parser.add_argument('--debug', type=bool, default=False, help="debug")
-    parser.add_argument('--stdout', type=bool, default=False, help="stdout")
+    parser.add_argument('--tcp_flow', type=str, default='', help="optional TCP flow file path; enables TCP/RDMA mixed-run")
+    # NOTE: argparse with type=bool is almost always wrong (e.g. "0" becomes True).
+    # Use 0/1 integers for stable CLI behavior.
+    parser.add_argument('--debug', type=int, default=0, help="debug (0/1)")
+    parser.add_argument('--stdout', type=int, default=0, help="stdout (0/1)")
     parser.add_argument('--inter_load_all', type=int, default=60, help="不同DC之间之间通信的负载，单位Gbps")
     parser.add_argument('--intra_load', type=int, default=30, help="单个host在DC内之间通信的负载")
     parser.add_argument('--wan_cc_mode', type=int, default=1, help="DC间拥塞控制方案")#
@@ -220,8 +223,9 @@ def main():
     sw_monitoring_interval = int(args.sw_monitoring_interval)
 
     my_flow = args.my_flow
-    debug = args.debug
-    stdout = args.stdout
+    tcp_flow = args.tcp_flow.strip()
+    debug = bool(args.debug)
+    stdout = bool(args.stdout)
     intra_load = args.intra_load
     inter_load_all = args.inter_load_all
     wan_cc_mode = args.wan_cc_mode
@@ -256,6 +260,16 @@ def main():
         flow = f"WAN_{cdf}_{intra_load}_{inter_load_all}_{args.simul_time}"
     else:
         flow = my_flow
+
+    # Normalize flow name: allow users to pass either "name", "name.txt",
+    # or "config/name.txt". The config template always prefixes "config/" and
+    # appends ".txt", so we store the stem here.
+    if flow:
+        flow = flow.strip()
+        if flow.startswith('config/'):
+            flow = flow[len('config/'):]
+        if flow.endswith('.txt'):
+            flow = flow[:-4]
 
     # check the file exists
     if (exists(os.getcwd() + "/config/" + flow + ".txt")):
@@ -364,6 +378,10 @@ def main():
 
     with open(config_name, "w") as file:
         if not args.config:
+            if tcp_flow:
+                if not config.endswith('\n'):
+                    config += '\n'
+                config += f"TCP_FLOW_FILE {tcp_flow}\n"
             if extra_kv:
                 if not config.endswith('\n'):
                     config += '\n'
@@ -390,6 +408,9 @@ def main():
 
             existing_config = _upsert_line(existing_config, 'DCI_BUFFER_SIZE', str(dci_buffer))
             existing_config = _upsert_line(existing_config, 'WAN_BUFFER_SIZE', str(wan_buffer))
+
+            if tcp_flow:
+                existing_config = _upsert_line(existing_config, 'TCP_FLOW_FILE', tcp_flow)
 
             for k, v in extra_kv.items():
                 existing_config = _upsert_line(existing_config, k, v)

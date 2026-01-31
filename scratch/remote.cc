@@ -130,9 +130,15 @@ NodeContainer& n = Settings::nodeContainer;                         // node cont
 
 //flow input global variable
 std::ifstream flowf;
+std::ifstream tcp_flowf;
 uint32_t flow_num;
+uint32_t tcp_flow_num = 0;
 std::unordered_map<uint32_t, uint16_t> sportNumber;
 std::unordered_map<uint32_t, uint16_t> dportNumber;
+std::unordered_map<uint32_t, uint16_t> tcpDportNumber;
+
+std::string tcp_flow_file;
+std::vector<FlowInput> tcpFlowInfos;
 
 using json = nlohmann::json;
 json topo_json;
@@ -160,6 +166,26 @@ bool ReadFlowInput() {
         std::cout << "*** THIS IS THE LAST FLOW TO SEND :) " << std::endl;
         return false;
     }
+}
+
+/**
+ * Read TCP flow input from file "tcp_flowf".
+ * Format is identical to RDMA flow file: N then <src> <dst> <pg> <size_bytes> <start_time_seconds>
+ */
+bool ReadTcpFlowInput() {
+    if (tcpFlowInfos.size() < tcp_flow_num) {
+        uint32_t flow_id = tcpFlowInfos.size();
+        tcpFlowInfos.emplace_back();
+        auto& flow_input = tcpFlowInfos.back();
+        tcp_flowf >> flow_input.src >> flow_input.dst >> flow_input.pg >> flow_input.fsize >> flow_input.start_time;
+        flow_input.idx = flow_id;
+        flow_input.fsize = std::max(1u, flow_input.fsize);
+        fflush(stdout);
+        assert(n.Get(flow_input.src)->GetNodeType() == 0 &&
+               n.Get(flow_input.dst)->GetNodeType() == 0);
+        return true;
+    }
+    return false;
 }
 
 /**
@@ -207,6 +233,57 @@ void ScheduleFlowInputs() {
         }
     }
     Simulator::Schedule(Seconds(Settings::flowInfos.back().start_time) - Simulator::Now(), &ScheduleFlowInputs);
+}
+
+/**
+ * Scheduling TCP flows from TCP_FLOW_FILE using ns-3 standard applications:
+ * - Sender: BulkSendApplication (TcpSocketFactory)
+ * - Receiver: PacketSink (TcpSocketFactory)
+ */
+void ScheduleTcpFlowInputs() {
+    NS_LOG_DEBUG("ScheduleTcpFlowInputs at " << Simulator::Now());
+    while (!tcpFlowInfos.empty() &&
+           std::abs(tcpFlowInfos.back().start_time - Simulator::Now().GetSeconds()) < 1e-8) {
+        auto& flowInfo = tcpFlowInfos.back();
+        if (flowInfo.idx % 1000 == 0) {
+            std::time_t t = std::time(nullptr);
+            std::cout << std::put_time(std::localtime(&t), "%H:%M:%S") << " [" << Simulator::Now() << "]"
+                      << " TCP " << flowInfo.idx << "条流已导入" << std::endl;
+        }
+
+        uint32_t src = flowInfo.src;
+        uint32_t dst = flowInfo.dst;
+        uint32_t fsize = flowInfo.fsize;
+        uint16_t dport = tcpDportNumber[dst]++;
+
+        // Install apps at the scheduled time, and start the sink slightly earlier than the sender
+        // to avoid spurious resets/ICMP due to event ordering.
+        Time start = Simulator::Now();
+        Time sinkStart = start;
+        Time senderStart = start + NanoSeconds(1);
+
+        PacketSinkHelper sinkHelper("ns3::TcpSocketFactory",
+                                   Address(InetSocketAddress(Ipv4Address::GetAny(), dport)));
+        ApplicationContainer sinkApps = sinkHelper.Install(n.Get(dst));
+        sinkApps.Start(sinkStart);
+        sinkApps.Stop(Seconds(100.0));
+
+        BulkSendHelper senderHelper("ns3::TcpSocketFactory",
+                                   Address(InetSocketAddress(nodeInfos[dst].ip, dport)));
+        senderHelper.SetAttribute("MaxBytes", UintegerValue(fsize));
+        ApplicationContainer senderApps = senderHelper.Install(n.Get(src));
+        senderApps.Start(senderStart);
+        senderApps.Stop(Seconds(100.0));
+
+        if (!ReadTcpFlowInput()) {
+            tcp_flowf.close();
+            return;
+        }
+    }
+
+    if (!tcpFlowInfos.empty()) {
+        Simulator::Schedule(Seconds(tcpFlowInfos.back().start_time) - Simulator::Now(), &ScheduleTcpFlowInputs);
+    }
 }
 
 /**
@@ -382,7 +459,12 @@ void output_flow_info() {
  */
 void stop_simulation_middle() {
     uint32_t target_flow_num = flow_num - 0;  // can be lower than flownum
-    if (Settings::cnt_finished_flows >= target_flow_num || Simulator::Now() > Seconds(flowgen_stop_time + simulator_extra_time)) {
+    // When TCP flows are enabled, don't stop early purely based on RDMA completion;
+    // otherwise TCP apps may not have time to run.
+    bool has_tcp_flows = (tcp_flow_num > 0);
+    bool rdma_done = (Settings::cnt_finished_flows >= target_flow_num);
+    bool time_over = (Simulator::Now() > Seconds(flowgen_stop_time + simulator_extra_time));
+    if ((!has_tcp_flows && rdma_done) || time_over) {
         std::cout << "\n*** Simulator is enforced to be finished, finished so far: "
                   << Settings::cnt_finished_flows << "/ total: " << target_flow_num
                   << ", Time:" << Simulator::Now() << std::endl;
@@ -879,6 +961,11 @@ int main(int argc, char *argv[]) {
                 conf >> v;
                 flow_file = v;
                 std::cerr << "FLOW_FILE\t\t\t" << flow_file << "\n";
+            } else if (key.compare("TCP_FLOW_FILE") == 0) {
+                std::string v;
+                conf >> v;
+                tcp_flow_file = v;
+                std::cerr << "TCP_FLOW_FILE\t\t\t" << tcp_flow_file << "\n";
             } else if (key.compare("FLOWGEN_START_TIME") == 0) {
                 double v;
                 conf >> v;
@@ -1535,6 +1622,7 @@ int main(int argc, char *argv[]) {
         if (n.Get(i)->GetNodeType() == 0) {
             sportNumber[i] = 10000;  // each host use port number from 10000
             dportNumber[i] = 100;
+            tcpDportNumber[i] = 50000; // TCP sinks start from a separate high port range
         }
     }
 
@@ -1542,6 +1630,18 @@ int main(int argc, char *argv[]) {
     flowf >> flow_num;
     if (ReadFlowInput()) {
         Simulator::Schedule(Seconds(0), &ScheduleFlowInputs);
+    }
+
+    if (!tcp_flow_file.empty()) {
+        tcp_flowf.open(tcp_flow_file.c_str());
+        if (tcp_flowf.is_open()) {
+            tcp_flowf >> tcp_flow_num;
+            if (ReadTcpFlowInput()) {
+                Simulator::Schedule(Seconds(0), &ScheduleTcpFlowInputs);
+            }
+        } else {
+            std::cerr << "WARNING: TCP_FLOW_FILE is set but cannot open: " << tcp_flow_file << "\n";
+        }
     }
 
 
@@ -1601,6 +1701,24 @@ int main(int argc, char *argv[]) {
                         &stop_simulation_middle);  // check every 100us
     Simulator::Stop(Seconds(flowgen_stop_time + 10.0));
     Simulator::Run();
+
+    // Dump TCP flow metadata for reproducibility/debugging.
+    // Note: tcpFlowInfos keeps all TCP flows that were read from TCP_FLOW_FILE.
+    if (tcp_flow_num > 0) {
+        const std::string outPath = logfile::output_dir + "/tcp_flows.txt";
+        std::ofstream out(outPath, std::ios::out | std::ios::trunc);
+        if (out.is_open()) {
+            out << "# idx src dst start_time_s size_bytes\n";
+            for (const auto& f : tcpFlowInfos) {
+                out << f.idx << " " << f.src << " " << f.dst << " "
+                    << std::fixed << std::setprecision(9) << f.start_time << " "
+                    << f.fsize << "\n";
+            }
+            out.close();
+        } else {
+            std::cerr << "WARNING: cannot open tcp flow output file: " << outPath << "\n";
+        }
+    }
 
     //TODO:my code to caculate the throughput of each flow
         // 输出每个流的发送速率
