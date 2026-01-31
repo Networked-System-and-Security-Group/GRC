@@ -27,6 +27,10 @@ If you change the JSON schema, update the corresponding parsing/initialization i
 - `run.py` writes `FLOW_FILE config/<flow>.txt` into `mix/output/.../config.txt`.
 - Parsed by `scratch/remote.cc::ReadFlowInput()`.
 
+Optional (TCP/RDMA mixed-run):
+- `run.py --tcp_flow <path>` writes `TCP_FLOW_FILE <path>` into `mix/output/.../config.txt`.
+- Parsed by `scratch/remote.cc::ReadTcpFlowInput()` and scheduled by `ScheduleTcpFlowInputs()`.
+
 Format:
 - Line 1: integer number of flows `N`
 - Each subsequent line:
@@ -38,6 +42,7 @@ Format:
 Notes:
 - `start_time_seconds` is a float (seconds).
 - `pg` is typically `3` in WAN generators.
+- For TCP flows, `pg` is currently treated as an input field for compatibility; recommended value is `1`.
 - If you change this format, update `ReadFlowInput()`.
 
 ## Generators (under `config/`)
@@ -49,4 +54,6 @@ Notes:
 
 ## Common gotchas
 - The “.txt topology” is JSON; don’t treat it as an ns-3 text topology.
-- Flow naming matters: `run.py` will look for `config/<flow>.txt` and only runs the generator if the file is missing.
+- Flow naming matters: `run.py` ultimately looks for `config/<stem>.txt`.
+  - For `--my_flow`, supported forms are: `stem`, `stem.txt`, or `config/stem.txt` (it will normalize to `stem`).
+  - The generator is only invoked if `config/<stem>.txt` is missing.

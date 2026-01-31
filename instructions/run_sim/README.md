@@ -57,13 +57,17 @@ python3 run.py --simul_time 0.05 --cdf WebSearch --intra_load 30 --inter_load_al
 - `--inter_load_all`（默认 `60`）：DC 间总发送速率（Gbps，交给 `wan_traffic_gen.py`）
 - `--wan_cc_mode`（默认 `1`）：DC 间（WAN 段）拥塞控制模式，写入 `WAN_CC_MODE`
 	- 对应 `Settings::WanCCMode`：`0 NONE` / `1 WAN_OPT` / `2 WITH_ECN`
-- `--my_flow`（默认空字符串）：指定自定义 flow 文件名（不带 `.txt`）；为空则用仓库默认命名规则
+- `--my_flow`（默认空字符串）：指定自定义 flow 文件名；为空则用仓库默认命名规则
+	- 兼容写法：`rdma_one_flow` / `rdma_one_flow.txt` / `config/rdma_one_flow.txt`（`run.py` 会做归一化，最终引用 `config/<stem>.txt`）
+- `--tcp_flow`（默认空字符串）：可选 TCP flow 文件路径，启用 “TCP + RDMA 混跑”
+	- 行为：`run.py` 会在 `config.txt` 里额外写入 `TCP_FLOW_FILE <path>`，由 `scratch/remote.cc` 解析
+	- TCP flow 文件格式与 RDMA flow 完全一致（见 `../config_inputs.md`），推荐 `pg=1`
 - `--config`（默认空字符串）：复用已有的 config.txt（会自动替换新的 `OUTPUT_DIR_PATH` 和 `TIME`）
 - `--extra`（默认空）：临时参数透传（不需要改 C++ 解析也不会破坏解析流）
 	- 用法：`--extra KEY=VALUE`，可重复多次
 	- 行为：写入 `config.txt` 为 `KEY VALUE`；如果 `scratch/remote.cc` 不认识该 key，会自动把原始字符串保存到 `Settings` 的哈希表中（见 `Settings::GetRawParam(...)`）
-- `--stdout`（默认 `False`）：不重定向日志，直接前台输出
-- `--debug`（默认 `False`）：用 gdb 启动 `scratch/remote`（用于调 C++）
+- `--stdout`（默认 `0`）：不重定向日志，直接前台输出（`0/1`）
+- `--debug`（默认 `0`）：用 gdb 启动 `scratch/remote`（用于调 C++）（`0/1`）
 - `--msg`（默认空字符串）：追加记录到 `mix/history.txt`
 
 ## C. 如何新增/修改一个“实验参数”（约定流程）
@@ -74,6 +78,30 @@ python3 run.py --simul_time 0.05 --cdf WebSearch --intra_load 30 --inter_load_al
 3) 将值写入 `Settings`（`src/point-to-point/model/settings.h/.cc`）或传入对应模块（如 `WanRouting` / `SwitchNode` / `SwitchMmu`）
 
 如果参数只影响流量生成：通常只需要改 `run.py` + `config/*.py` 生成脚本。
+
+## F. TCP + RDMA 混跑（新增能力）
+
+本仓库已补齐 “在 QbbNetDevice 上跑 ns-3 TCP 协议栈流量” 的关键缺口，因此可以做 **TCP 与 RDMA 同时发/收** 的混跑实验。
+
+**使用方式**
+- 仍然用原来的 RDMA flows：`FLOW_FILE config/<flow>.txt`
+- 额外指定 TCP flows：`--tcp_flow <path>`（写入 `TCP_FLOW_FILE <path>`）
+
+**实现要点（代码改动点，便于你定位/审阅）**
+- 入口/导入：`scratch/remote.cc`
+	- 新增解析键：`TCP_FLOW_FILE`
+	- 新增调度器：`ScheduleTcpFlowInputs()`，用 `BulkSendApplication(TcpSocketFactory)` + `PacketSink(TcpSocketFactory)`
+	- 行为细节：TCP apps 在各自 `start_time_seconds` 时刻安装并启动（sink 比 sender 早 1ns），减少事件顺序导致的 reset/ICMP 干扰
+- 网卡：`src/point-to-point/model/qbb-net-device.cc/.h`
+	- 实现 `QbbNetDevice::Send()`：给 TCP/IP 栈提供 NetDevice 发送入口，并把 TCP 包入队到固定 egress 队列
+	- `Receive()` TCP 分流：PPP+IPv4+TCP 直接走 `m_rxCallback` 上交协议栈；其他包保持原有 RDMA/PFC 逻辑
+	- Host 侧调度：在 `RdmaEgressQueue::GetNextQindex()` 里把 TCP 队列纳入轮询，并在 `DequeueAndTransmit()` 中支持从 `BEgressQueue` 发包
+
+> 备注：以上修改是“最小闭环”，目标是让 TCP/RDMA 共用同一个 TX machine（`m_txMachineState` 锁）且互不踩踏。
+
+**Stop 条件（混跑特别注意）**
+- 当 `TCP_FLOW_FILE` 非空时，仿真不会因为 “RDMA flows 全部完成” 而提前结束；会至少跑到 `FLOWGEN_STOP_TIME + simulator_extra_time`。
+- 原因：TCP flows 的完成性不纳入 `Settings::cnt_finished_flows` 统计，提前 stop 会导致 TCP 来不及真正发包。
 
 ## D. 如何开启/关闭（落盘）日志
 

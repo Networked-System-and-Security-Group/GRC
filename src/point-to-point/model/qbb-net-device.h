@@ -37,10 +37,15 @@
 
 namespace ns3 {
 
+class QbbNetDevice;
+
 class RdmaEgressQueue : public Object{
 public:
 	static const uint32_t qCnt = 8;
 	static uint32_t ack_q_idx;
+  // TCP/IP traffic uses queue index 1 (hardcoded at call sites).
+  QbbNetDevice* qb_dev;
+  uint64_t hostDequeueIndex;
 	uint32_t m_mtu;
 	int m_qlast;
 	uint32_t m_rrlast;
