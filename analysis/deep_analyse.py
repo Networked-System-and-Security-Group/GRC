@@ -17,6 +17,9 @@ from IPython.display import display
 from matplotlib.font_manager import FontProperties
 import traceback
 from pathlib import Path
+import matplotlib
+matplotlib.rcParams['pdf.fonttype'] = 42  # TrueType 字体
+matplotlib.rcParams['ps.fonttype'] = 42  # TrueType 字体
 
 font_prop = None
 

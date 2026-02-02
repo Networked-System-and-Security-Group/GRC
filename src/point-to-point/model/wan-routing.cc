@@ -10,6 +10,8 @@
 #include <ns3/qbb-net-device.h>
 
 #include <algorithm>
+#include <cstdlib>
+#include <cmath>
 namespace ns3 {
 
 Time WanRouting::epoch_duration = MicroSeconds(1000); // 1ms
@@ -351,7 +353,9 @@ void WanRouting::DstDCHandler::update_ref_rate() {
     }
 
     // COPA version
-    double delta = 1.0 / (10 * 1024 * 1024); // 10MB standing queue target
+    const double inv_delta = std::stod(Settings::GetRawParam("INV_DELTA", "10485760"));
+    const double delta = 1.0 / inv_delta;
+    const double beta = std::stod(Settings::GetRawParam("BETA", "0.4"));
     Time queue_delay = std::max(cur_rtt - min_rtt, MicroSeconds(10));
     int v = 1;
     int64_t target_rate = static_cast<int64_t>(1.0 / delta / queue_delay.GetSeconds());
@@ -360,7 +364,7 @@ void WanRouting::DstDCHandler::update_ref_rate() {
         ref_rate += step;
         printf("[Copa Increase] ");
     } else {
-        double min_decrease_coefficient = std::pow(0.5, 1 / epochs_per_rtt);
+        double min_decrease_coefficient = std::pow(1 - beta, 1 / epochs_per_rtt);
         int64_t origin_step = step;
         step = std::max(step,
                         static_cast<int64_t>((pre_ref_rate - target_rate) * min_decrease_coefficient));
