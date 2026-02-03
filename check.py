@@ -4,6 +4,7 @@ from datetime import datetime
 import sys
 import re
 import subprocess
+import time
 from dataclasses import dataclass
 from typing import Iterable, Optional
 
@@ -33,6 +34,30 @@ def _extract_config_path(command: str) -> Optional[str]:
     return None
 
 
+_EXPERIMENT_ID_RE = re.compile(r"\[(\d+)\]")
+
+
+def _extract_experiment_id(text: str) -> Optional[int]:
+    m = _EXPERIMENT_ID_RE.search(text)
+    if not m:
+        return None
+    try:
+        return int(m.group(1))
+    except ValueError:
+        return None
+
+
+def _is_finished_folder(folder: str) -> bool:
+    config_log_path = os.path.join(folder, "config.log")
+    if not os.path.exists(config_log_path):
+        return False
+    try:
+        with open(config_log_path, "r") as log_file:
+            return "Simulator is enforced to be finished" in log_file.read()
+    except OSError:
+        return False
+
+
 def _list_remote_processes_for_this_repo() -> list[RemoteProcess]:
     repo = _repo_root()
     ps = subprocess.run(["ps", "aux"], capture_output=True, text=True, check=False)
@@ -41,6 +66,8 @@ def _list_remote_processes_for_this_repo() -> list[RemoteProcess]:
     procs: list[RemoteProcess] = []
     for line in lines:
         if "scratch/remote" not in line:
+            continue
+        if "waf" in line:
             continue
         if " grep " in f" {line} ":
             continue
@@ -69,6 +96,68 @@ def _list_remote_processes_for_this_repo() -> list[RemoteProcess]:
         procs.append(RemoteProcess(pid=pid, command=command, config_path=config_path))
 
     return procs
+
+
+def monitor(interval_s: float = 2.0):
+    unfinished: set[int] = set()
+    finished: set[int] = set()
+    last_pid_by_id: dict[int, int] = {}
+    folder_by_id: dict[int, str] = {}
+
+    print(
+        "Monitoring scratch/remote experiments for this repo... (Ctrl-C to stop)\n"
+        f"Polling interval: {interval_s}s"
+    )
+
+    try:
+        while True:
+            prev_unfinished = set(unfinished)
+            prev_finished = set(finished)
+
+            procs = _list_remote_processes_for_this_repo()
+            running_ids: set[int] = set()
+
+            for proc in procs:
+                text = proc.config_path or proc.command
+                exp_id = _extract_experiment_id(text)
+                if exp_id is None:
+                    continue
+                running_ids.add(exp_id)
+                last_pid_by_id[exp_id] = proc.pid
+
+                if proc.config_path is not None:
+                    abs_cfg = _abs_from_repo(proc.config_path)
+                    folder_by_id[exp_id] = os.path.dirname(abs_cfg)
+
+            # Any running experiment is considered unfinished.
+            for exp_id in running_ids:
+                if exp_id not in finished:
+                    unfinished.add(exp_id)
+
+            # Promote finished experiments based on config.log.
+            for exp_id in list(unfinished):
+                folder = folder_by_id.get(exp_id)
+                if folder and _is_finished_folder(folder):
+                    unfinished.discard(exp_id)
+                    finished.add(exp_id)
+
+            new_unfinished = sorted(unfinished - prev_unfinished)
+            new_finished = sorted(finished - prev_finished)
+            if new_unfinished or new_finished:
+                now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                print("\n" + "=" * 72)
+                print(now)
+                if new_unfinished:
+                    print(f"New unfinished: {new_unfinished}")
+                if new_finished:
+                    print(f"New finished:   {new_finished}")
+                print(
+                    f"Totals: running={len(running_ids)} unfinished={len(unfinished)} finished={len(finished)}"
+                )
+
+            time.sleep(interval_s)
+    except KeyboardInterrupt:
+        print("\nStopped monitoring.")
 
 def check_folders_for_log(n=5):
     # 获取当前目录下的所有子文件夹
@@ -124,6 +213,15 @@ def kill_process_by_id(config_ids_str: str):
             os.kill(proc.pid, 9)
 
 if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        print(
+            "Usage:\n"
+            "  python3 check.py state [N]\n"
+            "  python3 check.py kill <ids>\n"
+            "  python3 check.py monitor [interval_seconds]"
+        )
+        raise SystemExit(2)
+
     command = sys.argv[1]
     if command == 'state':
         if len(sys.argv) == 3:
@@ -132,3 +230,8 @@ if __name__ == "__main__":
             check_folders_for_log()
     elif command == 'kill':
         kill_process_by_id(sys.argv[2])
+    elif command == 'monitor':
+        interval_s = 2.0
+        if len(sys.argv) >= 3:
+            interval_s = float(sys.argv[2])
+        monitor(interval_s=interval_s)

@@ -10,6 +10,8 @@
 #include <ns3/qbb-net-device.h>
 
 #include <algorithm>
+#include <cstdlib>
+#include <cmath>
 namespace ns3 {
 
 Time WanRouting::epoch_duration = MicroSeconds(1000); // 1ms
@@ -44,6 +46,9 @@ void WanRouting::DstDCHandler::Init(WanRouting* wan_routing, int64_t max_rate) {
 
     epoch_pkt_cnt = 0;
     epoch_cnp_cnt = 0;
+
+    rate_change_state = STABLE;
+    consecutive_state_epochs = 0;
 
     start_bytes = 0;
     end_bytes = static_cast<int64_t>(ref_rate * WanRouting::epoch_duration.GetSeconds());
@@ -350,17 +355,46 @@ void WanRouting::DstDCHandler::update_ref_rate() {
         return;
     }
 
-    // COPA version
-    double delta = 1.0 / (10 * 1024 * 1024); // 10MB standing queue target
+    //Get w
+    double w = 1;
+    if (Settings::GetRawParam("ENABLE_W", "FALSE") == "TRUE") {
+        double w_max = std::stod(Settings::GetRawParam("W_MAX", "4.0"));
+        double k = std::stod(Settings::GetRawParam("W_K", "0.0000001"));
+        double p = epoch_pkt_cnt ? static_cast<double>(epoch_cnp_cnt) / static_cast<double>(epoch_pkt_cnt) : 0.0;
+        // w = clip(p^0.75 * pre_ref_rate * k, 1, w_max)
+        w = std::pow(p, 0.75) * pre_ref_rate * k;
+        w = std::max(1.0, std::min(w, w_max));
+    }
+
+    // Get target_rate and target_state
+    const double delta = 1.0 / std::stod(Settings::GetRawParam("INV_DELTA", "10485760"));
+    const double beta = std::stod(Settings::GetRawParam("BETA", "0.4"));
     Time queue_delay = std::max(cur_rtt - min_rtt, MicroSeconds(10));
-    int v = 1;
-    int64_t target_rate = static_cast<int64_t>(1.0 / delta / queue_delay.GetSeconds());
-    int64_t step = static_cast<int64_t>(1.0 * v / (delta * epochs_per_rtt * min_rtt.GetSeconds()));
-    if (target_rate > pre_ref_rate) {
+    int64_t target_rate = static_cast<int64_t>(w / delta / queue_delay.GetSeconds());
+    RateChangeState target_state = (target_rate > pre_ref_rate) ? INCREASE : DECREASE;
+    if (rate_change_state == target_state) {
+        consecutive_state_epochs++;
+    } else {
+        rate_change_state = target_state;
+        consecutive_state_epochs = 1;
+    }
+
+    //Get v
+    int v = 1;    
+    if (Settings::GetRawParam("ENABLE_V", "FALSE") == "TRUE") {
+        if (consecutive_state_epochs >= 6 * epochs_per_rtt) {
+            v = 4;
+        } else if (consecutive_state_epochs >= 3 * epochs_per_rtt) {
+            v = 2;
+        }
+    }
+
+    int64_t step = static_cast<int64_t>(w * v / (delta * epochs_per_rtt * min_rtt.GetSeconds()));
+    if (target_state == INCREASE) {
         ref_rate += step;
         printf("[Copa Increase] ");
     } else {
-        double min_decrease_coefficient = std::pow(0.5, 1 / epochs_per_rtt);
+        double min_decrease_coefficient = std::pow(1 - beta, 1 / epochs_per_rtt);
         int64_t origin_step = step;
         step = std::max(step,
                         static_cast<int64_t>((pre_ref_rate - target_rate) * min_decrease_coefficient));
@@ -368,9 +402,10 @@ void WanRouting::DstDCHandler::update_ref_rate() {
         printf("[Copa %sDecrease] ", (step > origin_step) ? "Fast " : "linear ");
     }
     printf(
-        "cur_rtt: %.2lfms, min_rtt: %.2lfms, queue_delay: %.2lfms, target_rate: %.2lfGB/s, step: %.2lfGB/s ",
+        "cur_rtt: %.2lfms, min_rtt: %.2lfms, queue_delay: %.2lfms, target_rate: %.2lfGB/s, step: %.2lfGB/s "
+        "state: %d, consecutive: %u ",
         cur_rtt.GetSeconds() * 1000, min_rtt.GetSeconds() * 1000, queue_delay.GetSeconds() * 1000,
-        target_rate / 1e9, step / 1e9);
+        target_rate / 1e9, step / 1e9, (int)rate_change_state, consecutive_state_epochs);
 
     if (flag && ref_rate > upper_rate) {
         ref_rate = upper_rate + (ref_rate - upper_rate) * 0.8;

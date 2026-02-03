@@ -17,6 +17,9 @@ from IPython.display import display
 from matplotlib.font_manager import FontProperties
 import traceback
 from pathlib import Path
+import matplotlib
+matplotlib.rcParams['pdf.fonttype'] = 42  # TrueType 字体
+matplotlib.rcParams['ps.fonttype'] = 42  # TrueType 字体
 
 font_prop = None
 
@@ -436,6 +439,25 @@ class Analyser:
             (self.buffer_info['timestamp_ns'] >= 2010000000) & (self.buffer_info['timestamp_ns'] <= 2100000000)
         ].groupby(['timestamp_ns', 'switch_id'])['egress_bytes'].sum().reset_index()
         return df['egress_bytes'].mean()
+
+    def get_wan_buffer_stats(self):
+        """
+        Returns (mean, p99) of buffer occupancy (egress_bytes) for WAN switches.
+        aggregated over all queues and time.
+        """
+        self.__read_buffer_info()
+        wan_set = set(map(int, self.topo.get('wan_switches', [])))
+        if not wan_set:
+            return (0.0, 0.0)
+
+        df = self.buffer_info[self.buffer_info['switch_id'].isin(wan_set)]
+        if df.empty:
+            return (0.0, 0.0)
+            
+        # Each row is a queue sample.
+        # We calculate statistics across all samples (all queues, all times).
+        return df['egress_bytes'].mean(), df['egress_bytes'].quantile(0.99)
+
 
     def get_fct(self):
         return (self.get_avg_fct(), self.get_p99_fct())
