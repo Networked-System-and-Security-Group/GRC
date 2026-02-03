@@ -248,11 +248,36 @@ def generate_cernet_topo():
             "loss": 0.0
         })
 
-    # 5. 将WAN信息整合到最终的拓扑字典中
+    # 5. 在每个WAN交换机上绑定5个host
+    wan_hosts = []
+    wan_host_links = []
+    wan_host_bw = '20Gbps'
+    wan_host_delay = '1000ns'
+    wan_host_loss = 0.0
+
+    for wan_switch in wan_switches_list:
+        for _ in range(20):  # 每个WAN交换机绑定20个host
+            host_id = get_next_id()
+            wan_hosts.append(host_id)
+            wan_host_links.append({
+                "src": wan_switch,
+                "dst": host_id,
+                "bw": wan_host_bw,
+                "delay": wan_host_delay,
+                "loss": wan_host_loss
+            })
+
+    # 将WAN链路和WAN主机链路合并
+    wan_links.extend(wan_host_links)
+
+    # 6. 将WAN信息整合到最终的拓扑字典中
     topology['wan_switch_num'] = len(wan_switches_list)
     topology['wan_switches'] = wan_switches_list
     topology['wan_links'] = wan_links
     topology['wan_link_num'] = len(wan_links)
+    topology['wan_hosts'] = wan_hosts
+    topology['wan_host_num'] = len(wan_hosts)
+
     with open(op.join(op.dirname(__file__), 'cernet_topo.txt'), 'w') as f:
         topology_json = custom_json_dumps(topology, indent=4)
         f.write(topology_json)
