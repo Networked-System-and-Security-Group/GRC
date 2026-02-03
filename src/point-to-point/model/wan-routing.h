@@ -113,6 +113,10 @@ private:
         uint64_t epoch_pkt_cnt = 0;
         uint64_t epoch_cnp_cnt = 0;
 
+        enum RateChangeState { STABLE, INCREASE, DECREASE };
+        RateChangeState rate_change_state = STABLE;
+        uint32_t consecutive_state_epochs = 0;
+
         int64_t start_bytes = 0;
         int64_t end_bytes = 0;
         int64_t cur_bytes = 0;

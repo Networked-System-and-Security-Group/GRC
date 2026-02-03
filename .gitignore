@@ -24,3 +24,4 @@ autokill.pid
 .github
 .venv
 Notes.md
+*.csv

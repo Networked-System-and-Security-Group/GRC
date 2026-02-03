@@ -14,7 +14,7 @@ BACKGROUND_INTER_LOAD = 150
 DYNAMICS = [0, 50, 100, 150, 200]
 BETAS = [0.5, 0.4, 0.3, 0.2, 0.1, 0]
 SLEEP = 1
-
+ENABLE_V = 'TRUE'
 
 def run(cmd):
     print("+", shlex.join(cmd), flush=True)
@@ -51,7 +51,7 @@ def main():
     for dyn in DYNAMICS:
         flow = flows[dyn]
         for beta in BETAS:
-            msg = f"beta_sens:gscc,flow={flow},dyn={dyn},BETA={beta},No.{run_id}"
+            msg = f"beta_sens:gscc,flow={flow},dyn={dyn},BETA={beta},ENABLE_V={ENABLE_V},No.{run_id}"
             cmd = [
                 "python3",
                 "run.py",
@@ -69,6 +69,8 @@ def main():
                 "0",
                 "--extra",
                 f"BETA={beta}",
+                "--extra",
+                f"ENABLE_V={ENABLE_V}",
                 "--msg",
                 msg,
             ]
