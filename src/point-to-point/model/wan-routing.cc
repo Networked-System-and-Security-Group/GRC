@@ -243,9 +243,9 @@ void WanRouting::HandleAckReceived(Ptr<Packet> p, CustomHeader& ch) {
                 rtt_table[index].timestamp.GetNanoSeconds());
         }
         dcHandler.record_rtt(rtt);
+        rtt_table[index].timestamp = Seconds(0);
+        rtt_table[index].hashed_seq = 0;
     }
-    rtt_table[index].timestamp = Seconds(0);
-    rtt_table[index].hashed_seq = 0;
     //dcHandler.record_rtt(flow_hash_value, hashed_seq, src_as == 2 && cur_as == 0);
     //printf("Switch %u, Seq %u ack passed, bucket:%u, index:%u\n", m_switch_id, ch.ack.seq, flow_hash_value, hashed_seq);
     m_switchSendToDevCallback(p, ch);
@@ -287,14 +287,22 @@ void WanRouting::controlplane_logic() {
             const uint64_t pkt_cnt = dc_handler.epoch_pkt_cnt;
             const uint64_t cnp_cnt = dc_handler.epoch_cnp_cnt;
             const double prob = (pkt_cnt == 0) ? 0.0 : (static_cast<double>(cnp_cnt) / static_cast<double>(pkt_cnt));
-            fprintf(logfile::cnp_trigger_prob_log, "%lu,%u,%u,%u,%lu,%lu,%.6f\n",
+            double w = 1.0;
+            if (Settings::GetRawParam("ENABLE_W", "FALSE") == "TRUE") {
+                double w_max = std::stod(Settings::GetRawParam("W_MAX", "4.0"));
+                double k = std::stod(Settings::GetRawParam("W_K", "0.0000001"));
+                w = std::pow(prob, 0.75) * dc_handler.ref_rate * k;
+                w = std::max(1.0, std::min(w, w_max));
+            }
+            fprintf(logfile::cnp_trigger_prob_log, "%lu,%u,%u,%u,%lu,%lu,%.6f,%.6f\n",
                     Simulator::Now().GetNanoSeconds(),
                     m_switch_id,
                     Settings::nodeInfos[m_switch_id].as_id,
                     dst_as,
                     cnp_cnt,
                     pkt_cnt,
-                    prob);
+                    prob,
+                    w);
         }
 
         
@@ -368,7 +376,7 @@ void WanRouting::DstDCHandler::update_ref_rate() {
 
     // Get target_rate and target_state
     const double delta = 1.0 / std::stod(Settings::GetRawParam("INV_DELTA", "10485760"));
-    const double beta = std::stod(Settings::GetRawParam("BETA", "0.4"));
+    const double beta = std::stod(Settings::GetRawParam("BETA", "0.3"));
     Time queue_delay = std::max(cur_rtt - min_rtt, MicroSeconds(10));
     int64_t target_rate = static_cast<int64_t>(w / delta / queue_delay.GetSeconds());
     RateChangeState target_state = (target_rate > pre_ref_rate) ? INCREASE : DECREASE;

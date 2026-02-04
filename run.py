@@ -76,6 +76,7 @@ PMAX_MAP {pmax_map}
 RANDOM_SEED {random_seed}
 TIME {time}
 WAN_CC_MODE {wan_cc_mode}
+MSG {msg}
 """
 
 
@@ -352,7 +353,7 @@ def main():
                                         has_win=has_win, var_win=var_win,
                                         fast_react=fast_react, mi=mi, int_multi=int_multi, ewma_gain=ewma_gain,
                                         kmax_map=kmax_map, kmin_map=kmin_map, pmax_map=pmax_map, random_seed=1, time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"), 
-                                        wan_cc_mode=wan_cc_mode)
+                                        wan_cc_mode=wan_cc_mode, msg=msg)
     elif cc_mode == 7:
         ai = 10 * bw / 10
         hai = 50 * bw / 10
@@ -372,7 +373,7 @@ def main():
                                         has_win=has_win, var_win=var_win,
                                         fast_react=fast_react, mi=mi, int_multi=int_multi, ewma_gain=ewma_gain,
                                         kmax_map=kmax_map, kmin_map=kmin_map, pmax_map=pmax_map, random_seed=1, time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"), 
-                                        wan_cc_mode=wan_cc_mode)
+                                        wan_cc_mode=wan_cc_mode, msg=msg)
     else:
         print("unknown cc:{}".format(args.cc))
 
