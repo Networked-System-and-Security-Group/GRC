@@ -14,6 +14,7 @@ class RemoteProcess:
     pid: int
     command: str
     config_path: Optional[str]
+    elapsed_s: int = 0
 
 
 def _repo_root() -> str:
@@ -60,7 +61,9 @@ def _is_finished_folder(folder: str) -> bool:
 
 def _list_remote_processes_for_this_repo() -> list[RemoteProcess]:
     repo = _repo_root()
-    ps = subprocess.run(["ps", "aux"], capture_output=True, text=True, check=False)
+    # Use -eo pid,etimes,args to get PID, elapsed seconds, and full command.
+    # -ww ensures no truncation.
+    ps = subprocess.run(["ps", "-ww", "-eo", "pid,etimes,args"], capture_output=True, text=True, check=False)
     lines = ps.stdout.splitlines()
 
     procs: list[RemoteProcess] = []
@@ -71,16 +74,18 @@ def _list_remote_processes_for_this_repo() -> list[RemoteProcess]:
             continue
         if " grep " in f" {line} ":
             continue
-        parts = line.split(None, 10)
-        if len(parts) < 11:
+        
+        parts = line.strip().split(None, 2)
+        if len(parts) < 3:
             continue
 
         try:
-            pid = int(parts[1])
+            pid = int(parts[0])
+            elapsed_s = int(parts[1])
+            command = parts[2]
         except ValueError:
             continue
 
-        command = parts[10]
         config_path = _extract_config_path(command)
 
         # Filter by the current repo root.
@@ -93,21 +98,22 @@ def _list_remote_processes_for_this_repo() -> list[RemoteProcess]:
             if repo not in command:
                 continue
 
-        procs.append(RemoteProcess(pid=pid, command=command, config_path=config_path))
+        procs.append(RemoteProcess(pid=pid, command=command, config_path=config_path, elapsed_s=elapsed_s))
 
     return procs
 
 
-def monitor(interval_s: float = 2.0):
+def monitor(interval_s: float = 2.0, kill_hours: Optional[float] = None):
     unfinished: set[int] = set()
     finished: set[int] = set()
     last_pid_by_id: dict[int, int] = {}
     folder_by_id: dict[int, str] = {}
 
-    print(
-        "Monitoring scratch/remote experiments for this repo... (Ctrl-C to stop)\n"
-        f"Polling interval: {interval_s}s"
-    )
+    msg = "Monitoring scratch/remote experiments for this repo... (Ctrl-C to stop)\n"
+    msg += f"Polling interval: {interval_s}s"
+    if kill_hours is not None:
+        msg += f", Auto-kill after: {kill_hours} hours"
+    print(msg)
 
     try:
         while True:
@@ -118,10 +124,21 @@ def monitor(interval_s: float = 2.0):
             running_ids: set[int] = set()
 
             for proc in procs:
+                # Check for timeout kill
+                if kill_hours is not None:
+                     if proc.elapsed_s > kill_hours * 3600:
+                         print(f"\n[Auto-kill] PID {proc.pid} elapsed {proc.elapsed_s/3600:.2f}h > {kill_hours}h. Killing...")
+                         try:
+                             os.kill(proc.pid, 9)
+                         except OSError as e:
+                             print(f"Failed to kill {proc.pid}: {e}")
+                         continue # Process is killed, don't count it as running
+
                 text = proc.config_path or proc.command
                 exp_id = _extract_experiment_id(text)
                 if exp_id is None:
                     continue
+                
                 running_ids.add(exp_id)
                 last_pid_by_id[exp_id] = proc.pid
 
@@ -218,7 +235,7 @@ if __name__ == "__main__":
             "Usage:\n"
             "  python3 check.py state [N]\n"
             "  python3 check.py kill <ids>\n"
-            "  python3 check.py monitor [interval_seconds]"
+            "  python3 check.py monitor [kill_hours] [interval_seconds]"
         )
         raise SystemExit(2)
 
@@ -231,7 +248,15 @@ if __name__ == "__main__":
     elif command == 'kill':
         kill_process_by_id(sys.argv[2])
     elif command == 'monitor':
+        kill_hours = None
         interval_s = 2.0
+        
         if len(sys.argv) >= 3:
-            interval_s = float(sys.argv[2])
-        monitor(interval_s=interval_s)
+            val = float(sys.argv[2])
+            if val > 0:
+                kill_hours = val
+        
+        if len(sys.argv) >= 4:
+            interval_s = float(sys.argv[3])
+            
+        monitor(interval_s=interval_s, kill_hours=kill_hours)

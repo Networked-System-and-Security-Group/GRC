@@ -61,7 +61,8 @@ uint32_t Settings::get_flowid(Ptr<Packet> p) {
         }
     }
 
-    assert(false);
+    //assert(false);
+    printf("WARNING: Packet does not have FlowIDNUMTag and is not TCP/ICMP over IPv4. Unable to determine flow ID.\n");
     return 0xFFFFFFFF;
 }
 

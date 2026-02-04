@@ -916,6 +916,146 @@ class Analyser:
         plt.grid(True)
         plt.tight_layout()
 
+    def analyze_cnp_k(self, w_max=4, start_time=2.01, end_time=2.1):
+        """
+        Calculates x = prob^0.75 * RefRate and finds optimal k such that k*x falls in [1, w_max].
+        """
+        self.__read_cnp_trigger_prob_info()
+        self.__read_as_rate_info()
+        
+        t_start_ns = start_time * 1e9
+        t_end_ns = end_time * 1e9
+        
+        # 1. Filter by time
+        cnp_df = self.cnp_trigger_prob_info[
+            (self.cnp_trigger_prob_info['timestamp_ns'] >= t_start_ns) & 
+            (self.cnp_trigger_prob_info['timestamp_ns'] <= t_end_ns)
+        ].copy()
+        
+        rate_df = self.as_rate_info[
+            (self.as_rate_info['timestamp_ns'] >= t_start_ns) & 
+            (self.as_rate_info['timestamp_ns'] <= t_end_ns)
+        ].copy()
+
+        if cnp_df.empty or rate_df.empty:
+            print("No data in the specified time range.")
+            return
+
+        # 2. Map RefRate to CNP info
+        # Map src_as to its DCI switch
+        as_to_switch = {}
+        for as_obj in self.topo['as_topologies']:
+            as_to_switch[as_obj['as_id']] = as_obj['dci_switch']
+        
+        cnp_df['expected_switch'] = cnp_df['src_as'].map(as_to_switch)
+        cnp_df = cnp_df[cnp_df['switch_id'] == cnp_df['expected_switch']]
+        
+        cnp_df = cnp_df.sort_values('timestamp_ns')
+        rate_df = rate_df.sort_values('timestamp_ns')
+        
+        # Merge using asof
+        merged_frames = []
+        for (src, dst), group_cnp in cnp_df.groupby(['src_as', 'dst_as']):
+            group_rate = rate_df[(rate_df['src_as'] == src) & (rate_df['dst_as'] == dst)]
+            if group_rate.empty:
+                continue
+            
+            # Using 2ms tolerance for matching
+            # Timestamp is int64 (ns), so tolerance must be int
+            merged = pd.merge_asof(
+                group_cnp, 
+                group_rate[['timestamp_ns', 'ref_rate']], 
+                on='timestamp_ns', 
+                direction='nearest',
+                tolerance=int(2e6)
+            )
+            merged_frames.append(merged)
+            
+        if not merged_frames:
+            print("Could not merge CNP and Rate data.")
+            return
+            
+        full_df = pd.concat(merged_frames)
+        full_df = full_df.dropna(subset=['ref_rate'])
+        
+        # 3. Calculate x = prob^0.75 * RefRate
+        full_df['x'] = (full_df['prob'] ** 0.75) * full_df['ref_rate']
+        
+        # Filter valid x > 0
+        valid_x = full_df[full_df['x'] > 1e-9]['x'].values
+        
+        if len(valid_x) == 0:
+            print("No valid positive x values found.")
+            return
+
+        print(f"Total valid samples: {len(valid_x)}")
+        
+        # 4. Find Optimal k (Max Stabbing Query / Interval Problem)
+        # For each x, valid k interval is [1/x, w_max/x]
+        events = []
+        for x_val in valid_x:
+            l = 1.0 / x_val
+            r = float(w_max) / x_val
+            events.append((l, 1))
+            events.append((r, -1))
+        
+        # Sort events by value, then type (process start (+1) before end (-1) if values equal for closed interval overlap logic, 
+        # but actually for max points in [1, w_max], if k is exactly at boundary, it counts.
+        # If we encounter End of one interval and Start of another at same K, ideally count should not drop then rise.
+        # But standard way is fine for finding max.
+        events.sort(key=lambda x: (x[0], -x[1])) 
+        
+        max_overlap = 0
+        best_k = 0
+        current_overlap = 0
+        
+        # We need to potentially check the interval between events, but since optimal k must start at some 1/x,
+        # checking event points is sufficient.
+        for val, type in events:
+            current_overlap += type
+            if current_overlap > max_overlap:
+                max_overlap = current_overlap
+                best_k = val 
+        
+        print(f"Optimal k: {best_k:.4e}")
+        print(f"Max samples in range [1, {w_max}]: {max_overlap} ({max_overlap/len(valid_x)*100:.2f}%)")
+        
+        # 5. Plotting
+        plt.figure(figsize=(12, 6))
+        
+        # Subplot 1: Distribution of log10(x)
+        plt.subplot(1, 2, 1)
+        # Use log scale because x = prob * Rate can span orders of magnitude
+        log_x = np.log10(valid_x)
+        plt.hist(log_x, bins=50, color='skyblue', edgecolor='black', alpha=0.7)
+        plt.title('Distribution of log10(x)\n(x = prob^0.75 * RefRate)')
+        plt.xlabel('log10(x)')
+        plt.ylabel('Count')
+        plt.grid(True, linestyle='--', alpha=0.5)
+        
+        # Subplot 2: Distribution of k*x
+        plt.subplot(1, 2, 2)
+        adjusted_x = valid_x * best_k
+        # Plot in log scale for X axis to see [1, 4] clearly if data spans widely
+        # But request implies [1, 4] is the target linear range.
+        # Let's clip visual range or just show histogram around [0, w_max*2]
+        plt.hist(adjusted_x, bins=100, range=(0, w_max * 2), color='orange', edgecolor='black', alpha=0.7, label='k*x')
+        plt.axvline(1, color='red', linestyle='--', linewidth=2, label='Lower (1)')
+        plt.axvline(w_max, color='green', linestyle='--', linewidth=2, label=f'Upper ({w_max})')
+        plt.title(f'Distribution of k*x (k={best_k:.2e})\nCoverage: {max_overlap/len(valid_x)*100:.1f}%')
+        plt.xlabel('k * x')
+        plt.ylabel('Count')
+        plt.legend()
+        plt.grid(True, linestyle='--', alpha=0.5)
+        
+        save_name = f'cnp_k_analysis_{self.id}_w{w_max}.pdf'
+        plt.tight_layout()
+        plt.savefig(save_name)
+        print(f"Plot saved to {save_name}")
+        plt.close()
+        
+        return best_k
+
 _instances: Dict[str, Analyser] = {}
 def get_analyser(id) -> Analyser:
     if str(id) not in _instances:
@@ -1004,8 +1144,14 @@ def plot_motivation_expr():
 
 def plot_motivation_expr2():
     get_analyser(40).plot_qp_rate([467])
+
 if __name__ == '__main__':
-    pass
-    # %%
-    plot_motivation_expr()
-    plot_motivation_expr2()
+    # Test CNP K analysis on experiment 132
+    try:
+        ana = get_analyser(132)
+        ana.analyze_cnp_k(w_max=4, start_time=2.01, end_time=2.1)
+    except Exception as e:
+        print(f"Error running analysis on 132: {e}")
+        # traceback.print_exc()
+
+# %%

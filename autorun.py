@@ -16,7 +16,6 @@ PRESETS = {
     "wo_gscc": {"wan_cc_mode": 0, "dci": 0, "wan": 0},
     "inf_wo_gscc": {"wan_cc_mode": 0},
     "gscc": {"wan_cc_mode": 1, "dci": 0, "wan": 0},
-    "dcqcn_ecn": {"wan_cc_mode": 2, "dci": 0, "wan": 0},
 }
 
 
