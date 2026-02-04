@@ -9,6 +9,8 @@
 #include "ns3/simulator.h"
 #include <queue>
 #include "ns3/flow-id-num-tag.h"
+#include "ns3/ipv4-header.h"
+#include "ns3/ppp-header.h"
 #include <assert.h>
 
 
@@ -33,10 +35,35 @@ uint32_t Settings::get_flowid(Ptr<Packet> p) {
     FlowIDNUMTag fit;
     if (p->PeekPacketTag(fit)) {
         return fit.GetId();
-    } else {
-        assert(false);
-        return 0xFFFFFFFF;
     }
+
+    // Hole for TCP/ICMP packets: they may not carry FlowIDNUMTag in this codebase.
+    // If the packet is IPv4 TCP/ICMP, synthesize a compact flow id from endpoints.
+    Ptr<Packet> tmp = p->Copy();
+
+    // Most packets on this data plane are PPP-encapsulated.
+    // Only strip PPP when the protocol looks like IPv4 (0x0800 in this repo).
+    PppHeader ppp;
+    if (tmp->PeekHeader(ppp) > 0) {
+        const uint16_t pppProto = ppp.GetProtocol();
+        if (pppProto == 0x0800) {
+            tmp->RemoveHeader(ppp);
+        }
+    }
+
+    Ipv4Header ipv4;
+    if (tmp->PeekHeader(ipv4) > 0) {
+        const uint8_t l4Proto = ipv4.GetProtocol();
+        if (l4Proto == 0x06 || l4Proto == 0x01) {  // TCP or ICMP
+            const uint32_t srcId = Settings::ip_to_node_id(ipv4.GetSource());
+            const uint32_t dstId = Settings::ip_to_node_id(ipv4.GetDestination());
+            return srcId * 1000u + dstId;
+        }
+    }
+
+    //assert(false);
+    printf("WARNING: Packet does not have FlowIDNUMTag and is not TCP/ICMP over IPv4. Unable to determine flow ID.\n");
+    return 0xFFFFFFFF;
 }
 
 
@@ -104,6 +131,8 @@ void Settings::record_flow_distribution(Ptr<Packet> p, CustomHeader &ch, Ptr<Nod
 }
 
 uint32_t Settings::dropped_flow_id = -1;
+
+std::unordered_map<std::string, std::string> Settings::raw_params;
 
 
 void Settings::print_flow_distribution(Time interval) {
@@ -173,6 +202,7 @@ namespace logfile {
     FILE* buffer_monitor = nullptr;
     FILE* rate_monitor = nullptr;
     FILE* cnp_log = nullptr;
+    FILE* cnp_trigger_prob_log = nullptr;
     FILE* accumulated_bytes_log = nullptr;
 
     
@@ -210,6 +240,8 @@ namespace logfile {
         fprintf(qp_rate_log, "timestamp_ns,flow_id,rate,alpha,target_rate\n");
         OPEN_EMPTY_FILE(cnp_log);
         fprintf(cnp_log, "timestamp_ns,switch_id,flow_id\n");
+        OPEN_FILE(cnp_trigger_prob_log);
+        fprintf(cnp_trigger_prob_log, "timestamp_ns,switch_id,src_as,dst_as,cnp_cnt,pkt_cnt,prob\n");
         OPEN_EMPTY_FILE(accumulated_bytes_log);
         fprintf(accumulated_bytes_log, "timestamp_ns,switch_id,dst_as,accumulated_bytes\n");
 

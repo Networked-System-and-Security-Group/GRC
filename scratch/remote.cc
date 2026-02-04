@@ -11,6 +11,7 @@
 #include <iostream>
 #include <unordered_map>
 #include <filesystem>
+#include <cctype>
 
 #include "ns3/applications-module.h"
 #include "ns3/broadcom-node.h"
@@ -40,6 +41,13 @@
 using namespace ns3;
 using namespace std;
 
+static inline std::string _TrimWs(std::string s) {
+    auto notSpace = [](unsigned char ch) { return !std::isspace(ch); };
+    s.erase(s.begin(), std::find_if(s.begin(), s.end(), notSpace));
+    s.erase(std::find_if(s.rbegin(), s.rend(), notSpace).base(), s.end());
+    return s;
+}
+
 NS_LOG_COMPONENT_DEFINE("GENERIC_SIMULATION");
 
 /*------Load balancing parameters-----*/
@@ -58,8 +66,6 @@ double pause_time = 5;  // PFC pause, microseconds
 double flowgen_start_time = 2.0, flowgen_stop_time = 2.5, simulator_extra_time = 3.0;//0.15;
 // queue length monitoring time is not used in this simulator
 // uint32_t qlen_dump_interval = 100000000, qlen_mon_interval = 1000;  // ns
-uint64_t qlen_mon_start;               // ns
-uint64_t qlen_mon_end;                 // ns
 uint32_t switch_mon_interval = 10000;  // ns
 uint32_t server_rtt_mon_interval = 100000;  //ns
 uint64_t cnp_mon_start;                // ns
@@ -94,6 +100,8 @@ unordered_map<uint64_t, double> rate2pmax;
 
 // config of link-down scenario, ACK priority, and buffer
 uint32_t buffer_size = 0;  // 0 to set buffer size automatically
+uint32_t dci_buffer_size = 0;  // MB, 0 keeps default
+uint32_t wan_buffer_size = 0;  // MB, 0 keeps default
 
 // Added from Here
 double load = 10.0;
@@ -122,9 +130,15 @@ NodeContainer& n = Settings::nodeContainer;                         // node cont
 
 //flow input global variable
 std::ifstream flowf;
+std::ifstream tcp_flowf;
 uint32_t flow_num;
+uint32_t tcp_flow_num = 0;
 std::unordered_map<uint32_t, uint16_t> sportNumber;
 std::unordered_map<uint32_t, uint16_t> dportNumber;
+std::unordered_map<uint32_t, uint16_t> tcpDportNumber;
+
+std::string tcp_flow_file;
+std::vector<FlowInput> tcpFlowInfos;
 
 using json = nlohmann::json;
 json topo_json;
@@ -152,6 +166,26 @@ bool ReadFlowInput() {
         std::cout << "*** THIS IS THE LAST FLOW TO SEND :) " << std::endl;
         return false;
     }
+}
+
+/**
+ * Read TCP flow input from file "tcp_flowf".
+ * Format is identical to RDMA flow file: N then <src> <dst> <pg> <size_bytes> <start_time_seconds>
+ */
+bool ReadTcpFlowInput() {
+    if (tcpFlowInfos.size() < tcp_flow_num) {
+        uint32_t flow_id = tcpFlowInfos.size();
+        tcpFlowInfos.emplace_back();
+        auto& flow_input = tcpFlowInfos.back();
+        tcp_flowf >> flow_input.src >> flow_input.dst >> flow_input.pg >> flow_input.fsize >> flow_input.start_time;
+        flow_input.idx = flow_id;
+        flow_input.fsize = std::max(1u, flow_input.fsize);
+        fflush(stdout);
+        assert(n.Get(flow_input.src)->GetNodeType() == 0 &&
+               n.Get(flow_input.dst)->GetNodeType() == 0);
+        return true;
+    }
+    return false;
 }
 
 /**
@@ -199,6 +233,57 @@ void ScheduleFlowInputs() {
         }
     }
     Simulator::Schedule(Seconds(Settings::flowInfos.back().start_time) - Simulator::Now(), &ScheduleFlowInputs);
+}
+
+/**
+ * Scheduling TCP flows from TCP_FLOW_FILE using ns-3 standard applications:
+ * - Sender: BulkSendApplication (TcpSocketFactory)
+ * - Receiver: PacketSink (TcpSocketFactory)
+ */
+void ScheduleTcpFlowInputs() {
+    NS_LOG_DEBUG("ScheduleTcpFlowInputs at " << Simulator::Now());
+    while (!tcpFlowInfos.empty() &&
+           std::abs(tcpFlowInfos.back().start_time - Simulator::Now().GetSeconds()) < 1e-8) {
+        auto& flowInfo = tcpFlowInfos.back();
+        if (flowInfo.idx % 1000 == 0) {
+            std::time_t t = std::time(nullptr);
+            std::cout << std::put_time(std::localtime(&t), "%H:%M:%S") << " [" << Simulator::Now() << "]"
+                      << " TCP " << flowInfo.idx << "条流已导入" << std::endl;
+        }
+
+        uint32_t src = flowInfo.src;
+        uint32_t dst = flowInfo.dst;
+        uint32_t fsize = flowInfo.fsize;
+        uint16_t dport = tcpDportNumber[dst]++;
+
+        // Install apps at the scheduled time, and start the sink slightly earlier than the sender
+        // to avoid spurious resets/ICMP due to event ordering.
+        Time start = Simulator::Now();
+        Time sinkStart = start;
+        Time senderStart = start + NanoSeconds(1);
+
+        PacketSinkHelper sinkHelper("ns3::TcpSocketFactory",
+                                   Address(InetSocketAddress(Ipv4Address::GetAny(), dport)));
+        ApplicationContainer sinkApps = sinkHelper.Install(n.Get(dst));
+        sinkApps.Start(sinkStart);
+        sinkApps.Stop(Seconds(100.0));
+
+        BulkSendHelper senderHelper("ns3::TcpSocketFactory",
+                                   Address(InetSocketAddress(nodeInfos[dst].ip, dport)));
+        senderHelper.SetAttribute("MaxBytes", UintegerValue(fsize));
+        ApplicationContainer senderApps = senderHelper.Install(n.Get(src));
+        senderApps.Start(senderStart);
+        senderApps.Stop(Seconds(100.0));
+
+        if (!ReadTcpFlowInput()) {
+            tcp_flowf.close();
+            return;
+        }
+    }
+
+    if (!tcpFlowInfos.empty()) {
+        Simulator::Schedule(Seconds(tcpFlowInfos.back().start_time) - Simulator::Now(), &ScheduleTcpFlowInputs);
+    }
 }
 
 /**
@@ -296,10 +381,10 @@ void qp_finish(FILE *fout, Ptr<RdmaQueuePair> q) {
     //        standalone_fct);
 
     // for debugging
-    NS_LOG_DEBUG("%u %u %u %u %lu %lu %lu %lu\n" %
-                 (Settings::ip_to_node_id(q->sip), Settings::ip_to_node_id(q->dip), q->sport,
-                  q->dport, q->m_size, q->startTime.GetTimeStep(),
-                  (Simulator::Now() - q->startTime).GetTimeStep(), standalone_fct));
+    // NS_LOG_DEBUG("%u %u %u %u %lu %lu %lu %lu\n" %
+    //              (Settings::ip_to_node_id(q->sip), Settings::ip_to_node_id(q->dip), q->sport,
+    //               q->dport, q->m_size, q->startTime.GetTimeStep(),
+    //               (Simulator::Now() - q->startTime).GetTimeStep(), standalone_fct));
     Settings::cnt_finished_flows++;
     fflush(fout);
     fflush(stdin);
@@ -374,7 +459,12 @@ void output_flow_info() {
  */
 void stop_simulation_middle() {
     uint32_t target_flow_num = flow_num - 0;  // can be lower than flownum
-    if (Settings::cnt_finished_flows >= target_flow_num || Simulator::Now() > Seconds(flowgen_stop_time + simulator_extra_time)) {
+    // When TCP flows are enabled, don't stop early purely based on RDMA completion;
+    // otherwise TCP apps may not have time to run.
+    bool has_tcp_flows = (tcp_flow_num > 0);
+    bool rdma_done = (Settings::cnt_finished_flows >= target_flow_num);
+    bool time_over = (Simulator::Now() > Seconds(flowgen_stop_time + simulator_extra_time));
+    if ((!has_tcp_flows && rdma_done) || time_over) {
         std::cout << "\n*** Simulator is enforced to be finished, finished so far: "
                   << Settings::cnt_finished_flows << "/ total: " << target_flow_num
                   << ", Time:" << Simulator::Now() << std::endl;
@@ -466,21 +556,19 @@ void CalculateRoutes(NodeContainer &n) {
  *    而 DCI_SWITCH 节点仅处理同 AS 内的路由。
  */
 void SetRoutingEntries() {
-    // 预先收集所有 HOST 节点的 ID，并缓存其 IP 地址，避免重复查询。
-    vector<uint32_t> host_ids;         // 存储所有 HOST 节点的索引
-    vector<Ipv4Address> host_addresses(nodeInfos.size()); // 用于按节点 ID 缓存 IP 地址
+    // [UNCHANGED] 预先收集所有 HOST 节点的 ID，并缓存其 IP 地址
+    vector<uint32_t> host_ids;         
+    vector<Ipv4Address> host_addresses(nodeInfos.size()); 
     for (uint32_t i = 0; i < nodeInfos.size(); i++) {
         if (nodeInfos[i].node_type == NodeInfo::NodeType::HOST) {
             host_ids.push_back(i);
             Ptr<Node> host_node = n.Get(i);
-            // 获取 HOST 节点对应的 IP 地址（假设接口 1,0 存储了正确的地址）
             host_addresses[i] = host_node->GetObject<Ipv4>()->GetAddress(1, 0).GetLocal();
         }
     }
 
-    // Lambda 函数：根据 src_node 的类型调用相应的添加路由表项函数
+    // [UNCHANGED] Lambda 函数：添加路由表项
     auto addTableEntry = [&](Ptr<Node> src_node, Ipv4Address dstAddr, uint32_t if_idx) {
-        // 对于 HOST 节点，使用 RdmaDriver 进行添加；对于交换机节点则进行动态类型转换后添加
         if (src_node->GetObject<RdmaDriver>() != nullptr) {
             src_node->GetObject<RdmaDriver>()->m_rdma->AddTableEntry(dstAddr, if_idx);
         } else {
@@ -488,12 +576,13 @@ void SetRoutingEntries() {
         }
     };
 
-    // 遍历所有节点，处理类型为 HOST、DC_SWITCH 和 DCI_SWITCH 的节点的路由设置
+    // 遍历所有节点
     for (uint32_t src_id = 0; src_id < nodeInfos.size(); src_id++) {
-        // 仅对支持路由设置的节点进行处理
+        // [CHANGED] 修改判断条件，允许 WAN_SWITCH 进入循环
         if (nodeInfos[src_id].node_type == NodeInfo::NodeType::HOST ||
             nodeInfos[src_id].node_type == NodeInfo::NodeType::DC_SWITCH ||
-            nodeInfos[src_id].node_type == NodeInfo::NodeType::DCI_SWITCH) {
+            nodeInfos[src_id].node_type == NodeInfo::NodeType::DCI_SWITCH ||
+            nodeInfos[src_id].node_type == NodeInfo::NodeType::WAN_SWITCH) { // <--- Added
             
             Ptr<Node> src_node = n.Get(src_id);
             NodeInfo &srcInfo = nodeInfos[src_id];
@@ -503,27 +592,86 @@ void SetRoutingEntries() {
                 // 跳过自身
                 if (src_id == dst_host_id) continue;
 
-                // 从预先缓存的 IP 地址中获取目标 HOST 的 IP 地址
                 Ipv4Address dstAddr = host_addresses[dst_host_id];
 
-                // 若源和目标在同一自治系统内，采用直接路由（Intra-AS routing）
-                if (srcInfo.as_id == nodeInfos[dst_host_id].as_id) {
+                // ------------------------------------------------------------------
+                // 逻辑分支 1: Intra-AS (同一 AS 内)
+                // [CHANGED] 排除 WAN Switch，因为 WAN Switch 的直连逻辑在后面单独处理
+                // ------------------------------------------------------------------
+                if (srcInfo.node_type != NodeInfo::NodeType::WAN_SWITCH && 
+                    srcInfo.as_id == nodeInfos[dst_host_id].as_id) {
+                    
                     Ptr<Node> dst_node = n.Get(dst_host_id);
-                    // 遍历所有可能的下一跳节点，并为每个下一跳添加路由表项
+                    // [UNCHANGED] 直接路由
                     for (auto next_node : nextHop[src_node][dst_node]) {
                         addTableEntry(src_node, dstAddr, nbr2if[src_node][next_node].idx);
                     }
                 }
-                // 对于 HOST 和 DC_SWITCH 节点，当目标在不同自治系统内时，采用跨 AS 路由（Inter-AS routing）
-                // 注意：DCI_SWITCH 节点不处理跨 AS 路由
-                else if (srcInfo.node_type != NodeInfo::NodeType::DCI_SWITCH) {
-                    // 通过所在 AS 的 DCI 节点进行转发
-                    Ptr<Node> dci_node = n.Get(Settings::asId2DciId[srcInfo.as_id]);
-                    for (auto next_node : nextHop[src_node][dci_node]) {
-                        addTableEntry(src_node, dstAddr, nbr2if[src_node][next_node].idx);
+                // ------------------------------------------------------------------
+                // 逻辑分支 2: Inter-AS (不同 AS，或者 WAN Host 到 WAN Switch)
+                // [CHANGED] 排除 DCI Switch 和 WAN Switch，这部分是 HOST/DC_SWITCH 的逻辑
+                // ------------------------------------------------------------------
+                else if (srcInfo.node_type != NodeInfo::NodeType::DCI_SWITCH && 
+                         srcInfo.node_type != NodeInfo::NodeType::WAN_SWITCH) {
+                    
+                    // 子情况 A: 是普通 DC Host (所在的 AS 存在对应的 DCI 节点)
+                    if (Settings::asId2DciId.find(srcInfo.as_id) != Settings::asId2DciId.end()) {
+                        Ptr<Node> dci_node = n.Get(Settings::asId2DciId[srcInfo.as_id]);
+                        for (auto next_node : nextHop[src_node][dci_node]) {
+                            addTableEntry(src_node, dstAddr, nbr2if[src_node][next_node].idx);
+                        }
+                    }
+                    // 子情况 B: 是 WAN Host (没有对应的 DCI，直接挂在 WAN Switch 下)
+                    else {
+                        // [UNCHANGED from previous fix] 直接发给 Uplink
+                        for (auto it = nbr2if[src_node].begin(); it != nbr2if[src_node].end(); it++) {
+                            if (it->second.up) {
+                                addTableEntry(src_node, dstAddr, it->second.idx);
+                                break; 
+                            }
+                        }
                     }
                 }
-                // 对于 DCI_SWITCH 节点，不处理跨 AS 路由（即使目标不在同一 AS 内，也不做配置）
+                // ------------------------------------------------------------------
+                // [CHANGED/ADDED] 逻辑分支 3: WAN SWITCH 的路由逻辑
+                // ------------------------------------------------------------------
+                else if (srcInfo.node_type == NodeInfo::NodeType::WAN_SWITCH) {
+                    
+                    uint32_t dst_as_or_sw_id = nodeInfos[dst_host_id].as_id;
+
+                    // 情况 A: 目标 Host 直连在当前 WAN Switch 上 (Local)
+                    // (WAN Host 的 as_id 被设置为了其直连 Switch 的 ID)
+                    if (src_id == dst_as_or_sw_id) {
+                        // 遍历邻居表，找到连接该 Host 的端口
+                        bool found = false;
+                        for (auto it = nbr2if[src_node].begin(); it != nbr2if[src_node].end(); it++) {
+                            // it->first 是邻居 Node 指针
+                            if (it->first->GetId() == dst_host_id && it->second.up) {
+                                addTableEntry(src_node, dstAddr, it->second.idx);
+                                found = true;
+                                break;
+                            }
+                        }
+                        // 如果没找到，说明拓扑配置有误 (as_id 对上了但没物理连接)
+                        if (!found) {
+                             NS_LOG_WARN("WAN Switch " << src_id << " should have local host " << dst_host_id << " but no link found.");
+                        }
+                    }
+                    // 情况 B: 目标 Host 在其他地方 (Remote: 其他 WAN Switch 或 DC)
+                    // 无论是去往其他 WAN Switch (WAN Host) 还是去往 AS (DC Host)，
+                    // 都在 SetSPFWanRouting 中填入了 wan_routing 表。
+                    else {
+                        // 查表转发
+                        if (Settings::wan_routing[src_id].count(dst_as_or_sw_id)) {
+                            // 可能有多个 ECMP 路径
+                            for (auto port : Settings::wan_routing[src_id][dst_as_or_sw_id]) {
+                                addTableEntry(src_node, dstAddr, port);
+                            }
+                        }
+                    }
+                }
+                // [UNCHANGED] 对于 DCI_SWITCH 节点，这里维持原样不做处理
+                // (它的路由在 switch-node.cc 或其他地方通过 wan_routing 表动态处理，或者此处无需静态配置)
             }
         }
     }
@@ -531,18 +679,15 @@ void SetRoutingEntries() {
 
 map<uint32_t, map<uint32_t, uint64_t>> as_delay; //(as_id, as_id) -> delay
 void SetSPFWanRouting() {
-    /**
-     * 初始化 Settings::wan_routing, as_delay
-     * 最短路径以“跳数”为度量；假设任意两点之间仅存在一条最短路径。
-     */
+    // [UNCHANGED] 初始化变量
     json& j = topo_json;
 
- /* ---------- 构建节点集合与边 ----------- */
+    /* ---------- [UNCHANGED] 构建节点集合与边 ----------- */
     std::set<uint32_t> nodes;
-    std::set<uint32_t> dci_nodes;                       // 记录所有 DCI 节点
-    std::map<uint32_t, std::map<uint32_t, uint64_t>> edges; // src -> dst -> delay(ns)
+    std::set<uint32_t> dci_nodes;                        
+    std::map<uint32_t, std::map<uint32_t, uint64_t>> edges; 
 
-    /* DCI 节点来自 asId2DciId */
+    /* DCI 节点 */
     for (const auto& [as_id, dci_id] : Settings::asId2DciId) {
         nodes.insert(dci_id);
         dci_nodes.insert(dci_id);
@@ -552,7 +697,7 @@ void SetSPFWanRouting() {
     for (const auto& wan_switch : j["wan_switches"])
         nodes.insert(wan_switch.get<uint32_t>());
 
-    /* 链路，默认视为双向 */
+    /* 链路 */
     for (const auto& wan_link : j["wan_links"]) {
         uint32_t src = wan_link["src"].get<uint32_t>();
         uint32_t dst = wan_link["dst"].get<uint32_t>();
@@ -561,56 +706,87 @@ void SetSPFWanRouting() {
         edges[dst][src] = link_delay; 
     }
 
-    /* ---------- 构建邻接表 ----------- */
+    /* ---------- [UNCHANGED] 构建邻接表 ----------- */
     std::unordered_map<uint32_t, std::vector<uint32_t>> adj;
     for (const auto& [src, dst_map] : edges)
         for (const auto& [dst, _] : dst_map) adj[src].push_back(dst);
 
-    /* ---------- 逐源节点 BFS ---------- */
+    /* ---------- [UNCHANGED] 逐源节点 BFS ---------- */
     Settings::wan_routing.clear();
     as_delay.clear();
 
     std::queue<uint32_t> q;
-    std::unordered_map<uint32_t, uint32_t> parent;  // dst -> its parent when explored
+    std::unordered_map<uint32_t, uint32_t> parent;  
 
     for (uint32_t src : nodes) {
         parent.clear();
         parent[src] = src;
-        while (!q.empty()) q.pop();                // 清空队列
+        while (!q.empty()) q.pop();                
         q.push(src);
 
         /* BFS：保证最少跳数 */
         while (!q.empty()) {
             uint32_t u = q.front(); q.pop();
             for (uint32_t v : adj[u]) {
-                if (!parent.count(v)) {            // 未访问
+                if (!parent.count(v)) {            
                     parent[v] = u;
                     q.push(v);
                 }
             }
         }
 
-        /* 为所有 DCI 目标填 next-hop，并在 DCI↔DCI 时计算延迟 */
+        // [CHANGED/ADDED] 定义一个 Lambda Helper 来寻找下一跳，减少重复代码
+        auto findNextHop = [&](uint32_t dst_node) -> uint32_t {
+            if (src == dst_node || !parent.count(dst_node)) return (uint32_t)-1; 
+            uint32_t curr = dst_node;
+            while (parent[curr] != src) curr = parent[curr];
+            return curr;
+        };
+
+        /* [UNCHANGED LOGIC] 为所有 DCI (AS) 目标填 next-hop */
         for (auto [as, dst] : Settings::asId2DciId) {
-            if (src == dst || !parent.count(dst)) continue;  // 自己或不可达
+            uint32_t nextHop = findNextHop(dst); // 使用 helper
 
-            /* 回溯找到 src 出口 nextHop */
-            uint32_t nextHop = dst;
-            while (parent[nextHop] != src) nextHop = parent[nextHop];
-            Settings::wan_routing[src][as].push_back(nbr2if[n.Get(src)][n.Get(nextHop)].idx);
-            printf("WAN routing: %u -> %u, next hop: %u\n", src, as, nextHop);
+            if (nextHop != (uint32_t)-1) {
+                Settings::wan_routing[src][as].push_back(nbr2if[n.Get(src)][n.Get(nextHop)].idx);
+                // printf("WAN routing: %u -> %u, next hop: %u\n", src, as, nextHop);
 
-            /* 若源本身也是 DCI，则计算两 DCI 之间的最短路径延迟 */
-            if (dci_nodes.count(src)) {
-                uint64_t pathDelay = 0;
-                for (uint32_t cur = dst; cur != src; ) {
-                    uint32_t prv = parent[cur];
-                    pathDelay += edges[prv].at(cur);     // 已保证边存在
-                    cur = prv;
+                /* 若源本身也是 DCI，则计算两 DCI 之间的最短路径延迟 */
+                if (dci_nodes.count(src)) {
+                    uint64_t pathDelay = 0;
+                    for (uint32_t cur = dst; cur != src; ) {
+                        uint32_t prv = parent[cur];
+                        pathDelay += edges[prv].at(cur);     
+                        cur = prv;
+                    }
+                    as_delay[src][dst] = pathDelay;
+                    as_delay[dst][src] = pathDelay; 
+                    // cout << "AS delay: " << src << " -> " << dst << ": " << pathDelay << " ns" << endl;
                 }
-                as_delay[src][dst] = pathDelay;
-                as_delay[dst][src] = pathDelay; // 对称
-                cout << "AS delay: " << src << " -> " << dst << ": " << pathDelay << " ns" << endl;
+            }
+        }
+
+        /* [CHANGED/ADDED] 为所有 WAN Switch 目标填 next-hop */
+        // WAN Host 的路由依赖于能够到达其直连的 WAN Switch
+        for (const auto& wan_switch : j["wan_switches"]) {
+            uint32_t dst_sw = wan_switch.get<uint32_t>();
+            // 注意：这里我们将 wan_switch_id 直接作为 wan_routing 的第二层 key
+            // 因为 WAN Host 的 as_id 就等于 wan_switch_id
+            uint32_t nextHop = findNextHop(dst_sw);
+
+            if (nextHop != (uint32_t)-1) {
+                // 简单的防重复检查（有些拓扑里 WAN Switch 可能同时被标记为 DCI，避免重复添加端口）
+                bool already_exists = false;
+                if (Settings::wan_routing[src].count(dst_sw)) {
+                    for (auto p : Settings::wan_routing[src][dst_sw]) {
+                        if (p == nbr2if[n.Get(src)][n.Get(nextHop)].idx) already_exists = true;
+                    }
+                }
+                
+                if (!already_exists) {
+                    Settings::wan_routing[src][dst_sw].push_back(nbr2if[n.Get(src)][n.Get(nextHop)].idx);
+                    // printf("WAN routing (Switch-to-Switch): %u -> %u, next hop: %u\n", src, dst_sw, nextHop);
+                }
             }
         }
     }
@@ -711,11 +887,35 @@ void init_nodeinfo_links() {
     // 处理广域网部分
     auto wan_switches = j["wan_switches"];
     auto wan_links = j["wan_links"];
+    auto wan_hosts = j["wan_hosts"]; // 获取所有 WAN Hosts 的列表
+
+    int wan_host_idx = 0; // 全局索引，用于从 wan_hosts 数组中顺序取值
 
     for (const auto &wan_switch : wan_switches) {
         uint32_t wan_switch_id = wan_switch.get<uint32_t>();
+        // 将 WAN Switch 配置为 WAN_SWITCH 类型
         nodeInfos[wan_switch_id].basic_config(wan_switch_id, wan_switch_id, NodeInfo::NodeType::WAN_SWITCH);
+        
+        // 配置20个wan hosts
+        // 每个 WAN Switch 挂载 20 个 Host
+        for (int k = 0; k < 20; ++k) {
+            if (wan_host_idx >= wan_hosts.size()) {
+                printf("Error: Not enough wan_hosts defined in topology json!\n");
+                break;
+            }
+
+            uint32_t host_id = wan_hosts[wan_host_idx].get<uint32_t>();
+            wan_host_idx++; // 移动索引
+
+            // 配置 WAN Host
+            // 将 wan_switch_id 作为 AS ID 传入，以此表示该 Host 属于该区域
+            nodeInfos[host_id].basic_config(wan_switch_id, host_id, NodeInfo::NodeType::HOST);
+            // 增加总节点计数
+            node_num++;
+        }
     }
+
+    // 配置 WAN Switch 之间的骨干链路
     for (const auto &wan_link : wan_links) {
         uint32_t src = wan_link["src"].get<uint32_t>();
         uint32_t dst = wan_link["dst"].get<uint32_t>();
@@ -755,9 +955,8 @@ int main(int argc, char *argv[]) {
 #else
         conf.open(PATH_TO_PGO_CONFIG);
 #endif
-        while (!conf.eof()) {
-            std::string key;
-            conf >> key;
+        std::string key;
+        while (conf >> key) {
             if (key.compare("OUTPUT_DIR_PATH") == 0) {
                 std::string v;
                 conf >> v;
@@ -872,12 +1071,15 @@ int main(int argc, char *argv[]) {
                 conf >> v;
                 flow_file = v;
                 std::cerr << "FLOW_FILE\t\t\t" << flow_file << "\n";
+            } else if (key.compare("TCP_FLOW_FILE") == 0) {
+                std::string v;
+                conf >> v;
+                tcp_flow_file = v;
+                std::cerr << "TCP_FLOW_FILE\t\t\t" << tcp_flow_file << "\n";
             } else if (key.compare("FLOWGEN_START_TIME") == 0) {
                 double v;
                 conf >> v;
                 flowgen_start_time = v;
-                qlen_mon_start = v;
-                qlen_mon_end = v;
                 cnp_mon_start = v;
                 irn_mon_start = v;
                 std::cerr << "FLOWGEN_START_TIME\t\t" << flowgen_start_time << "\n";
@@ -1004,12 +1206,12 @@ int main(int argc, char *argv[]) {
             } else if (key.compare("BUFFER_SIZE") == 0) {
                 conf >> buffer_size;
                 std::cerr << "BUFFER_SIZE\t\t\t\t" << buffer_size << '\n';
-            } else if (key.compare("QLEN_MON_START") == 0) {
-                conf >> qlen_mon_start;
-                std::cerr << "QLEN_MON_START\t\t\t\t" << qlen_mon_start << '\n';
-            } else if (key.compare("QLEN_MON_END") == 0) {
-                conf >> qlen_mon_end;
-                std::cerr << "QLEN_MON_END\t\t\t\t" << qlen_mon_end << '\n';
+            } else if (key.compare("DCI_BUFFER_SIZE") == 0) {
+                conf >> dci_buffer_size;
+                std::cerr << "DCI_BUFFER_SIZE\t\t\t" << dci_buffer_size << '\n';
+            } else if (key.compare("WAN_BUFFER_SIZE") == 0) {
+                conf >> wan_buffer_size;
+                std::cerr << "WAN_BUFFER_SIZE\t\t\t" << wan_buffer_size << '\n';
             } else if (key.compare("MULTI_RATE") == 0) {
                 int v;
                 conf >> v;
@@ -1035,7 +1237,15 @@ int main(int argc, char *argv[]) {
                 conf >> v;
                 Settings::wan_cc_mode = static_cast<Settings::WanCCMode>(v);
                 std::cerr << "WAN_CC_MODE\t\t\t" << v << "\n";
-            } 
+            } else {
+                // Unknown key: consume the rest of the line and store as raw string.
+                // This enables quick experimentation without plumbing every knob.
+                std::string rawValue;
+                std::getline(conf, rawValue);
+                rawValue = _TrimWs(rawValue);
+                Settings::SetRawParam(key, rawValue);
+                std::cerr << "RAW_PARAM\t\t\t" << key << "\t" << rawValue << "\n";
+            }
 
             fflush(stdout);
         }
@@ -1267,8 +1477,8 @@ int main(int argc, char *argv[]) {
 
             sw->SetAttribute("CcMode", UintegerValue(cc_mode));
             sw->SetAttribute("AckHighPrio", UintegerValue(1));
-            NS_LOG_INFO("Node %u : Broadcom switch (%u ports / %gMB MMU)\n" %
-                        (i, sw->GetNDevices() - 1, sw->m_mmu->GetMmuBufferBytes() / 1000000.));
+            // NS_LOG_INFO("Node %u : Broadcom switch (%u ports / %gMB MMU)\n" %
+            //             (node.id, sw->GetNDevices() - 1, sw->m_mmu->GetMmuBufferBytes() / 1000000.));
         } else if (node.node_type == NodeInfo::NodeType::DCI_SWITCH) {
             Ptr<SwitchNode> sw = DynamicCast<SwitchNode>(n.Get(node.id));
             for (uint32_t j = 1; j < sw->GetNDevices(); j++) {
@@ -1283,15 +1493,18 @@ int main(int argc, char *argv[]) {
                 sw->m_mmu->ConfigHdrm(j, headroom);
             }
             sw->m_mmu->ConfigNPort(sw->GetNDevices() - 1);
-            sw->m_mmu->ConfigBufferSize(160 * 1024 * 1024);  // Magic Number
-            //sw->m_mmu->ConfigBufferSize(4U * 1000 * 1000 * 1000); // 改为4GB
+            if (dci_buffer_size > 0) {
+                sw->m_mmu->ConfigBufferSize(dci_buffer_size * 1024 * 1024);
+            } else {
+                sw->m_mmu->ConfigBufferSize(160 * 1024 * 1024);  // Magic Number
+            }
             sw->m_mmu->node_id = sw->GetId();
             sw->m_mmu->InitSwitch();
 
             sw->SetAttribute("CcMode", UintegerValue(cc_mode));
             sw->SetAttribute("AckHighPrio", UintegerValue(1));
-            NS_LOG_INFO("Node %u : Broadcom switch (%u ports / %gMB MMU)\n" %
-                        (i, sw->GetNDevices() - 1, sw->m_mmu->GetMmuBufferBytes() / 1000000.));
+            // NS_LOG_INFO("Node %u : Broadcom switch (%u ports / %gMB MMU)\n" %
+            //             (node.id, sw->GetNDevices() - 1, sw->m_mmu->GetMmuBufferBytes() / 1000000.));
         } else if (node.node_type == NodeInfo::NodeType::WAN_SWITCH) {
             //TODO ECN是否应当被去除？
             Ptr<SwitchNode> sw = DynamicCast<SwitchNode>(n.Get(node.id));
@@ -1308,8 +1521,11 @@ int main(int argc, char *argv[]) {
                 sw->m_mmu->ConfigHdrm(j, 0);
             }
             sw->m_mmu->ConfigNPort(sw->GetNDevices() - 1);
-            sw->m_mmu->ConfigBufferSize(320 * 1024 * 1024);  // Magic Number
-            //sw->m_mmu->ConfigBufferSize(4U * 1000 * 1000 * 1000); // 改为4GB
+            if (wan_buffer_size > 0) {
+                sw->m_mmu->ConfigBufferSize(wan_buffer_size * 1024 * 1024);
+            } else {
+                sw->m_mmu->ConfigBufferSize(320 * 1024 * 1024);  // Magic Number
+            }
             sw->m_mmu->node_id = sw->GetId();
             sw->m_mmu->InitSwitch();
 
@@ -1516,6 +1732,7 @@ int main(int argc, char *argv[]) {
         if (n.Get(i)->GetNodeType() == 0) {
             sportNumber[i] = 10000;  // each host use port number from 10000
             dportNumber[i] = 100;
+            tcpDportNumber[i] = 50000; // TCP sinks start from a separate high port range
         }
     }
 
@@ -1523,6 +1740,19 @@ int main(int argc, char *argv[]) {
     flowf >> flow_num;
     if (ReadFlowInput()) {
         Simulator::Schedule(Seconds(0), &ScheduleFlowInputs);
+    }
+
+    if (!tcp_flow_file.empty()) {
+        tcp_flowf.open(tcp_flow_file.c_str());
+        if (tcp_flowf.is_open()) {
+            tcp_flowf >> tcp_flow_num;
+            printf("TCP flow num: %lu\n", tcp_flow_num);
+            if (ReadTcpFlowInput()) {
+                Simulator::Schedule(Seconds(0), &ScheduleTcpFlowInputs);
+            }
+        } else {
+            std::cerr << "WARNING: TCP_FLOW_FILE is set but cannot open: " << tcp_flow_file << "\n";
+        }
     }
 
 
@@ -1582,6 +1812,24 @@ int main(int argc, char *argv[]) {
                         &stop_simulation_middle);  // check every 100us
     Simulator::Stop(Seconds(flowgen_stop_time + 10.0));
     Simulator::Run();
+
+    // Dump TCP flow metadata for reproducibility/debugging.
+    // Note: tcpFlowInfos keeps all TCP flows that were read from TCP_FLOW_FILE.
+    if (tcp_flow_num > 0) {
+        const std::string outPath = logfile::output_dir + "/tcp_flows.txt";
+        std::ofstream out(outPath, std::ios::out | std::ios::trunc);
+        if (out.is_open()) {
+            out << "# idx src dst start_time_s size_bytes\n";
+            for (const auto& f : tcpFlowInfos) {
+                out << f.idx << " " << f.src << " " << f.dst << " "
+                    << std::fixed << std::setprecision(9) << f.start_time << " "
+                    << f.fsize << "\n";
+            }
+            out.close();
+        } else {
+            std::cerr << "WARNING: cannot open tcp flow output file: " << outPath << "\n";
+        }
+    }
 
     //TODO:my code to caculate the throughput of each flow
         // 输出每个流的发送速率

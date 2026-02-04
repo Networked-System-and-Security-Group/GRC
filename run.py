@@ -18,30 +18,30 @@ import json
 import re
 
 # randomID
-random.seed(datetime.now())
+#random.seed(datetime.now())
 MAX_RAND_RANGE = 1000000000
 
 # config template
 config_template = """TOPOLOGY_FILE config/{topo}.txt
 FLOW_FILE config/{flow}.txt
 OUTPUT_DIR_PATH mix/output/{id}
-QLEN_MON_START {qlen_mon_start}
-QLEN_MON_END {qlen_mon_end}
 SW_MONITORING_INTERVAL {sw_monitoring_interval}
 
 FLOWGEN_START_TIME {flowgen_start_time}
 FLOWGEN_STOP_TIME {flowgen_stop_time}
 BUFFER_SIZE {buffer_size}
+DCI_BUFFER_SIZE {dci_buffer_size}
+WAN_BUFFER_SIZE {wan_buffer_size}
 
 CC_MODE {cc_mode}
 LB_MODE {lb_mode}
 ENABLE_PFC {enabled_pfc}
 ENABLE_IRN {enabled_irn}
 
-ALPHA_RESUME_INTERVAL 1
-RATE_DECREASE_INTERVAL 4
+ALPHA_RESUME_INTERVAL 10
+RATE_DECREASE_INTERVAL 10
 CLAMP_TARGET_RATE 0
-RP_TIMER 300 
+RP_TIMER 50
 FAST_RECOVERY_TIMES 1
 EWMA_GAIN {ewma_gain}
 RATE_AI {ai}Mb/s
@@ -76,6 +76,7 @@ PMAX_MAP {pmax_map}
 RANDOM_SEED {random_seed}
 TIME {time}
 WAN_CC_MODE {wan_cc_mode}
+MSG {msg}
 """
 
 
@@ -148,24 +149,39 @@ def main():
                         default='0.05', help="traffic time to simulate (up to 3 seconds) (default: 0.1)")#
     parser.add_argument('--buffer', dest="buffer", action='store',
                         default='9', help="the switch buffer size (MB) (default: 9)")
+    parser.add_argument('--dci_buffer', dest='dci_buffer', action='store',
+                        type=int, default=0,
+                        help="DCI switch buffer size (MB). 0 keeps the C++ default (default: 0)")
+    parser.add_argument('--wan_buffer', dest='wan_buffer', action='store',
+                        type=int, default=0,
+                        help="WAN switch buffer size (MB). 0 keeps the C++ default (default: 0)")
     parser.add_argument('--bw', dest="bw", action='store',
                         default='100', help="the NIC bandwidth (Gbps) (default: 100)")
     parser.add_argument('--topo', dest='topo', action='store',
-                        default='wan_topo_json', help="the name of the topology file (default: leaf_spine_128_100G_OS2)")#
+                        default='cernet_topo', help="the name of the topology file (default: leaf_spine_128_100G_OS2)")#
     parser.add_argument('--cdf', dest='cdf', action='store',
                         default='WebSearch', help="the name of the cdf file (default: WebSearch)")
     parser.add_argument('--enforce_win', dest='enforce_win', action='store',
                         type=int, default=0, help="enforce to use window scheme (default: 0)")
     parser.add_argument('--sw_monitoring_interval', dest='sw_monitoring_interval', action='store',
                         type=int, default=10000, help="interval of sampling statistics for queue status (default: 10000ns)")
-    parser.add_argument('--my_flow', type=str, default='', help="use my own flow, if '', use default flow")#
-    parser.add_argument('--debug', type=bool, default=False, help="debug")
-    parser.add_argument('--stdout', type=bool, default=False, help="stdout")
+    parser.add_argument('--my_flow', type=str, default='w-dynamic-100-150', help="use my own flow, if '', use default flow")#
+    parser.add_argument('--tcp_flow', type=str, default='config/w-tcp-100.txt', help="optional TCP flow file path; enables TCP/RDMA mixed-run")
+    # NOTE: argparse with type=bool is almost always wrong (e.g. "0" becomes True).
+    # Use 0/1 integers for stable CLI behavior.
+    parser.add_argument('--debug', type=int, default=0, help="debug (0/1)")
+    parser.add_argument('--stdout', type=int, default=0, help="stdout (0/1)")
     parser.add_argument('--inter_load_all', type=int, default=60, help="不同DC之间之间通信的负载，单位Gbps")
     parser.add_argument('--intra_load', type=int, default=30, help="单个host在DC内之间通信的负载")
     parser.add_argument('--wan_cc_mode', type=int, default=1, help="DC间拥塞控制方案")#
     parser.add_argument('--msg', type=str, default='', help="message")
     parser.add_argument('--config', type=str, default='', help="config.txt file to use, if '', generate a new config.txt file")
+    parser.add_argument(
+        '--extra',
+        action='append',
+        default=[],
+        help="temporary passthrough config knob, format KEY=VALUE; can be repeated",
+    )
 
     args = parser.parse_args()
 
@@ -197,6 +213,8 @@ def main():
     enabled_irn = int(args.irn)
     bw = int(args.bw)
     buffer = args.buffer
+    dci_buffer = int(args.dci_buffer)
+    wan_buffer = int(args.wan_buffer)
     topo = args.topo
     enforce_win = args.enforce_win
     cdf = args.cdf
@@ -206,12 +224,25 @@ def main():
     sw_monitoring_interval = int(args.sw_monitoring_interval)
 
     my_flow = args.my_flow
-    debug = args.debug
-    stdout = args.stdout
+    tcp_flow = args.tcp_flow.strip()
+    debug = bool(args.debug)
+    stdout = bool(args.stdout)
     intra_load = args.intra_load
     inter_load_all = args.inter_load_all
     wan_cc_mode = args.wan_cc_mode
     msg = args.msg
+
+    # Parse passthrough extras: KEY=VALUE (VALUE kept as raw string)
+    extra_kv = {}
+    for item in args.extra:
+        if '=' not in item:
+            raise Exception(f"CONFIG ERROR : --extra expects KEY=VALUE, got: {item}")
+        k, v = item.split('=', 1)
+        k = k.strip()
+        v = v.strip()
+        if not k:
+            raise Exception(f"CONFIG ERROR : --extra has empty KEY in: {item}")
+        extra_kv[k] = v
 
     # get over-subscription ratio from topoogy name
 
@@ -230,6 +261,16 @@ def main():
         flow = f"WAN_{cdf}_{intra_load}_{inter_load_all}_{args.simul_time}"
     else:
         flow = my_flow
+
+    # Normalize flow name: allow users to pass either "name", "name.txt",
+    # or "config/name.txt". The config template always prefixes "config/" and
+    # appends ".txt", so we store the stem here.
+    if flow:
+        flow = flow.strip()
+        if flow.startswith('config/'):
+            flow = flow[len('config/'):]
+        if flow.endswith('.txt'):
+            flow = flow[:-4]
 
     # check the file exists
     if (exists(os.getcwd() + "/config/" + flow + ".txt")):
@@ -293,10 +334,6 @@ def main():
     pmax_map = "6 %d %d %d %d %d %.2f %d %.2f %d %.2f %d %.2f" % (
         bw*200000000, 0.2, bw*500000000, 0.2, bw*1000000000, 0.2, bw*2*1000000000, 0.2, bw*2500000000, 0.2, bw*4*1000000000, 0.2)
 
-    # queue monitoring
-    qlen_mon_start = flowgen_start_time
-    qlen_mon_end = flowgen_stop_time
-
     if (cc_mode == 1):  # DCQCN
         ai = 10 * bw / 25
         hai = 25 * bw / 25
@@ -307,16 +344,16 @@ def main():
         ewma_gain = 0.00390625
 
         config = config_template.format(id=config_ID, topo=topo, flow=flow,
-                                        qlen_mon_start=qlen_mon_start, qlen_mon_end=qlen_mon_end, flowgen_start_time=flowgen_start_time,
+                        flowgen_start_time=flowgen_start_time,
                                         flowgen_stop_time=flowgen_stop_time, sw_monitoring_interval=sw_monitoring_interval,
-                                        buffer_size=buffer, lb_mode=lb_mode, 
+                                        buffer_size=buffer, dci_buffer_size=dci_buffer, wan_buffer_size=wan_buffer, lb_mode=lb_mode, 
                                         enabled_pfc=enabled_pfc, enabled_irn=enabled_irn,
                                         cc_mode=cc_mode,
                                         ai=ai, hai=hai, dctcp_ai=dctcp_ai,
                                         has_win=has_win, var_win=var_win,
                                         fast_react=fast_react, mi=mi, int_multi=int_multi, ewma_gain=ewma_gain,
                                         kmax_map=kmax_map, kmin_map=kmin_map, pmax_map=pmax_map, random_seed=1, time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"), 
-                                        wan_cc_mode=wan_cc_mode)
+                                        wan_cc_mode=wan_cc_mode, msg=msg)
     elif cc_mode == 7:
         ai = 10 * bw / 10
         hai = 50 * bw / 10
@@ -327,21 +364,30 @@ def main():
         ewma_gain = 0.00390625
 
         config = config_template.format(id=config_ID, topo=topo, flow=flow,
-                                        qlen_mon_start=qlen_mon_start, qlen_mon_end=qlen_mon_end, flowgen_start_time=flowgen_start_time,
+                        flowgen_start_time=flowgen_start_time,
                                         flowgen_stop_time=flowgen_stop_time, sw_monitoring_interval=sw_monitoring_interval,
-                                        buffer_size=buffer, lb_mode=lb_mode, 
+                                        buffer_size=buffer, dci_buffer_size=dci_buffer, wan_buffer_size=wan_buffer, lb_mode=lb_mode, 
                                         enabled_pfc=enabled_pfc, enabled_irn=enabled_irn,
                                         cc_mode=cc_mode,
                                         ai=ai, hai=hai, dctcp_ai=dctcp_ai,
                                         has_win=has_win, var_win=var_win,
                                         fast_react=fast_react, mi=mi, int_multi=int_multi, ewma_gain=ewma_gain,
                                         kmax_map=kmax_map, kmin_map=kmin_map, pmax_map=pmax_map, random_seed=1, time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"), 
-                                        wan_cc_mode=wan_cc_mode)
+                                        wan_cc_mode=wan_cc_mode, msg=msg)
     else:
         print("unknown cc:{}".format(args.cc))
 
     with open(config_name, "w") as file:
         if not args.config:
+            if tcp_flow:
+                if not config.endswith('\n'):
+                    config += '\n'
+                config += f"TCP_FLOW_FILE {tcp_flow}\n"
+            if extra_kv:
+                if not config.endswith('\n'):
+                    config += '\n'
+                for k, v in extra_kv.items():
+                    config += f"{k} {v}\n"
             file.write(config)
         else:
             # 先读入已有的config文件，将其中的OUTPUT_DIR_PATH替换为新的目录, TIME替换为当前时间
@@ -350,6 +396,25 @@ def main():
                 existing_config = existing_file.read()
             existing_config = re.sub(r'^OUTPUT_DIR_PATH.*$', f'OUTPUT_DIR_PATH mix/output/{config_ID}', existing_config, flags=re.MULTILINE)
             existing_config = re.sub(r'^TIME .*$' , f'TIME {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}', existing_config, flags=re.MULTILINE)
+
+            # Keep run.py knobs authoritative even when reusing a config file.
+            def _upsert_line(cfg: str, key: str, value: str) -> str:
+                pattern = rf'^{re.escape(key)}\\s+.*$'
+                line = f'{key} {value}'
+                if re.search(pattern, cfg, flags=re.MULTILINE):
+                    return re.sub(pattern, line, cfg, flags=re.MULTILINE)
+                if not cfg.endswith('\n'):
+                    cfg += '\n'
+                return cfg + line + '\n'
+
+            existing_config = _upsert_line(existing_config, 'DCI_BUFFER_SIZE', str(dci_buffer))
+            existing_config = _upsert_line(existing_config, 'WAN_BUFFER_SIZE', str(wan_buffer))
+
+            if tcp_flow:
+                existing_config = _upsert_line(existing_config, 'TCP_FLOW_FILE', tcp_flow)
+
+            for k, v in extra_kv.items():
+                existing_config = _upsert_line(existing_config, k, v)
             file.write(existing_config)
 
     if msg:
