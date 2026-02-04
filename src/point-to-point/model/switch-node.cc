@@ -395,11 +395,21 @@ int SwitchNode::GetOutDev(Ptr<Packet> p, CustomHeader &ch) {
             const auto &nexthops = entry->second;
             return DoLbFlowECMP(p, ch, nexthops);
         } else {
+            //std::cout << "WAN routing: src_as = " << cur_as << ", dst_as = " << dst_as << ", dst" << Settings::hostIp2IdMap[ch.dip] << std::endl;
             return DoLbFlowECMP(p, ch, Settings::wan_routing.at(m_id).at(dst_as));
         }
     } else if (Settings::nodeInfos[m_id].node_type == NodeInfo::NodeType::WAN_SWITCH) {
         uint32_t dst_as = Settings::nodeInfos[Settings::hostIp2IdMap[ch.dip]].as_id;
-        return DoLbFlowECMP(p, ch, Settings::wan_routing.at(m_id).at(dst_as));
+        uint32_t cur_as = Settings::nodeInfos[m_id].as_id;
+        if (dst_as == cur_as) {
+            auto entry = m_rtTable.find(ch.dip);
+            assert(entry != m_rtTable.end());
+            const auto &nexthops = entry->second;
+            return DoLbFlowECMP(p, ch, nexthops);
+        } else {
+            //std::cout << "WAN routing: src_as = " << cur_as << ", dst_as = " << dst_as << ", dst" << Settings::hostIp2IdMap[ch.dip] << std::endl;
+            return DoLbFlowECMP(p, ch, Settings::wan_routing.at(m_id).at(dst_as));
+        }
     }
     assert(false);
 }

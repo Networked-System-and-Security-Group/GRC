@@ -158,15 +158,15 @@ def main():
     parser.add_argument('--bw', dest="bw", action='store',
                         default='100', help="the NIC bandwidth (Gbps) (default: 100)")
     parser.add_argument('--topo', dest='topo', action='store',
-                        default='wan_topo_json', help="the name of the topology file (default: leaf_spine_128_100G_OS2)")#
+                        default='cernet_topo', help="the name of the topology file (default: leaf_spine_128_100G_OS2)")#
     parser.add_argument('--cdf', dest='cdf', action='store',
                         default='WebSearch', help="the name of the cdf file (default: WebSearch)")
     parser.add_argument('--enforce_win', dest='enforce_win', action='store',
                         type=int, default=0, help="enforce to use window scheme (default: 0)")
     parser.add_argument('--sw_monitoring_interval', dest='sw_monitoring_interval', action='store',
                         type=int, default=10000, help="interval of sampling statistics for queue status (default: 10000ns)")
-    parser.add_argument('--my_flow', type=str, default='', help="use my own flow, if '', use default flow")#
-    parser.add_argument('--tcp_flow', type=str, default='', help="optional TCP flow file path; enables TCP/RDMA mixed-run")
+    parser.add_argument('--my_flow', type=str, default='w-dynamic-100-150', help="use my own flow, if '', use default flow")#
+    parser.add_argument('--tcp_flow', type=str, default='config/w-tcp-100.txt', help="optional TCP flow file path; enables TCP/RDMA mixed-run")
     # NOTE: argparse with type=bool is almost always wrong (e.g. "0" becomes True).
     # Use 0/1 integers for stable CLI behavior.
     parser.add_argument('--debug', type=int, default=0, help="debug (0/1)")

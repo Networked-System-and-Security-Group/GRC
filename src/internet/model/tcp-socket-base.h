@@ -1,22 +1,6 @@
 /* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
 /*
- * Copyright (c) 2007 Georgia Tech Research Corporation
- * Copyright (c) 2010 Adrian Sai-wah Tam
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation;
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- *
- * Author: Adrian Sai-wah Tam <adrian.sw.tam@gmail.com>
+ * Modified TcpSocketBase with CUBIC Congestion Control
  */
 #ifndef TCP_SOCKET_BASE_H
 #define TCP_SOCKET_BASE_H
@@ -50,13 +34,7 @@ class TcpHeader;
  * \ingroup tcp
  *
  * \brief A base class for implementation of a stream socket using TCP.
- *
- * This class contains the essential components of TCP, as well as a sockets
- * interface for upper layers to call. This serves as a base for other TCP
- * functions where the sliding window mechanism is handled here. This class
- * provides connection orientation and sliding window flow control. Part of
- * this class is modified from the original NS-3 TCP socket implementation
- * (TcpSocketImpl) by Raj Bhattacharjea <raj.b@gatech.edu> of Georgia Tech.
+ * Modified to include CUBIC congestion control implementation directly.
  */
 class TcpSocketBase : public TcpSocket
 {
@@ -107,10 +85,13 @@ protected:
   virtual uint32_t GetRcvBufSize (void) const;
   virtual void     SetSegSize (uint32_t size);
   virtual uint32_t GetSegSize (void) const;
-  virtual void     SetSSThresh (uint32_t threshold) = 0;
-  virtual uint32_t GetSSThresh (void) const = 0;
-  virtual void     SetInitialCwnd (uint32_t cwnd) = 0;
-  virtual uint32_t GetInitialCwnd (void) const = 0;
+  
+  // Modified: Removed pure virtual (=0) to implement CUBIC
+  virtual void     SetSSThresh (uint32_t threshold);
+  virtual uint32_t GetSSThresh (void) const;
+  virtual void     SetInitialCwnd (uint32_t cwnd);
+  virtual uint32_t GetInitialCwnd (void) const;
+
   virtual void     SetConnTimeout (Time timeout);
   virtual Time     GetConnTimeout (void) const;
   virtual void     SetConnCount (uint32_t count);
@@ -177,12 +158,13 @@ protected:
   virtual uint16_t AdvertisedWindowSize (void); // The amount of Rx window announced to the peer
 
   // Manage data tx/rx
-  virtual Ptr<TcpSocketBase> Fork (void) = 0; // Call CopyObject<> to clone me
+  // Modified: Removed pure virtual to implement locally
+  virtual Ptr<TcpSocketBase> Fork (void); // Call CopyObject<> to clone me
   virtual void ReceivedAck (Ptr<Packet>, const TcpHeader&); // Received an ACK packet
   virtual void ReceivedData (Ptr<Packet>, const TcpHeader&); // Recv of a data, put into buffer, call L7 to get it if necessary
   virtual void EstimateRtt (const TcpHeader&); // RTT accounting
   virtual void NewAck (SequenceNumber32 const& seq); // Update buffers w.r.t. ACK
-  virtual void DupAck (const TcpHeader& t, uint32_t count) = 0; // Received dupack
+  virtual void DupAck (const TcpHeader& t, uint32_t count); // Received dupack
   virtual void ReTxTimeout (void); // Call Retransmit() upon RTO event
   virtual void Retransmit (void); // Halving cwnd and call DoRetransmit()
   virtual void DelAckTimeout (void);  // Action upon delay ACK timeout, i.e. send an ACK
@@ -191,7 +173,7 @@ protected:
   virtual void DoRetransmit (void); // Retransmit the oldest packet
   virtual void ReadOptions (const TcpHeader&); // Read option from incoming packets
   virtual void AddOptions (TcpHeader&); // Add option to outgoing packets
-  virtual void HalveCwnd(void) = 0;     // HalveCwnd when ECN CE flag is received
+  virtual void HalveCwnd(void);     // HalveCwnd when ECN CE flag is received
 
   // D2TCP functions
   virtual void SetDeadline (Time deadline);
@@ -199,9 +181,13 @@ protected:
   virtual void SetBytesToTx (uint64_t bytes);
   virtual uint64_t GetBytesToTx (void) const;
 
+  // CUBIC Functions
+  virtual void CubicUpdate (uint32_t segmentsAcked);
+  virtual void CubicReduce (void);
+
 protected:
   // Counters and events
-  EventId           m_retxEvent;       //< Retransmission event
+  EventId           m_retxEvent;     //< Retransmission event
   EventId           m_lastAckEvent;    //< Last ACK timeout event
   EventId           m_delAckEvent;     //< Delayed ACK timeout event
   EventId           m_persistEvent;    //< Persist event: Send 1 byte to probe for a non-zero Rx window
@@ -220,8 +206,8 @@ protected:
   Time              m_cnTimeout;       //< Timeout for connection retry
 
   // Connections to other layers of TCP/IP
-  Ipv4EndPoint*       m_endPoint;
-  Ipv6EndPoint*       m_endPoint6;
+  Ipv4EndPoint* m_endPoint;
+  Ipv6EndPoint* m_endPoint6;
   Ptr<Node>           m_node;
   Ptr<TcpL4Protocol>  m_tcp;
   Callback<void, Ipv4Address,uint8_t,uint8_t,uint8_t,uint32_t> m_icmpCallback;
@@ -265,6 +251,19 @@ protected:
   uint32_t              m_segmentSize; //< Segment size
   uint16_t              m_maxWinSize;  //< Maximum window size to advertise
   TracedValue<uint32_t> m_rWnd;        //< Flow control window at remote side
+
+  // CUBIC Variables
+  TracedValue<uint32_t> m_cWnd;      // Congestion Window (bytes)
+  TracedValue<uint32_t> m_ssThresh;  // Slow Start Threshold (bytes)
+  uint32_t              m_InitialCwndTCP; // Initial Congestion Window (segments)
+  
+  // Cubic specific state
+  double   m_cWndCnt;      // Counter for linear increase
+  uint32_t m_wLastMax;     // W_max in segments
+  Time     m_epochStart;   // Time when the current congestion epoch started
+  double   m_k;            // K parameter in CUBIC
+  double   m_beta;         // CUBIC Beta
+  double   m_cubicC;       // CUBIC C
 };
 
 } // namespace ns3
