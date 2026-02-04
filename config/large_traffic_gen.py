@@ -235,10 +235,10 @@ if __name__ == '__main__':
     # 添加命令行参数解析
     parser = argparse.ArgumentParser(description='生成网络流量并绘制并发流图')
     # 添加background_inter_load参数（默认值150）
-    parser.add_argument('-b','--background-inter-load', type=int, default=100,
+    parser.add_argument('-b','--background-inter-load', type=int, default=200,
                         help='background_inter_load的值（默认150）')
     # 添加dynamic_load参数（默认值200）
-    parser.add_argument('-d','--dynamic-load', type=int, default=150,
+    parser.add_argument('-d','--dynamic-load', type=int, default=200,
                         help='dynamic_load的值（默认200）')
     # 添加流量集参数
     parser.add_argument('-f', '--flow_set', type=str, default='w')
@@ -313,7 +313,7 @@ if __name__ == '__main__':
     # 修改：为了保证每个 WAN Switch (AS) 到其他 WAN Switch 的总流出速率大概是 100G，
     # 我们需要将系统的总背景流量设置为 (100G * 区域数量)。
     # 这样平均下来，每个区域承担的发送速率就是 100G。
-    wan_bg_total_load = 400.0 * active_wan_as_count if active_wan_as_count > 0 else 100.0
+    wan_bg_total_load = 800.0 * active_wan_as_count if active_wan_as_count > 0 else 100.0
     
     wan_flows = []
     

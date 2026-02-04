@@ -49,7 +49,7 @@ python3 run.py --simul_time 0.05 --cdf WebSearch --intra_load 30 --inter_load_al
 	- `0` 表示保持 C++ 默认值（当前为 160MB）
 - `--wan_buffer`（默认 `0`）：WAN switch buffer size（MB），写入 `WAN_BUFFER_SIZE`
 	- `0` 表示保持 C++ 默认值（当前为 320MB）
-- `--bw`（默认 `100`）：NIC 带宽（Gbps），用于一些参数映射/阈值计算
+- `--bw`（默认 `100`）：NIC 带宽（Gbps），用于一些参数映射/c阈值计算
 - `--topo`（默认 `wan_topo_json`）：拓扑文件名（会写 `TOPOLOGY_FILE config/<topo>.txt`）
 - `--cdf`（默认 `WebSearch`）：流大小分布（用于 flow generator）
 - `--sw_monitoring_interval`（默认 `10000`）：交换机队列/统计采样间隔（ns）

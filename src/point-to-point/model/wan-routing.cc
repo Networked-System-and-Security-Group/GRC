@@ -243,9 +243,9 @@ void WanRouting::HandleAckReceived(Ptr<Packet> p, CustomHeader& ch) {
                 rtt_table[index].timestamp.GetNanoSeconds());
         }
         dcHandler.record_rtt(rtt);
+        rtt_table[index].timestamp = Seconds(0);
+        rtt_table[index].hashed_seq = 0;
     }
-    rtt_table[index].timestamp = Seconds(0);
-    rtt_table[index].hashed_seq = 0;
     //dcHandler.record_rtt(flow_hash_value, hashed_seq, src_as == 2 && cur_as == 0);
     //printf("Switch %u, Seq %u ack passed, bucket:%u, index:%u\n", m_switch_id, ch.ack.seq, flow_hash_value, hashed_seq);
     m_switchSendToDevCallback(p, ch);
