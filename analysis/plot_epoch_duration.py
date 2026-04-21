@@ -54,7 +54,7 @@ def plot_auto_lines(data, xlabel, ylabel, filename, xticks=None, xlim=None, logt
         # y_min = np.floor(min(y_values))  # 向下取整
         # y_max = np.ceil(max(y_values))   # 向上取整
         y_min = 0
-        y_max = 8
+        y_max = 14
     else:  # 没有有效数据时使用默认范围
         y_min, y_max = 0, 1
 
@@ -77,11 +77,11 @@ def plot_auto_lines(data, xlabel, ylabel, filename, xticks=None, xlim=None, logt
     all_ticks = np.arange(y_min, y_max + step, step)
     visible = [t if i % 2 != len(all_ticks) % 2 else ''
                for i, t in enumerate(all_ticks)]
-    plt.yticks(all_ticks, visible, fontsize=14)
+    plt.yticks(all_ticks, visible, fontsize=18)
 
     # 轴标签、图例、网格、去除多余边框
-    plt.xlabel(xlabel, fontsize=16)
-    plt.ylabel(ylabel, fontsize=16)
+    plt.xlabel(xlabel, fontsize=22)
+    plt.ylabel(ylabel, fontsize=22)
     plt.legend(frameon=False, fontsize=16, loc='upper left', bbox_to_anchor=(0,1.1))
     plt.grid(axis='y', alpha=0.3)
     ax = plt.gca()
@@ -102,33 +102,35 @@ def plot_auto_lines(data, xlabel, ylabel, filename, xticks=None, xlim=None, logt
 def get_avg_fct(expr):
     res = []
     resn = []
+    p99 = []
     for ana in analyser_iter(expr):
         try:
             avg,avg_intra,avg_inter = ana.get_avg_fct()
             res.append(avg_inter)
             resn.append(avg_intra)
+            p99.append(ana.get_p99_fct()[2])
         except:
             res.append(None)
             resn.append(None)
-    return res,resn
-
+            p99.append(None)
+    return res,resn,p99
 def main():
-    expr = '461,642-645'
-    x_data = [1,1.5,2,2.5,3]
+    expr = '329-333'
+    x_data = [1,2,3,4,5]
 
-    inter_res, intra_res = get_avg_fct(expr)
+    inter_res, intra_res, inter_p99 = get_avg_fct(expr)
     x_label = 'Epoch duration (ms)'
-
+    print(inter_res, intra_res, inter_p99)
     # 绘制Average normalized FCT
     data_to_plot = {
-        "Inter": (x_data, inter_res),
-        "Intra": (x_data, intra_res)
+        "Avg.": (x_data, inter_res),
+        "P99": (x_data, inter_p99)
     }
-
+    print(inter_p99)
     plot_auto_lines(
         data_to_plot,
         xlabel=x_label,
-        ylabel="Average normalized FCT",
+        ylabel="Normalized FCT",
         filename=f"epoch_duration.pdf",
         xticks=x_data,
         xlim=(x_data[0], x_data[-1])

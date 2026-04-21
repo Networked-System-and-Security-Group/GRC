@@ -149,19 +149,25 @@ def main():
     # gscc_expr = '351,354,357,360,363'
     # dcqcn_inf_expr = '562-566'
 
-    # alistorage
-    dcqcn_expr = '380,383,386,389,392'
-    gscc_expr = '381,384,387,390,393'
-    dcqcn_inf_expr = '567-569,605,606'
+    # websearch
+    # dcqcn_expr = '111,117,123,129'
+    # gscc_expr = '321-324'
+    # dcqcn_inf_expr = '112,118,124,130'
+
+    #webmining
+    dcqcn_expr = '416,422,428,434'
+    gscc_expr = '418,424,430,436'
+    dcqcn_inf_expr = '417,423,429,435'
+
 
     dcqcn_inter, dcqcn_intra, dcqcn_all = get_avg_fct(dcqcn_expr)
     gscc_inter, gscc_intra, gscc_all = get_avg_fct(gscc_expr)
     dcqcn_inf_inter, dcqcn_inf_intra, dcqcn_inf_all = get_avg_fct(dcqcn_inf_expr)
 
-    print((dcqcn_inf_all[4] - gscc_all[4])/ dcqcn_inf_all[4])
+    #print((dcqcn_inf_all[4] - gscc_all[4])/ dcqcn_inf_all[4])
 
 
-    x_data = [0, 50, 100, 150, 200]
+    x_data = [0, 60,120,180]
     x_label = 'Dynamic traffic throughput (Gbps)'
 
     # 绘制Average normalized FCT

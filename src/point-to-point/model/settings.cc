@@ -58,11 +58,13 @@ uint32_t Settings::get_flowid(Ptr<Packet> p) {
             const uint32_t srcId = Settings::ip_to_node_id(ipv4.GetSource());
             const uint32_t dstId = Settings::ip_to_node_id(ipv4.GetDestination());
             return srcId * 1000u + dstId;
+        } else {
+            printf("[Protocol %u]", l4Proto);
         }
     }
 
     //assert(false);
-    printf("WARNING: Packet does not have FlowIDNUMTag and is not TCP/ICMP over IPv4. Unable to determine flow ID.\n");
+    printf("WARNING: Packet does not have FlowIDNUMTag and is not TCP/ICMP over IPv4. Unable to determine flow ID.\n");    
     return 0xFFFFFFFF;
 }
 
@@ -227,7 +229,7 @@ namespace logfile {
         OPEN_FILE(flow_output);
         OPEN_FILE(wan_log);
         OPEN_FILE(rtt_log);
-        fprintf(rtt_log, "timestamp_ns,switch_id,dst_as,next_hop,rtt1_ms,timeout_count\n");
+        fprintf(rtt_log, "timestamp_ns,switch_id,dst_as,next_hop,rtt1_ms,measured_rtt_ms,timeout_count\n");
         OPEN_FILE(drop_log);
         fprintf(drop_log, "timestamp_ns,switch_id,next_hop,flow_id,seq_num,type\n");
         OPEN_FILE(link_utilization);
@@ -238,10 +240,10 @@ namespace logfile {
         fprintf(rate_monitor, "timestamp_ns,src_as,dst_as,real_rate,ref_rate\n");
         OPEN_EMPTY_FILE(qp_rate_log);
         fprintf(qp_rate_log, "timestamp_ns,flow_id,rate,alpha,target_rate\n");
-        OPEN_EMPTY_FILE(cnp_log);
+        OPEN_FILE(cnp_log);
         fprintf(cnp_log, "timestamp_ns,switch_id,flow_id\n");
         OPEN_FILE(cnp_trigger_prob_log);
-        fprintf(cnp_trigger_prob_log, "timestamp_ns,switch_id,src_as,dst_as,cnp_cnt,pkt_cnt,prob\n");
+        fprintf(cnp_trigger_prob_log, "timestamp_ns,switch_id,src_as,dst_as,cnp_cnt,pkt_cnt,prob,w\n");
         OPEN_EMPTY_FILE(accumulated_bytes_log);
         fprintf(accumulated_bytes_log, "timestamp_ns,switch_id,dst_as,accumulated_bytes\n");
 

@@ -260,6 +260,10 @@ if __name__ == '__main__':
 
     if flow_set == 'a':
         cdf_path = op.join(base_dir, 'AliStorage2019') + '.txt'
+    elif flow_set == 's':
+        cdf_path = op.join(base_dir, 'Solar2022') + '.txt'
+    elif flow_set == 'm':
+        cdf_path = op.join(base_dir, 'Mining') + '.txt'
     else:
         cdf_path = op.join(base_dir, 'WebSearch') + '.txt'
 
@@ -302,7 +306,6 @@ if __name__ == '__main__':
     # 生成普通的 Dynamic 流 (使用 as_list)
     if dynamic_load > 0:
         flows += generate_dynamic_flows(as_list, cdf_path, f'{dynamic_load}G', 0.1, slice_duration=0.03, slice_rate='100G')
-
     # ---------------------------------------------------------------------------------
     # 在跨DC的wan_hosts间生成平均总100G的背景流 (仅使用 wan_as_list)
     # ---------------------------------------------------------------------------------
@@ -346,7 +349,7 @@ if __name__ == '__main__':
     #                      output_filename=f'concurrent_flows{"_d" if dynamic_load > 0 else ""}.png')
     
     # 输出到文件 (原始逻辑：包含 DC 背景流 + Dynamic 流)
-    saved_path = op.join(op.dirname(__file__), f'{flow_set}-dynamic-{int(background_inter_load)}-{int(dynamic_load)}.txt')
+    saved_path = op.join(op.dirname(__file__), f'{flow_set}-dynamic-70-{int(background_inter_load)}-{int(dynamic_load)}.txt')
     print(f'Original Flow count: {len(flows)}, Saved to: {saved_path}')
     with open(saved_path, 'w') as ofile:
         ofile.write(f"{len(flows)}\n")
@@ -354,9 +357,9 @@ if __name__ == '__main__':
             ofile.write(str(f) + '\n')
 
     # 输出到文件 (新逻辑：仅包含 WAN Hosts 间的背景流)
-    wan_saved_path = op.join(op.dirname(__file__), f'{flow_set}-tcp-100.txt')
-    print(f'WAN Flow count: {len(wan_flows)}, Saved to: {wan_saved_path}')
-    with open(wan_saved_path, 'w') as ofile:
-        ofile.write(f"{len(wan_flows)}\n")
-        for f in wan_flows:
-            ofile.write(str(f) + '\n')
+    #wan_saved_path = op.join(op.dirname(__file__), f'{flow_set}-tcp-100.txt')
+    #print(f'WAN Flow count: {len(wan_flows)}, Saved to: {wan_saved_path}')
+    #with open(wan_saved_path, 'w') as ofile:
+    #    ofile.write(f"{len(wan_flows)}\n")
+    #    for f in wan_flows:
+    #        ofile.write(str(f) + '\n')

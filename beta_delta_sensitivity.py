@@ -11,13 +11,17 @@ TOPO = "cernet_topo"
 SIMUL_TIME = 0.1
 
 # Parameter Ranges
-BETAS = [0, 0.1, 0.2, 0.3, 0.4, 0.5]
+BETAS = [0, 0.15, 0.3, 0.45, 0.6]
 # Default is 10485760. Testing range from ~0.25x to ~4x
-INV_DELTAS = [30 * 1024 * 1024, 40*1024*1024]
+INV_DELTAS = [2.5 * 1024 * 1024, 
+              5 * 1024 * 1024, 
+              10 * 1024 * 1024, 
+              20 * 1024 * 1024, 
+              40 * 1024 * 1024]
 
 # Other Flags
 SLEEP = 1
-ENABLE_V = 'FALSE'
+ENABLE_V = 'TRUE'
 # Based on previous conversation, you might want to enable W with the found K.
 # Setting them here for easy modification.
 ENABLE_W = 'FALSE'
@@ -43,7 +47,7 @@ def main():
     
     for inv_delta in INV_DELTAS:
         for beta in BETAS:
-            msg = f"beta_delta_sens:gscc,flow={flow},,BETA={beta},INV_DELTA={inv_delta},No.{run_id}"
+            msg = f"beta_delta_sens:gscc,flow={flow},ENABLE_V={ENABLE_V},BETA={beta},INV_DELTA={inv_delta},No.{run_id}"
             cmd = [
                 "python3",
                 "run.py",

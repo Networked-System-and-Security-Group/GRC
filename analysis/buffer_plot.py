@@ -148,14 +148,21 @@ def main():
     # dcqcn_res = get_buffer('380,383,386,389,602')
     # gscc_res = get_buffer('381,384,387,390,603')
     # dcqcn_inf_res = get_buffer('567-569,605,606')
+    #websearch
+    dcqcn_expr = '111,117,123,129'
+    gscc_expr = '321-324'
+    dcqcn_inf_expr = '112,118,124,130'
+    #datamining
+    #dcqcn_expr = '416,422,428,434'
+    #gscc_expr = '418,424,430,436'
+    #dcqcn_inf_expr = '417,423,429,435'
+    dcqcn_res = get_buffer(dcqcn_expr)
+    gscc_res = get_buffer(gscc_expr)
+    dcqcn_inf_res = get_buffer(dcqcn_inf_expr)
 
-    dcqcn_res = get_buffer('448,451,454,457,460')
-    gscc_res = get_buffer('449,452,455,458,461')
-    dcqcn_inf_res = get_buffer('562-566')
+    print(f"buffer{(dcqcn_res[-1]-gscc_res[-1])/dcqcn_res[-1]}")
 
-    print(f"buffer{(dcqcn_res[4]-gscc_res[4])/dcqcn_res[4]}")
-
-    x_data = [0, 50, 100, 150, 200]
+    x_data = [0, 60,120,180]
     x_label = 'Dynamic traffic throughput (Gbps)'
 
     # 绘制Average normalized FCT

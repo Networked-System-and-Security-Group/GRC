@@ -12,7 +12,21 @@
 #include <algorithm>
 #include <cstdlib>
 #include <cmath>
+#include <limits>
 namespace ns3 {
+
+namespace {
+// Centralized defaults for Settings::GetRawParam() used in this file.
+// Keep them here so tuning doesn't require hunting through the logic below.
+constexpr const char* kEnableWDefault = "FALSE";
+constexpr const char* kWMaxDefault = "4.0";
+constexpr const char* kWKDefault = "0.0000001";
+constexpr const char* kInvDeltaDefault = "20971520";  // 1/20MB
+constexpr const char* kBetaDefault = "0.3";
+constexpr const char* kEnableVDefault = "TRUE";
+constexpr const char* kWanEpochUsDefault = "1000";  // 1ms
+constexpr const char* kEnable2LayerHashDefault = "TRUE";
+}  // namespace
 
 Time WanRouting::epoch_duration = MicroSeconds(1000); // 1ms
 
@@ -61,6 +75,7 @@ void WanRouting::DstDCHandler::record_rtt(Time rtt) {
 
     // 记录EWMA RTT
     Time delta_t = Simulator::Now() - last_update_time;
+    //printf("Record RTT: %.2lfms\n", rtt.GetSeconds() * 1000);
     last_update_time = Simulator::Now();
     double weight1 = std::min(delta_t.GetSeconds() / rtt_tau.GetSeconds(), 1.0);
     sensitive_rtt = Seconds((1 - weight1) * sensitive_rtt.GetSeconds() + weight1 * rtt.GetSeconds());
@@ -83,19 +98,34 @@ bool WanRouting::DstDCHandler::update_and_check_cnp(uint32_t pkt_size) {
     uint32_t kmin = 100 * 1024; // 100KB
     uint32_t kmax = 8 * 1024 * 1024; // 8MB
     double pmax = 0.5;
-    if (bytes_diff > kmin) {
-        double p = std::min(pmax, pmax * (bytes_diff - kmin) / (kmax - kmin));
-        p = p > pmax ? 1 : p;
-        double rand_val = std::rand() / (RAND_MAX + 1.0);
-        if (rand_val < p) {
-            return true;
-        }
-    }
-    return false;
+    if (bytes_diff <= kmin) return false;
+    if (bytes_diff >= kmax) return true;   // 关键：上阈值必丢
+
+    double p = pmax * (double)(bytes_diff - kmin) / (double)(kmax - kmin);
+    // 此时 p ∈ (0, pmax)
+    double rand_val = std::rand() / (RAND_MAX + 1.0);
+    return rand_val < p;
+    //if (bytes_diff > kmin) {
+    //    double p = std::min(pmax, pmax * (bytes_diff - kmin) / (kmax - kmin));
+    //    p = p > pmax ? 1 : p;
+    //    double rand_val = std::rand() / (RAND_MAX + 1.0);
+    //    if (rand_val < p) {
+    //        return true;
+    //    }
+    //}
+    //return false;
 }
 
 void WanRouting::init() {
     assert(m_switch_id != -1);
+
+    // Allow tuning epoch duration via raw params.
+    // Unit: microseconds. Key: WAN_EPOCH_US (default 1000us = 1ms).
+    {
+        int64_t epoch_us = std::stoll(Settings::GetRawParam("WAN_EPOCH_US", kWanEpochUsDefault));
+        WanRouting::epoch_duration = MicroSeconds(epoch_us);
+    }
+
     for (const auto& [dst_as, next_hops] : Settings::wan_routing[m_switch_id]) {
         if (next_hops.empty()) {
             continue;
@@ -146,7 +176,6 @@ void WanRouting::HandleUdpReceived(Ptr<Packet> p, CustomHeader& ch) {
     }
 
     // 获取出端口（单路径）
-    uint32_t flow_hash_value = (Hash5Tuple(ch.sip, ch.dip, ch.udp.sport, ch.udp.dport, ch.udp.pg));
     auto it = m_rtTable.find(dst_as);
     if (it == m_rtTable.end()) {
         m_switchSendToDevCallback(p, ch);
@@ -155,7 +184,6 @@ void WanRouting::HandleUdpReceived(Ptr<Packet> p, CustomHeader& ch) {
     uint32_t out_port = it->second;
 
     auto& dc_handler = m_dcHandler.at(dst_as);
-
     // per-epoch statistics
     dc_handler.epoch_pkt_cnt++;
     // RTT过滤
@@ -164,8 +192,13 @@ void WanRouting::HandleUdpReceived(Ptr<Packet> p, CustomHeader& ch) {
     bool ack_req = (bool)fit.GetAckReq();
     if (ack_req) {
         uint32_t hashed_seq = Hash5tupleSeq(ch.sip, ch.dip, ch.udp.sport, ch.udp.dport, ch.udp.pg, ch.udp.seq + p->GetSize() - ch.GetSerializedSize());
-        uint32_t index = (flow_hash_value ^ (hashed_seq % 16)) % rtt_table_size;
-        //uint32_t index = hashed_seq % rtt_table_size;
+        uint32_t index;
+        if (Settings::GetRawParam("ENABLE_2LAYER_HASH", kEnable2LayerHashDefault) == "TRUE") {
+            uint32_t flow_hash_value = (Hash5Tuple(ch.sip, ch.dip, ch.udp.sport, ch.udp.dport, ch.udp.pg));
+            index = (flow_hash_value ^ (hashed_seq % 16)) % rtt_table_size;
+        } else {
+            index = hashed_seq % rtt_table_size;
+        }
         //printf("[%ld]Udp passed, %u->%u, index:%u, hashed_seq:%u\n", 
         //    Simulator::Now().GetNanoSeconds(), cur_as, dst_as, index, hashed_seq);
         if (rtt_table[index].hashed_seq == hashed_seq) {
@@ -208,7 +241,6 @@ void WanRouting::HandleAckReceived(Ptr<Packet> p, CustomHeader& ch) {
         m_switchSendToDevCallback(p, ch);
         return;
     }
-    uint32_t flow_hash_value = (Hash5Tuple(ch.dip, ch.sip, ch.ack.dport, ch.ack.sport, ch.ack.pg)); // 这里ack的源和目的地要反过来
     auto rtIt = m_rtTable.find(src_as);
     if (rtIt == m_rtTable.end()) {
         m_switchSendToDevCallback(p, ch);
@@ -222,8 +254,13 @@ void WanRouting::HandleAckReceived(Ptr<Packet> p, CustomHeader& ch) {
     }
     auto& dcHandler = dcIt->second;
     uint32_t hashed_seq = Hash5tupleSeq(ch.dip, ch.sip, ch.ack.dport, ch.ack.sport, ch.ack.pg, ch.ack.seq);
-    uint32_t index = (flow_hash_value ^ (hashed_seq % 16)) % rtt_table_size;
-    //uint32_t index = hashed_seq % rtt_table_size;
+    uint32_t index;
+    if (Settings::GetRawParam("ENABLE_2LAYER_HASH", kEnable2LayerHashDefault) == "TRUE") {
+        uint32_t flow_hash_value = (Hash5Tuple(ch.dip, ch.sip, ch.ack.dport, ch.ack.sport, ch.ack.pg)); // 这里ack的源和目的地要反过来
+        index = (flow_hash_value ^ (hashed_seq % 16)) % rtt_table_size;
+    } else {
+        index = hashed_seq % rtt_table_size;
+    }
     //printf("[%ld]Ack Passed! %u->%u, index:%u, hashed_seq:%u\n", 
     //    Simulator::Now().GetNanoSeconds(), cur_as, src_as, index, hashed_seq);
     if (rtt_table[index].hashed_seq == hashed_seq) {
@@ -271,11 +308,16 @@ void WanRouting::controlplane_logic() {
         uint32_t out_port = rtIt->second;
 
         //logging
-        fprintf(logfile::rtt_log, 
-            "%" PRIu64 ",%" PRIu32 ",%" PRIu32 ",%" PRIu32 ",%.3f,%" PRIu32 "\n",  // 格式说明符
-            Simulator::Now().GetNanoSeconds(), m_switch_id, dst_as,
+        const double measured_rtt_ms = (dc_handler.rtt_num > 0)
+                                           ? (dc_handler.rtt_sum.GetSeconds() / dc_handler.rtt_num) * 1000.0
+                                           : std::numeric_limits<double>::quiet_NaN();
+        fprintf(logfile::rtt_log,
+            "%" PRIu64 ",%" PRIu32 ",%" PRIu32 ",%" PRIu32 ",%.3f,%.3f,%" PRIu32 "\n",
+            static_cast<uint64_t>(Simulator::Now().GetNanoSeconds()), m_switch_id, dst_as,
             Settings::if2id.at(Settings::nodeContainer.Get(m_switch_id)).at(out_port),
-            dc_handler.sensitive_rtt.GetSeconds() * 1000.0, dc_handler.entry_timeout_count
+            dc_handler.sensitive_rtt.GetSeconds() * 1000.0,
+            measured_rtt_ms,
+            dc_handler.entry_timeout_count
         );
         dc_handler.entry_timeout_count = 0;
         fprintf(logfile::rate_monitor, "%lu,%u,%u,%lu,%lu\n", 
@@ -288,9 +330,9 @@ void WanRouting::controlplane_logic() {
             const uint64_t cnp_cnt = dc_handler.epoch_cnp_cnt;
             const double prob = (pkt_cnt == 0) ? 0.0 : (static_cast<double>(cnp_cnt) / static_cast<double>(pkt_cnt));
             double w = 1.0;
-            if (Settings::GetRawParam("ENABLE_W", "FALSE") == "TRUE") {
-                double w_max = std::stod(Settings::GetRawParam("W_MAX", "4.0"));
-                double k = std::stod(Settings::GetRawParam("W_K", "0.0000001"));
+            if (Settings::GetRawParam("ENABLE_W", kEnableWDefault) == "TRUE") {
+                double w_max = std::stod(Settings::GetRawParam("W_MAX", kWMaxDefault));
+                double k = std::stod(Settings::GetRawParam("W_K", kWKDefault));
                 w = std::pow(prob, 0.75) * dc_handler.ref_rate * k;
                 w = std::max(1.0, std::min(w, w_max));
             }
@@ -305,8 +347,6 @@ void WanRouting::controlplane_logic() {
                     w);
         }
 
-        
-        //速率调整
         if (Settings::wan_cc_mode == Settings::WanCCMode::WAN_OPT) {
             if (dc_handler.sensitive_rtt >= MicroSeconds(600)) {//rtt已经接收到第一个数据
                 printf("[%ld]AS%u->%u, SenRtt%.2lf ", 
@@ -347,8 +387,17 @@ void WanRouting::DstDCHandler::update_ref_rate() {
     bool flag = (ref_rate > upper_rate);
     int64_t pre_ref_rate = ref_rate;
 
+    // Saturation definition: the recent real sending rate should not be smaller than ref_rate by more than 3GB/s.
+    // If not saturated but still judged to increase, we allow the increase but prevent consecutive_state_epochs
+    // from growing (and instead decay it) so that v stays small and the step won't blow up.
+    const int64_t kSaturationSlack = 3LL * 1000 * 1000 * 1000;  // 3GB/s in our rate unit
+    const bool saturated = (rate_before + kSaturationSlack >= pre_ref_rate);
+
     if (rtt_num == 0) {
-        rtt_miss_counter++;
+        rtt_miss_counter++;    
+        if (ref_rate > upper_rate) {
+            ref_rate = upper_rate + (ref_rate - upper_rate) * 0.8;
+        }
         printf("No RTT information %d, ref_rate %.3lf->%.3lf\n", 
             rtt_miss_counter, pre_ref_rate / 1e9, ref_rate / 1e9);
         return;
@@ -365,9 +414,9 @@ void WanRouting::DstDCHandler::update_ref_rate() {
 
     //Get w
     double w = 1;
-    if (Settings::GetRawParam("ENABLE_W", "FALSE") == "TRUE") {
-        double w_max = std::stod(Settings::GetRawParam("W_MAX", "4.0"));
-        double k = std::stod(Settings::GetRawParam("W_K", "0.0000001"));
+    if (Settings::GetRawParam("ENABLE_W", kEnableWDefault) == "TRUE") {
+        double w_max = std::stod(Settings::GetRawParam("W_MAX", kWMaxDefault));
+        double k = std::stod(Settings::GetRawParam("W_K", kWKDefault));
         double p = epoch_pkt_cnt ? static_cast<double>(epoch_cnp_cnt) / static_cast<double>(epoch_pkt_cnt) : 0.0;
         // w = clip(p^0.75 * pre_ref_rate * k, 1, w_max)
         w = std::pow(p, 0.75) * pre_ref_rate * k;
@@ -375,13 +424,21 @@ void WanRouting::DstDCHandler::update_ref_rate() {
     }
 
     // Get target_rate and target_state
-    const double delta = 1.0 / std::stod(Settings::GetRawParam("INV_DELTA", "10485760"));
-    const double beta = std::stod(Settings::GetRawParam("BETA", "0.3"));
+    const double delta = 1.0 / std::stod(Settings::GetRawParam("INV_DELTA", kInvDeltaDefault)); // 1/20MBps
+    const double beta = std::stod(Settings::GetRawParam("BETA", kBetaDefault));
     Time queue_delay = std::max(cur_rtt - min_rtt, MicroSeconds(10));
     int64_t target_rate = static_cast<int64_t>(w / delta / queue_delay.GetSeconds());
     RateChangeState target_state = (target_rate > pre_ref_rate) ? INCREASE : DECREASE;
     if (rate_change_state == target_state) {
-        consecutive_state_epochs++;
+        if (target_state == INCREASE && !saturated) {
+            if (consecutive_state_epochs > 1) {
+                consecutive_state_epochs--;
+            } else {
+                consecutive_state_epochs = 1;
+            }
+        } else {
+            consecutive_state_epochs++;
+        }
     } else {
         rate_change_state = target_state;
         consecutive_state_epochs = 1;
@@ -389,7 +446,7 @@ void WanRouting::DstDCHandler::update_ref_rate() {
 
     //Get v
     int v = 1;    
-    if (Settings::GetRawParam("ENABLE_V", "FALSE") == "TRUE") {
+    if (Settings::GetRawParam("ENABLE_V", kEnableVDefault) == "TRUE") {
         if (consecutive_state_epochs >= 6 * epochs_per_rtt) {
             v = 4;
         } else if (consecutive_state_epochs >= 3 * epochs_per_rtt) {
@@ -402,10 +459,16 @@ void WanRouting::DstDCHandler::update_ref_rate() {
         ref_rate += step;
         printf("[Copa Increase] ");
     } else {
-        double min_decrease_coefficient = std::pow(1 - beta, 1 / epochs_per_rtt);
-        int64_t origin_step = step;
-        step = std::max(step,
-                        static_cast<int64_t>((pre_ref_rate - target_rate) * min_decrease_coefficient));
+        // Fast decrease requirement (your intent): after one RTT, ref_rate should be <= (1-beta) * pre_ref_rate.
+        // Convert it to a per-epoch multiplicative bound: gamma^(epochs_per_rtt) = 1-beta.
+        // So each epoch we ensure ref_rate <= pre_ref_rate * gamma, i.e., step >= pre_ref_rate * (1-gamma).
+        const double gamma = std::pow(1.0 - beta, 1.0 / epochs_per_rtt);
+        const int64_t min_step = static_cast<int64_t>(std::ceil(pre_ref_rate * (1.0 - gamma)));
+
+        const int64_t origin_step = step;
+        step = std::max(step, min_step);
+        step = std::min(step, pre_ref_rate);  // avoid negative ref_rate
+
         ref_rate -= step;
         printf("[Copa %sDecrease] ", (step > origin_step) ? "Fast " : "linear ");
     }

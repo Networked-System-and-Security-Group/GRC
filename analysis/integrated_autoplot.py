@@ -173,15 +173,14 @@ def main():
     show_legend = args.legend
     figure = 2
 
-    dcqcn_expr = '448,451,454,457,460'
-    gscc_expr = '449,452,455,458,461'
-    dcqcn_inf_expr = '562-566'
-
+    dcqcn_expr = '111,117,123,129'
+    gscc_expr = '321-324'
+    dcqcn_inf_expr = '112,118,124,130'
     dcqcn_inter, dcqcn_intra = get_avg_fct(dcqcn_expr)
     gscc_inter, gscc_intra = get_avg_fct(gscc_expr)
     get_avg_fct(dcqcn_inf_expr)
 
-    x_data= [0, 50, 100, 150, 200]
+    x_data= [0,60,120,180]
 
 
     data = {

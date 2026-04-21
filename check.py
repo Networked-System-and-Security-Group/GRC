@@ -106,8 +106,13 @@ def _list_remote_processes_for_this_repo() -> list[RemoteProcess]:
 def monitor(interval_s: float = 2.0, kill_hours: Optional[float] = None):
     unfinished: set[int] = set()
     finished: set[int] = set()
+    killed: set[int] = set()
     last_pid_by_id: dict[int, int] = {}
     folder_by_id: dict[int, str] = {}
+
+    report_interval_s = 15 * 60
+    last_report_ts = time.monotonic() - report_interval_s  # force initial report
+    seen_any_experiment = False
 
     msg = "Monitoring scratch/remote experiments for this repo... (Ctrl-C to stop)\n"
     msg += f"Polling interval: {interval_s}s"
@@ -115,40 +120,59 @@ def monitor(interval_s: float = 2.0, kill_hours: Optional[float] = None):
         msg += f", Auto-kill after: {kill_hours} hours"
     print(msg)
 
+    def _print_status(*, running_ids: set[int]):
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        print("\n" + "=" * 72)
+        print(now)
+        print(f"Running:  {sorted(running_ids)}")
+        print(f"Finished: {sorted(finished)}")
+        if killed:
+            print(f"Killed:   {sorted(killed)}")
+        print(
+            f"Totals: running={len(running_ids)} unfinished={len(unfinished)} finished={len(finished)} killed={len(killed)}"
+        )
+
     try:
         while True:
             prev_unfinished = set(unfinished)
             prev_finished = set(finished)
+            prev_killed = set(killed)
 
             procs = _list_remote_processes_for_this_repo()
             running_ids: set[int] = set()
 
             for proc in procs:
-                # Check for timeout kill
-                if kill_hours is not None:
-                     if proc.elapsed_s > kill_hours * 3600:
-                         print(f"\n[Auto-kill] PID {proc.pid} elapsed {proc.elapsed_s/3600:.2f}h > {kill_hours}h. Killing...")
-                         try:
-                             os.kill(proc.pid, 9)
-                         except OSError as e:
-                             print(f"Failed to kill {proc.pid}: {e}")
-                         continue # Process is killed, don't count it as running
-
                 text = proc.config_path or proc.command
                 exp_id = _extract_experiment_id(text)
                 if exp_id is None:
                     continue
-                
-                running_ids.add(exp_id)
-                last_pid_by_id[exp_id] = proc.pid
 
+                seen_any_experiment = True
+
+                # Record folder path early if available (useful even if auto-killed)
                 if proc.config_path is not None:
                     abs_cfg = _abs_from_repo(proc.config_path)
                     folder_by_id[exp_id] = os.path.dirname(abs_cfg)
 
-            # Any running experiment is considered unfinished.
+                # Check for timeout kill
+                if kill_hours is not None and proc.elapsed_s > kill_hours * 3600:
+                    print(
+                        f"\n[Auto-kill] PID {proc.pid} exp[{exp_id}] elapsed {proc.elapsed_s/3600:.2f}h > {kill_hours}h. Killing..."
+                    )
+                    try:
+                        os.kill(proc.pid, 9)
+                        killed.add(exp_id)
+                        unfinished.discard(exp_id)
+                    except OSError as e:
+                        print(f"Failed to kill {proc.pid}: {e}")
+                    continue  # Process is killed, don't count it as running
+
+                running_ids.add(exp_id)
+                last_pid_by_id[exp_id] = proc.pid
+
+            # On startup: include all currently-running experiments; afterwards, keep adding new ones.
             for exp_id in running_ids:
-                if exp_id not in finished:
+                if exp_id not in finished and exp_id not in killed:
                     unfinished.add(exp_id)
 
             # Promote finished experiments based on config.log.
@@ -160,17 +184,17 @@ def monitor(interval_s: float = 2.0, kill_hours: Optional[float] = None):
 
             new_unfinished = sorted(unfinished - prev_unfinished)
             new_finished = sorted(finished - prev_finished)
-            if new_unfinished or new_finished:
-                now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                print("\n" + "=" * 72)
-                print(now)
-                if new_unfinished:
-                    print(f"New unfinished: {new_unfinished}")
-                if new_finished:
-                    print(f"New finished:   {new_finished}")
-                print(
-                    f"Totals: running={len(running_ids)} unfinished={len(unfinished)} finished={len(finished)}"
-                )
+            new_killed = sorted(killed - prev_killed)
+            should_report = (time.monotonic() - last_report_ts) >= report_interval_s
+
+            if new_unfinished or new_finished or new_killed or should_report:
+                _print_status(running_ids=running_ids)
+                last_report_ts = time.monotonic()
+
+            # Auto-exit: once we've observed at least one experiment and all observed experiments are done.
+            if seen_any_experiment and not unfinished and not running_ids:
+                print("\nAll experiments completed (or killed). Exiting monitor.")
+                break
 
             time.sleep(interval_s)
     except KeyboardInterrupt:
