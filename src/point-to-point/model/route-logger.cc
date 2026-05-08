@@ -1,4 +1,5 @@
 // RouteLogger.cc
+#include <cstdint>
 #include "route-logger.h"
 #include <iostream>
 #include <sys/stat.h>  // 用于创建目录

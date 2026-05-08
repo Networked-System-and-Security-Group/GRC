@@ -30,6 +30,7 @@ enum CcMode {
     CC_MODE_HPCC = 3,
     CC_MODE_TIMELY = 7,
     CC_MODE_DCTCP = 8,
+    CC_MODE_UNOCC = 9,
     CC_MODE_UNDEFINED = 0,
 };
 
@@ -116,6 +117,21 @@ class RdmaQueuePair : public Object {
         uint32_t m_ecnCnt;
         uint32_t m_batchSizeOfAlpha;
     } dctcp;
+
+    struct {
+        uint64_t m_cwndBytes;
+        uint64_t m_epochAckedBytes;
+        uint64_t m_epochEcnMarkedBytes;
+        uint64_t m_qaAckedBytes;
+        uint64_t m_baseRttNs;
+        uint64_t m_lastRttNs;
+        uint64_t m_epochStartTimeNs;
+        uint64_t m_qaStartTimeNs;
+        uint64_t m_qaCooldownUntilNs;
+        double m_ecnFractionEwma;
+        bool m_seenEcnInEpoch;
+        bool m_firstRttSampleValid;
+    } uno;
 
     struct {
         bool m_enabled;

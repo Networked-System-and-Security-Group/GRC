@@ -336,7 +336,9 @@ uint8_t CustomHeader::GetIpv4EcnBits (void) const{
 }
 
 uint32_t CustomHeader::GetAckSerializedSize(void){
-	return sizeof(ack.sport) + sizeof(ack.dport) + sizeof(ack.flags) + sizeof(ack.pg) + sizeof(ack.seq) + IntHeader::GetStaticSize();
+	return sizeof(ack.sport) + sizeof(ack.dport) + sizeof(ack.flags) + sizeof(ack.pg) +
+           sizeof(ack.seq) + sizeof(ack.irnNack) + sizeof(ack.irnNackSize) +
+           IntHeader::GetStaticSize();
 }
 
 uint32_t CustomHeader::GetUdpHeaderSize(void){
@@ -348,4 +350,3 @@ uint32_t CustomHeader::GetStaticWholeHeaderSize(void){
 }
 
 } // namespace ns3
-

@@ -62,6 +62,14 @@ class SwitchMmu : public Object {
     void SetMarkingThreshold(uint32_t kmin, uint32_t kmax, double pmax);
 
     bool ShouldSendCN(uint32_t ifindex, uint32_t qIndex);
+    void ConfigUnoPhantom(uint32_t port, bool enabled, uint32_t sizeBytes, uint32_t kminPct,
+                          uint32_t kmaxPct, double pmax, double slowdownPct,
+                          uint64_t lineRateBps, bool usePhysicalQueue);
+    void UpdateUnoPhantomDrain(uint32_t ifindex, uint32_t qIndex);
+    void AddUnoPhantomBytes(uint32_t ifindex, uint32_t qIndex, uint32_t bytes);
+    uint64_t GetUnoPhantomBytes(uint32_t ifindex, uint32_t qIndex);
+    bool ShouldSendCNUno(uint32_t ifindex, uint32_t qIndex);
+    bool ShouldSendCNRed(uint32_t ifindex, uint32_t qIndex);
 
     uint32_t GetUsedBufferTotal();
 
@@ -90,6 +98,16 @@ class SwitchMmu : public Object {
 
     uint32_t kmin[pCnt], kmax[pCnt];
     double pmax[pCnt];
+    bool m_unoPhantomEnabled[pCnt];
+    bool m_unoUsePhysicalQueue[pCnt];
+    double m_unoPhantomOccupancyBytes[pCnt][qCnt];
+    uint64_t m_unoPhantomLastUpdateNs[pCnt][qCnt];
+    uint32_t m_unoPhantomSizeBytes[pCnt];
+    uint32_t m_unoPhantomKminPct[pCnt];
+    uint32_t m_unoPhantomKmaxPct[pCnt];
+    double m_unoPhantomPmax[pCnt];
+    double m_unoPhantomSlowdownPct[pCnt];
+    uint64_t m_unoPhantomLineRateBps[pCnt];
     uint32_t paused[pCnt][qCnt];
     EventId resumeEvt[pCnt][qCnt];
     bool m_pause_remote[pCnt][qCnt];

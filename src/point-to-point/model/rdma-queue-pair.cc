@@ -68,12 +68,26 @@ RdmaQueuePair::RdmaQueuePair(uint16_t pg, Ipv4Address _sip, Ipv4Address _dip, ui
     dctcp.m_ecnCnt = 0;
     dctcp.m_batchSizeOfAlpha = 0;
 
+    uno.m_cwndBytes = 0;
+    uno.m_epochAckedBytes = 0;
+    uno.m_epochEcnMarkedBytes = 0;
+    uno.m_qaAckedBytes = 0;
+    uno.m_baseRttNs = 0;
+    uno.m_lastRttNs = 0;
+    uno.m_epochStartTimeNs = 0;
+    uno.m_qaStartTimeNs = 0;
+    uno.m_qaCooldownUntilNs = 0;
+    uno.m_ecnFractionEwma = 0;
+    uno.m_seenEcnInEpoch = false;
+    uno.m_firstRttSampleValid = false;
+
     irn.m_enabled = false;
     irn.m_highest_ack = 0;
     irn.m_max_seq = 0;
     irn.m_recovery = false;
 
     m_timeout = MilliSeconds(4);
+    lastPktSize = 0;
 }
 
 void RdmaQueuePair::SetSize(uint64_t size) { m_size = size; }

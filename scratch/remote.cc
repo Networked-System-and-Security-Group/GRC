@@ -83,6 +83,21 @@ double rate_decrease_interval = 4;
 uint32_t fast_recovery_times = 1;
 std::string rate_ai, rate_hai, min_rate = "100Mb/s";
 std::string dctcp_rate_ai = "1000Mb/s";
+double uno_ai_factor = 0.001;
+double uno_beta = 0.5;
+double uno_ewma_gain = 1.0;
+double uno_k = -1.0;
+double uno_gentle_scale = 0.3;
+double uno_delay_threshold = 0.05;
+uint64_t uno_intra_rtt_ns = 14000;
+uint32_t uno_epoch_rtt_factor = 1;
+int uno_phantom_enabled = -1;
+uint32_t uno_phantom_size_kb = 0;
+uint32_t uno_phantom_kmin_pct = 25;
+uint32_t uno_phantom_kmax_pct = 75;
+double uno_phantom_pmax = 1.0;
+double uno_phantom_slowdown_pct = 10.0;
+bool uno_phantom_use_physical = false;
 
 bool clamp_target_rate = false, l2_back_to_zero = false;
 double error_rate_per_link = 0.0;
@@ -1193,6 +1208,57 @@ int main(int argc, char *argv[]) {
             } else if (key.compare("DCTCP_RATE_AI") == 0) {
                 conf >> dctcp_rate_ai;
                 std::cerr << "DCTCP_RATE_AI\t\t\t\t" << dctcp_rate_ai << "\n";
+            } else if (key.compare("UNO_AI_FACTOR") == 0) {
+                conf >> uno_ai_factor;
+                std::cerr << "UNO_AI_FACTOR\t\t\t\t" << uno_ai_factor << "\n";
+            } else if (key.compare("UNO_BETA") == 0) {
+                conf >> uno_beta;
+                std::cerr << "UNO_BETA\t\t\t\t" << uno_beta << "\n";
+            } else if (key.compare("UNO_EWMA_GAIN") == 0) {
+                conf >> uno_ewma_gain;
+                std::cerr << "UNO_EWMA_GAIN\t\t\t\t" << uno_ewma_gain << "\n";
+            } else if (key.compare("UNO_K") == 0) {
+                conf >> uno_k;
+                std::cerr << "UNO_K\t\t\t\t" << uno_k
+                          << " (-1 means 1/7 * intra-DC BDP)\n";
+            } else if (key.compare("UNO_GENTLE_SCALE") == 0) {
+                conf >> uno_gentle_scale;
+                std::cerr << "UNO_GENTLE_SCALE\t\t\t" << uno_gentle_scale << "\n";
+            } else if (key.compare("UNO_DELAY_THRESHOLD") == 0) {
+                conf >> uno_delay_threshold;
+                std::cerr << "UNO_DELAY_THRESHOLD\t\t\t" << uno_delay_threshold << "\n";
+            } else if (key.compare("UNO_INTRA_RTT_NS") == 0) {
+                conf >> uno_intra_rtt_ns;
+                std::cerr << "UNO_INTRA_RTT_NS\t\t\t" << uno_intra_rtt_ns << "\n";
+            } else if (key.compare("UNO_INTRA_RTT_US") == 0) {
+                double v;
+                conf >> v;
+                uno_intra_rtt_ns = (uint64_t)(v * 1000.0);
+                std::cerr << "UNO_INTRA_RTT_US\t\t\t" << v << "\n";
+            } else if (key.compare("UNO_EPOCH_RTT_FACTOR") == 0) {
+                conf >> uno_epoch_rtt_factor;
+                std::cerr << "UNO_EPOCH_RTT_FACTOR\t\t\t" << uno_epoch_rtt_factor << "\n";
+            } else if (key.compare("UNO_PHANTOM_ENABLED") == 0) {
+                conf >> uno_phantom_enabled;
+                std::cerr << "UNO_PHANTOM_ENABLED\t\t\t" << uno_phantom_enabled << "\n";
+            } else if (key.compare("UNO_PHANTOM_SIZE_KB") == 0) {
+                conf >> uno_phantom_size_kb;
+                std::cerr << "UNO_PHANTOM_SIZE_KB\t\t\t" << uno_phantom_size_kb << "\n";
+            } else if (key.compare("UNO_PHANTOM_KMIN_PCT") == 0) {
+                conf >> uno_phantom_kmin_pct;
+                std::cerr << "UNO_PHANTOM_KMIN_PCT\t\t\t" << uno_phantom_kmin_pct << "\n";
+            } else if (key.compare("UNO_PHANTOM_KMAX_PCT") == 0) {
+                conf >> uno_phantom_kmax_pct;
+                std::cerr << "UNO_PHANTOM_KMAX_PCT\t\t\t" << uno_phantom_kmax_pct << "\n";
+            } else if (key.compare("UNO_PHANTOM_PMAX") == 0) {
+                conf >> uno_phantom_pmax;
+                std::cerr << "UNO_PHANTOM_PMAX\t\t\t" << uno_phantom_pmax << "\n";
+            } else if (key.compare("UNO_PHANTOM_SLOWDOWN_PCT") == 0) {
+                conf >> uno_phantom_slowdown_pct;
+                std::cerr << "UNO_PHANTOM_SLOWDOWN_PCT\t\t" << uno_phantom_slowdown_pct << "\n";
+            } else if (key.compare("UNO_PHANTOM_USE_PHYSICAL") == 0) {
+                conf >> uno_phantom_use_physical;
+                std::cerr << "UNO_PHANTOM_USE_PHYSICAL\t\t" << uno_phantom_use_physical << "\n";
             } else if (key.compare("KMAX_MAP") == 0) {
                 int n_k;
                 conf >> n_k;
@@ -1318,7 +1384,7 @@ int main(int argc, char *argv[]) {
      */
     IntHop::multi = int_multi;
     // IntHeader::mode
-    if (cc_mode == 7)  // timely, use ts
+    if (cc_mode == 7 || cc_mode == CC_MODE_UNOCC)  // timely/UnoCC, use ts
         IntHeader::mode = 1;
     else if (cc_mode == 3)  // hpcc, use int
         IntHeader::mode = 0;
@@ -1490,7 +1556,18 @@ int main(int argc, char *argv[]) {
                 Ptr<QbbNetDevice> dev = DynamicCast<QbbNetDevice>(sw->GetDevice(j));
                 // set ecn
                 uint64_t rate = dev->GetDataRate().GetBitRate();
-                sw->m_mmu->ConfigEcn(j, rate2kmin.at(rate), rate2kmax.at(rate), rate2pmax.at(rate));
+                uint32_t ecnKmin = rate2kmin.at(rate);
+                uint32_t ecnKmax = rate2kmax.at(rate);
+                sw->m_mmu->ConfigEcn(j, ecnKmin, ecnKmax, rate2pmax.at(rate));
+                bool enableUnoPhantom =
+                    (uno_phantom_enabled >= 0) ? (uno_phantom_enabled != 0)
+                                               : (cc_mode == CC_MODE_UNOCC);
+                uint32_t phantomSizeBytes =
+                    (uno_phantom_size_kb > 0 ? uno_phantom_size_kb : ecnKmax) * 1000;
+                sw->m_mmu->ConfigUnoPhantom(j, enableUnoPhantom, phantomSizeBytes,
+                                            uno_phantom_kmin_pct, uno_phantom_kmax_pct,
+                                            uno_phantom_pmax, uno_phantom_slowdown_pct, rate,
+                                            uno_phantom_use_physical);
                 // set pfc
                 uint64_t delay = DynamicCast<QbbChannel>(dev->GetChannel())->GetDelay().GetTimeStep();
                 uint32_t headroom = rate * delay / 8 / 1000000000 * 2 + 2 * sw->m_mmu->MTU;
@@ -1512,7 +1589,17 @@ int main(int argc, char *argv[]) {
                 // set ecn
                 uint64_t rate = dev->GetDataRate().GetBitRate();
                 //sw->m_mmu->ConfigEcn(j, rate2kmin.at(rate), rate2kmax.at(rate), rate2pmax.at(rate));
-                sw->m_mmu->ConfigEcn(j, 1000, 20000, 0.15);
+                uint32_t ecnKmax = 20000;
+                sw->m_mmu->ConfigEcn(j, 1000, ecnKmax, 0.15);
+                bool enableUnoPhantom =
+                    (uno_phantom_enabled >= 0) ? (uno_phantom_enabled != 0)
+                                               : (cc_mode == CC_MODE_UNOCC);
+                uint32_t phantomSizeBytes =
+                    (uno_phantom_size_kb > 0 ? uno_phantom_size_kb : ecnKmax) * 1000;
+                sw->m_mmu->ConfigUnoPhantom(j, enableUnoPhantom, phantomSizeBytes,
+                                            uno_phantom_kmin_pct, uno_phantom_kmax_pct,
+                                            uno_phantom_pmax, uno_phantom_slowdown_pct, rate,
+                                            uno_phantom_use_physical);
                 // set pfc
                 uint64_t delay = DynamicCast<QbbChannel>(dev->GetChannel())->GetDelay().GetTimeStep();
                 uint32_t headroom = rate * delay / 8 / 1000000000 * 2 + 2 * sw->m_mmu->MTU;
@@ -1540,7 +1627,17 @@ int main(int argc, char *argv[]) {
                 // set ecn
                 uint64_t rate = dev->GetDataRate().GetBitRate();
                 //sw->m_mmu->ConfigEcn(j, rate2kmin.at(rate), rate2kmax.at(rate), rate2pmax.at(rate));
-                sw->m_mmu->ConfigEcn(j, 1000, 20000, 0.15);
+                uint32_t ecnKmax = 20000;
+                sw->m_mmu->ConfigEcn(j, 1000, ecnKmax, 0.15);
+                bool enableUnoPhantom =
+                    (uno_phantom_enabled >= 0) ? (uno_phantom_enabled != 0)
+                                               : (cc_mode == CC_MODE_UNOCC);
+                uint32_t phantomSizeBytes =
+                    (uno_phantom_size_kb > 0 ? uno_phantom_size_kb : ecnKmax) * 1000;
+                sw->m_mmu->ConfigUnoPhantom(j, enableUnoPhantom, phantomSizeBytes,
+                                            uno_phantom_kmin_pct, uno_phantom_kmax_pct,
+                                            uno_phantom_pmax, uno_phantom_slowdown_pct, rate,
+                                            uno_phantom_use_physical);
                 // set pfc
                 //uint64_t delay = DynamicCast<QbbChannel>(dev->GetChannel())->GetDelay().GetTimeStep();
                 //uint32_t headroom = rate * delay / 8 / 1000000000 * 2 + 2 * sw->m_mmu->MTU;
@@ -1615,6 +1712,14 @@ int main(int argc, char *argv[]) {
             rdmaHw->SetAttribute("TargetUtil", DoubleValue(u_target));
             rdmaHw->SetAttribute("RateBound", BooleanValue(rate_bound));
             rdmaHw->SetAttribute("DctcpRateAI", DataRateValue(DataRate(dctcp_rate_ai)));
+            rdmaHw->SetAttribute("UnoAiFactor", DoubleValue(uno_ai_factor));
+            rdmaHw->SetAttribute("UnoBeta", DoubleValue(uno_beta));
+            rdmaHw->SetAttribute("UnoEwmaGain", DoubleValue(uno_ewma_gain));
+            rdmaHw->SetAttribute("UnoK", DoubleValue(uno_k));
+            rdmaHw->SetAttribute("UnoGentleScale", DoubleValue(uno_gentle_scale));
+            rdmaHw->SetAttribute("UnoDelayThreshold", DoubleValue(uno_delay_threshold));
+            rdmaHw->SetAttribute("UnoIntraRttNs", UintegerValue(uno_intra_rtt_ns));
+            rdmaHw->SetAttribute("UnoEpochRttFactor", UintegerValue(uno_epoch_rtt_factor));
             rdmaHw->SetAttribute("IrnEnable", BooleanValue(enable_irn));
             // topo2bdpMap (e.g., longest BDP 25000: 8us * 25Gbps)
             rdmaHw->SetAttribute("IrnRtoHigh", TimeValue(MicroSeconds(320)));  // 1930

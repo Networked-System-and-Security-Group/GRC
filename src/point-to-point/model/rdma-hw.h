@@ -181,6 +181,33 @@ class RdmaHw : public Object {
     void HandleAckDctcp(Ptr<RdmaQueuePair> qp, Ptr<Packet> p, CustomHeader &ch);
 
     /**********************
+     * UnoCC
+     *********************/
+    double m_uno_ai_factor;
+    double m_uno_beta;
+    double m_uno_ewma_gain;
+    double m_uno_k;
+    double m_uno_gentle_scale;
+    double m_uno_delay_threshold;
+    uint64_t m_uno_intra_rtt_ns;
+    uint32_t m_uno_epoch_rtt_factor;
+    void InitUno(Ptr<RdmaQueuePair> qp);
+    void HandleAckUno(Ptr<RdmaQueuePair> qp, Ptr<Packet> p, CustomHeader &ch,
+                      uint32_t bytesAcked);
+    void HandleCnpUno(Ptr<RdmaQueuePair> qp);
+    void HandleTimeoutUno(Ptr<RdmaQueuePair> qp);
+    uint64_t GetAckRttNsUno(Ptr<RdmaQueuePair> qp, CustomHeader &ch);
+    uint64_t GetUnoEpochPeriodNs(Ptr<RdmaQueuePair> qp);
+    void UnoAdditiveIncrease(Ptr<RdmaQueuePair> qp, uint32_t bytesAcked, bool ecnMarked);
+    bool UnoEpochEnded(Ptr<RdmaQueuePair> qp, uint64_t nowNs);
+    void UnoProcessEpochEnd(Ptr<RdmaQueuePair> qp);
+    void UnoResetEpoch(Ptr<RdmaQueuePair> qp, uint64_t nowNs);
+    bool UnoQaPeriodEnded(Ptr<RdmaQueuePair> qp, uint64_t nowNs);
+    void UnoProcessQaEnd(Ptr<RdmaQueuePair> qp);
+    DataRate UnoCwndToRate(Ptr<RdmaQueuePair> qp, uint64_t cwndBytes, uint64_t rttNs);
+    void UnoApplyRateFromCwnd(Ptr<RdmaQueuePair> qp);
+
+    /**********************
      * IRN
      *********************/
     bool m_irn;

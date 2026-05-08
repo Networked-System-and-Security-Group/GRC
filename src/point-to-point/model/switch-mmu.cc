@@ -2,6 +2,7 @@
 
 #include <fstream>
 #include <iostream>
+#include <algorithm>
 
 #include "ns3/assert.h"
 #include "ns3/boolean.h"
@@ -60,6 +61,20 @@ SwitchMmu::SwitchMmu(void) {
 
     // dynamic threshold
     m_dynamicth = false;
+    for (uint32_t i = 0; i < pCnt; i++) {
+        m_unoPhantomEnabled[i] = false;
+        m_unoUsePhysicalQueue[i] = false;
+        m_unoPhantomSizeBytes[i] = 0;
+        m_unoPhantomKminPct[i] = 25;
+        m_unoPhantomKmaxPct[i] = 75;
+        m_unoPhantomPmax[i] = 1.0;
+        m_unoPhantomSlowdownPct[i] = 10.0;
+        m_unoPhantomLineRateBps[i] = 0;
+        for (uint32_t j = 0; j < qCnt; j++) {
+            m_unoPhantomOccupancyBytes[i][j] = 0.0;
+            m_unoPhantomLastUpdateNs[i][j] = 0;
+        }
+    }
 
     //InitSwitch();
 }
@@ -88,6 +103,8 @@ void SwitchMmu::InitSwitch(void) {
             m_usedEgressQMinBytes[i][j] = 0;
             m_usedEgressQSharedBytes[i][j] = 0;
             m_usedEgressBytes[i][j] = 0;
+            m_unoPhantomOccupancyBytes[i][j] = 0.0;
+            m_unoPhantomLastUpdateNs[i][j] = Simulator::Now().GetNanoSeconds();
         }
     }
     for (int i = 0; i < 4; i++) {
@@ -236,6 +253,7 @@ void SwitchMmu::UpdateIngressAdmission(uint32_t port, uint32_t qIndex, uint32_t 
 
 void SwitchMmu::UpdateEgressAdmission(uint32_t port, uint32_t qIndex, uint32_t psize) {
     m_usedEgressBytes[port][qIndex] += psize;  // count total buffer usage
+    AddUnoPhantomBytes(port, qIndex, psize);
     //if (m_usedEgressQMinBytes[port][qIndex] + psize < m_q_min_cell)  // guaranteed
     //{
     //    m_usedEgressQMinBytes[port][qIndex] += psize;
@@ -432,11 +450,19 @@ uint32_t SwitchMmu::GetusedEgressQSharedBytes(uint32_t port, uint32_t qIndex){
 }
 
 bool SwitchMmu::ShouldSendCN(uint32_t ifindex, uint32_t qIndex) {
+    if (m_unoPhantomEnabled[ifindex]) {
+        return ShouldSendCNUno(ifindex, qIndex);
+    }
+    return ShouldSendCNRed(ifindex, qIndex);
+}
+
+bool SwitchMmu::ShouldSendCNRed(uint32_t ifindex, uint32_t qIndex) {
     if (qIndex == 0)  // qidx=0 as highest priority
         return false;
     if (m_usedEgressBytes[ifindex][qIndex] > kmax[ifindex])
         return true;
-    if (m_usedEgressBytes[ifindex][qIndex] > kmin[ifindex]){
+    if (m_usedEgressBytes[ifindex][qIndex] > kmin[ifindex] &&
+        kmax[ifindex] > kmin[ifindex]){
         double p = pmax[ifindex] * double(m_usedEgressBytes[ifindex][qIndex] - kmin[ifindex]) / (kmax[ifindex] - kmin[ifindex]);
         if (m_uniform_random_var.GetValue(0, 1) < p)
             return true;
@@ -451,6 +477,81 @@ bool SwitchMmu::ShouldSendCN(uint32_t ifindex, uint32_t qIndex) {
     //    if (m_uniform_random_var.GetValue(0, 1) < p) return true;
     //}
     //return false;
+}
+
+void SwitchMmu::ConfigUnoPhantom(uint32_t port, bool enabled, uint32_t sizeBytes,
+                                 uint32_t kminPct, uint32_t kmaxPct, double pmax,
+                                 double slowdownPct, uint64_t lineRateBps,
+                                 bool usePhysicalQueue) {
+    NS_ASSERT(port < pCnt);
+    m_unoPhantomEnabled[port] = enabled;
+    m_unoUsePhysicalQueue[port] = usePhysicalQueue;
+    m_unoPhantomSizeBytes[port] = sizeBytes;
+    m_unoPhantomKminPct[port] = std::min<uint32_t>(100, kminPct);
+    m_unoPhantomKmaxPct[port] = std::min<uint32_t>(100, std::max(kminPct + 1, kmaxPct));
+    m_unoPhantomPmax[port] = pmax;
+    m_unoPhantomSlowdownPct[port] = std::min(99.0, std::max(0.0, slowdownPct));
+    m_unoPhantomLineRateBps[port] = lineRateBps;
+    for (uint32_t q = 0; q < qCnt; q++) {
+        m_unoPhantomOccupancyBytes[port][q] = 0.0;
+        m_unoPhantomLastUpdateNs[port][q] = Simulator::Now().GetNanoSeconds();
+    }
+}
+
+void SwitchMmu::UpdateUnoPhantomDrain(uint32_t ifindex, uint32_t qIndex) {
+    if (!m_unoPhantomEnabled[ifindex] || qIndex == 0) return;
+    uint64_t nowNs = Simulator::Now().GetNanoSeconds();
+    uint64_t lastNs = m_unoPhantomLastUpdateNs[ifindex][qIndex];
+    if (lastNs == 0 || nowNs <= lastNs) {
+        m_unoPhantomLastUpdateNs[ifindex][qIndex] = nowNs;
+        return;
+    }
+
+    double drainRate = 1.0 - m_unoPhantomSlowdownPct[ifindex] / 100.0;
+    long double drainedBytes =
+        (long double)(nowNs - lastNs) * (long double)m_unoPhantomLineRateBps[ifindex] *
+        drainRate / 8.0L / 1000000000.0L;
+    m_unoPhantomOccupancyBytes[ifindex][qIndex] =
+        std::max(0.0L,
+                 (long double)m_unoPhantomOccupancyBytes[ifindex][qIndex] - drainedBytes);
+    m_unoPhantomLastUpdateNs[ifindex][qIndex] = nowNs;
+}
+
+void SwitchMmu::AddUnoPhantomBytes(uint32_t ifindex, uint32_t qIndex, uint32_t bytes) {
+    if (!m_unoPhantomEnabled[ifindex] || qIndex == 0) return;
+    UpdateUnoPhantomDrain(ifindex, qIndex);
+    m_unoPhantomOccupancyBytes[ifindex][qIndex] += bytes;
+    if (m_unoPhantomSizeBytes[ifindex] > 0) {
+        m_unoPhantomOccupancyBytes[ifindex][qIndex] =
+            std::min<double>(m_unoPhantomOccupancyBytes[ifindex][qIndex],
+                             m_unoPhantomSizeBytes[ifindex]);
+    }
+}
+
+uint64_t SwitchMmu::GetUnoPhantomBytes(uint32_t ifindex, uint32_t qIndex) {
+    UpdateUnoPhantomDrain(ifindex, qIndex);
+    return (uint64_t)m_unoPhantomOccupancyBytes[ifindex][qIndex];
+}
+
+bool SwitchMmu::ShouldSendCNUno(uint32_t ifindex, uint32_t qIndex) {
+    if (qIndex == 0) return false;
+
+    bool physicalMarked = m_unoUsePhysicalQueue[ifindex] && ShouldSendCNRed(ifindex, qIndex);
+    uint32_t sizeBytes = m_unoPhantomSizeBytes[ifindex];
+    if (sizeBytes == 0) return physicalMarked;
+
+    uint64_t occupancy = GetUnoPhantomBytes(ifindex, qIndex);
+    uint64_t kminBytes = (uint64_t)sizeBytes * m_unoPhantomKminPct[ifindex] / 100;
+    uint64_t kmaxBytes = (uint64_t)sizeBytes * m_unoPhantomKmaxPct[ifindex] / 100;
+    bool phantomMarked = false;
+    if (occupancy > kmaxBytes) {
+        phantomMarked = true;
+    } else if (occupancy > kminBytes && kmaxBytes > kminBytes) {
+        double p = m_unoPhantomPmax[ifindex] * double(occupancy - kminBytes) /
+                   double(kmaxBytes - kminBytes);
+        phantomMarked = m_uniform_random_var.GetValue(0, 1) < p;
+    }
+    return phantomMarked || physicalMarked;
 }
 
 void SwitchMmu::SetBroadcomParams(
