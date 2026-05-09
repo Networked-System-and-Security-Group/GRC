@@ -2,6 +2,9 @@
 
 This repo writes experiment outputs under `mix/output/[id]-<timestamp>/` and analyzes them primarily via `analysis/deep_analyse.py`.
 
+Detailed per-script guide:
+- `docs/analysis-scripts-guide.md`
+
 ## Prereqs
 From the top-level repo directory:
 - Python packages (typical):

@@ -86,6 +86,7 @@ cc_modes = {
     "hpcc": 3,
     "timely": 7,
     "dctcp": 8,
+    "unocc": 9,
 }
 
 lb_modes = {
@@ -138,7 +139,7 @@ def main():
 
     parser = argparse.ArgumentParser(description='run simulation')
     parser.add_argument('--cc', dest='cc', action='store',
-                        default='dcqcn', help="hpcc/dcqcn/timely/dctcp (default: dcqcn)")
+                        default='dcqcn', help="hpcc/dcqcn/timely/dctcp/unocc (default: dcqcn)")
     parser.add_argument('--lb', dest='lb', action='store',
                         default='fecmp', help="fecmp/pecmp/drill/conga (default: fecmp)")
     parser.add_argument('--pfc', dest='pfc', action='store',
@@ -166,7 +167,7 @@ def main():
     parser.add_argument('--sw_monitoring_interval', dest='sw_monitoring_interval', action='store',
                         type=int, default=10000, help="interval of sampling statistics for queue status (default: 10000ns)")
     parser.add_argument('--my_flow', type=str, default='w-dynamic-100-150', help="use my own flow, if '', use default flow")#
-    parser.add_argument('--tcp_flow', type=str, default='config/w-tcp-100.txt', help="optional TCP flow file path; enables TCP/RDMA mixed-run")
+    parser.add_argument('--tcp_flow', type=str, default='', help="optional TCP flow file path; non-empty enables TCP/RDMA mixed-run")
     # NOTE: argparse with type=bool is almost always wrong (e.g. "0" becomes True).
     # Use 0/1 integers for stable CLI behavior.
     parser.add_argument('--debug', type=int, default=0, help="debug (0/1)")
@@ -176,6 +177,22 @@ def main():
     parser.add_argument('--wan_cc_mode', type=int, default=1, help="DC间拥塞控制方案")#
     parser.add_argument('--msg', type=str, default='', help="message")
     parser.add_argument('--config', type=str, default='', help="config.txt file to use, if '', generate a new config.txt file")
+    parser.add_argument('--uno_ai_factor', type=float, default=0.001, help="UnoCC AI factor alpha (default: 0.001)")
+    parser.add_argument('--uno_beta', type=float, default=0.5, help="UnoCC QA factor beta (default: 0.5)")
+    parser.add_argument('--uno_ewma_gain', type=float, default=0.65, help="UnoCC ECN EWMA gain (default: 0.65)")
+    parser.add_argument('--uno_k', type=float, default=-1.0, help="UnoCC MD constant in bytes; -1 means auto derive (default: -1)")
+    parser.add_argument('--uno_gentle_scale', type=float, default=0.3, help="UnoCC gentle reduction scale (default: 0.3)")
+    parser.add_argument('--uno_delay_threshold', type=float, default=0.05, help="UnoCC physical queue delay threshold fraction (default: 0.05)")
+    parser.add_argument('--uno_intra_rtt_ns', type=int, default=14000, help="UnoCC intra-DC RTT in ns (default: 14000)")
+    parser.add_argument('--uno_inter_rtt_ns', type=int, default=2000000, help="UnoCC inter-DC RTT in ns for phantom fallback sizing (default: 2000000)")
+    parser.add_argument('--uno_epoch_rtt_factor', type=int, default=1, help="UnoCC epoch period multiplier on intra RTT (default: 1)")
+    parser.add_argument('--uno_phantom_enabled', type=int, default=1, help="UnoCC phantom queue enable flag (default: 1)")
+    parser.add_argument('--uno_phantom_size_kb', type=int, default=0, help="UnoCC phantom queue size in KB; 0 means auto derive (default: 0)")
+    parser.add_argument('--uno_phantom_kmin_pct', type=int, default=2, help="UnoCC phantom queue ECN kmin percentage (default: 2)")
+    parser.add_argument('--uno_phantom_kmax_pct', type=int, default=60, help="UnoCC phantom queue ECN kmax percentage (default: 60)")
+    parser.add_argument('--uno_phantom_pmax', type=float, default=1.0, help="UnoCC phantom queue max marking probability (default: 1.0)")
+    parser.add_argument('--uno_phantom_slowdown_pct', type=float, default=10.0, help="UnoCC phantom drain slowdown percentage (default: 10.0)")
+    parser.add_argument('--uno_phantom_use_physical', type=int, default=0, help="Whether Uno phantom marking also uses physical ECN (default: 0)")
     parser.add_argument(
         '--extra',
         action='append',
@@ -231,6 +248,24 @@ def main():
     inter_load_all = args.inter_load_all
     wan_cc_mode = args.wan_cc_mode
     msg = args.msg
+    uno_params = {
+        'UNO_AI_FACTOR': args.uno_ai_factor,
+        'UNO_BETA': args.uno_beta,
+        'UNO_EWMA_GAIN': args.uno_ewma_gain,
+        'UNO_K': args.uno_k,
+        'UNO_GENTLE_SCALE': args.uno_gentle_scale,
+        'UNO_DELAY_THRESHOLD': args.uno_delay_threshold,
+        'UNO_INTRA_RTT_NS': args.uno_intra_rtt_ns,
+        'UNO_INTER_RTT_NS': args.uno_inter_rtt_ns,
+        'UNO_EPOCH_RTT_FACTOR': args.uno_epoch_rtt_factor,
+        'UNO_PHANTOM_ENABLED': args.uno_phantom_enabled,
+        'UNO_PHANTOM_SIZE_KB': args.uno_phantom_size_kb,
+        'UNO_PHANTOM_KMIN_PCT': args.uno_phantom_kmin_pct,
+        'UNO_PHANTOM_KMAX_PCT': args.uno_phantom_kmax_pct,
+        'UNO_PHANTOM_PMAX': args.uno_phantom_pmax,
+        'UNO_PHANTOM_SLOWDOWN_PCT': args.uno_phantom_slowdown_pct,
+        'UNO_PHANTOM_USE_PHYSICAL': args.uno_phantom_use_physical,
+    }
 
     # Parse passthrough extras: KEY=VALUE (VALUE kept as raw string)
     extra_kv = {}
@@ -374,20 +409,44 @@ def main():
                                         fast_react=fast_react, mi=mi, int_multi=int_multi, ewma_gain=ewma_gain,
                                         kmax_map=kmax_map, kmin_map=kmin_map, pmax_map=pmax_map, random_seed=1, time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"), 
                                         wan_cc_mode=wan_cc_mode, msg=msg)
+    elif cc_mode == 9:  # UnoCC
+        ai = 10 * bw / 10
+        hai = 50 * bw / 10
+        dctcp_ai = 1000
+        fast_react = 0
+        mi = 0
+        int_multi = 1
+        ewma_gain = 0.00390625
+
+        config = config_template.format(id=config_ID, topo=topo, flow=flow,
+                        flowgen_start_time=flowgen_start_time,
+                                        flowgen_stop_time=flowgen_stop_time, sw_monitoring_interval=sw_monitoring_interval,
+                                        buffer_size=buffer, dci_buffer_size=dci_buffer, wan_buffer_size=wan_buffer, lb_mode=lb_mode,
+                                        enabled_pfc=enabled_pfc, enabled_irn=enabled_irn,
+                                        cc_mode=cc_mode,
+                                        ai=ai, hai=hai, dctcp_ai=dctcp_ai,
+                                        has_win=has_win, var_win=var_win,
+                                        fast_react=fast_react, mi=mi, int_multi=int_multi, ewma_gain=ewma_gain,
+                                        kmax_map=kmax_map, kmin_map=kmin_map, pmax_map=pmax_map, random_seed=1, time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                                        wan_cc_mode=wan_cc_mode, msg=msg)
     else:
         print("unknown cc:{}".format(args.cc))
+
+    def _append_lines(cfg: str, kv: dict) -> str:
+        if kv:
+            if not cfg.endswith('\n'):
+                cfg += '\n'
+            for k, v in kv.items():
+                cfg += f"{k} {v}\n"
+        return cfg
 
     with open(config_name, "w") as file:
         if not args.config:
             if tcp_flow:
-                if not config.endswith('\n'):
-                    config += '\n'
-                config += f"TCP_FLOW_FILE {tcp_flow}\n"
-            if extra_kv:
-                if not config.endswith('\n'):
-                    config += '\n'
-                for k, v in extra_kv.items():
-                    config += f"{k} {v}\n"
+                config = _append_lines(config, {'TCP_FLOW_FILE': tcp_flow})
+            if cc_mode == 9:
+                config = _append_lines(config, uno_params)
+            config = _append_lines(config, extra_kv)
             file.write(config)
         else:
             # 先读入已有的config文件，将其中的OUTPUT_DIR_PATH替换为新的目录, TIME替换为当前时间
@@ -407,11 +466,21 @@ def main():
                     cfg += '\n'
                 return cfg + line + '\n'
 
+            def _delete_line(cfg: str, key: str) -> str:
+                pattern = rf'^{re.escape(key)}\s+.*$\n?'
+                return re.sub(pattern, '', cfg, flags=re.MULTILINE)
+
             existing_config = _upsert_line(existing_config, 'DCI_BUFFER_SIZE', str(dci_buffer))
             existing_config = _upsert_line(existing_config, 'WAN_BUFFER_SIZE', str(wan_buffer))
 
             if tcp_flow:
                 existing_config = _upsert_line(existing_config, 'TCP_FLOW_FILE', tcp_flow)
+            else:
+                existing_config = _delete_line(existing_config, 'TCP_FLOW_FILE')
+
+            if cc_mode == 9:
+                for k, v in uno_params.items():
+                    existing_config = _upsert_line(existing_config, k, str(v))
 
             for k, v in extra_kv.items():
                 existing_config = _upsert_line(existing_config, k, v)
@@ -437,4 +506,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

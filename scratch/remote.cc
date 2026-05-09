@@ -10,6 +10,7 @@
 #include <fstream>
 #include <iostream>
 #include <unordered_map>
+#include <unordered_set>
 #include <filesystem>
 #include <cctype>
 
@@ -158,6 +159,15 @@ std::vector<FlowInput> tcpFlowInfos;
 
 using json = nlohmann::json;
 json topo_json;
+
+static const json& GetOptionalJsonArray(const json& obj, const char* key) {
+    static const json kEmptyArray = json::array();
+    auto it = obj.find(key);
+    if (it == obj.end() || !it->is_array()) {
+        return kEmptyArray;
+    }
+    return *it;
+}
 
 /**
  * Read flow input from file "flowf"
@@ -723,6 +733,8 @@ map<uint32_t, map<uint32_t, uint64_t>> as_delay; //(as_id, as_id) -> delay
 void SetSPFWanRouting() {
     // [UNCHANGED] 初始化变量
     json& j = topo_json;
+    const auto& wan_switches = GetOptionalJsonArray(j, "wan_switches");
+    const auto& wan_links = GetOptionalJsonArray(j, "wan_links");
 
     /* ---------- [UNCHANGED] 构建节点集合与边 ----------- */
     std::set<uint32_t> nodes;
@@ -736,11 +748,11 @@ void SetSPFWanRouting() {
     }
 
     /* 普通 WAN 交换机节点 */
-    for (const auto& wan_switch : j["wan_switches"])
+    for (const auto& wan_switch : wan_switches)
         nodes.insert(wan_switch.get<uint32_t>());
 
     /* 链路 */
-    for (const auto& wan_link : j["wan_links"]) {
+    for (const auto& wan_link : wan_links) {
         uint32_t src = wan_link["src"].get<uint32_t>();
         uint32_t dst = wan_link["dst"].get<uint32_t>();
         uint64_t link_delay = Settings::nbr2if[n.Get(src)][n.Get(dst)].delay;
@@ -810,7 +822,7 @@ void SetSPFWanRouting() {
 
         /* [CHANGED/ADDED] 为所有 WAN Switch 目标填 next-hop */
         // WAN Host 的路由依赖于能够到达其直连的 WAN Switch
-        for (const auto& wan_switch : j["wan_switches"]) {
+        for (const auto& wan_switch : wan_switches) {
             uint32_t dst_sw = wan_switch.get<uint32_t>();
             // 注意：这里我们将 wan_switch_id 直接作为 wan_routing 的第二层 key
             // 因为 WAN Host 的 as_id 就等于 wan_switch_id
@@ -927,33 +939,37 @@ void init_nodeinfo_links() {
     }
 
     // 处理广域网部分
-    auto wan_switches = j["wan_switches"];
-    auto wan_links = j["wan_links"];
-    auto wan_hosts = j["wan_hosts"]; // 获取所有 WAN Hosts 的列表
-
-    int wan_host_idx = 0; // 全局索引，用于从 wan_hosts 数组中顺序取值
+    const auto& wan_switches = GetOptionalJsonArray(j, "wan_switches");
+    const auto& wan_links = GetOptionalJsonArray(j, "wan_links");
+    const auto& wan_hosts = GetOptionalJsonArray(j, "wan_hosts");
+    std::unordered_set<uint32_t> wan_host_ids;
+    for (const auto& wan_host : wan_hosts) {
+        wan_host_ids.insert(wan_host.get<uint32_t>());
+    }
 
     for (const auto &wan_switch : wan_switches) {
         uint32_t wan_switch_id = wan_switch.get<uint32_t>();
         // 将 WAN Switch 配置为 WAN_SWITCH 类型
         nodeInfos[wan_switch_id].basic_config(wan_switch_id, wan_switch_id, NodeInfo::NodeType::WAN_SWITCH);
-        
-        // 配置20个wan hosts
-        // 每个 WAN Switch 挂载 20 个 Host
-        for (int k = 0; k < 20; ++k) {
-            if (wan_host_idx >= wan_hosts.size()) {
-                printf("Error: Not enough wan_hosts defined in topology json!\n");
-                break;
+
+        // 通过 WAN 链路推导该交换机直连的 WAN host，避免写死 host 数量或依赖顺序。
+        for (const auto& wan_link : wan_links) {
+            uint32_t src = wan_link["src"].get<uint32_t>();
+            uint32_t dst = wan_link["dst"].get<uint32_t>();
+
+            uint32_t host_id = std::numeric_limits<uint32_t>::max();
+            if (src == wan_switch_id && wan_host_ids.count(dst)) {
+                host_id = dst;
+            } else if (dst == wan_switch_id && wan_host_ids.count(src)) {
+                host_id = src;
             }
 
-            uint32_t host_id = wan_hosts[wan_host_idx].get<uint32_t>();
-            wan_host_idx++; // 移动索引
-
-            // 配置 WAN Host
-            // 将 wan_switch_id 作为 AS ID 传入，以此表示该 Host 属于该区域
-            nodeInfos[host_id].basic_config(wan_switch_id, host_id, NodeInfo::NodeType::HOST);
-            // 增加总节点计数
-            node_num++;
+            if (host_id != std::numeric_limits<uint32_t>::max() &&
+                nodeInfos[host_id].node_type == NodeInfo::NodeType::UNCONFIGURED) {
+                // 将 wan_switch_id 作为 AS ID 传入，以此表示该 Host 属于该区域
+                nodeInfos[host_id].basic_config(wan_switch_id, host_id, NodeInfo::NodeType::HOST);
+                node_num++;
+            }
         }
     }
 

@@ -483,3 +483,149 @@ Uno_SC25 `CompositeQueue` 通过事件调度定期 decrease phantom queue。
 - build 成功。
 - `git diff --check` 无 whitespace/error 输出。
 - build 中仍有 ns-3 原有 deprecated warning，不是 UnoCC 迁移引入的错误。
+
+## 运行命令
+
+下面给出当前仓库里可直接使用的 UnoCC 实验命令。`run.py` 现在已经原生支持 `--cc unocc`，不再需要额外写 `--extra CC_MODE=9`。
+
+说明：
+
+- 纯 RDMA 实验不需要传 `--tcp_flow`；当前 `run.py` 默认就是空，不会再隐式带上 `config/w-tcp-100.txt`。
+- TCP + RDMA 混跑实验只需要额外传 `--tcp_flow <path>`。
+- 多 DC UnoCC 实验建议显式带 `--wan_cc_mode 2`，这样 WAN switch 侧也开启 ECN。
+
+### 当前仓库中已存在的输入文件
+
+- 单 DC 拓扑：`config/uno_single_dc_topo.txt`
+- 单 DC RDMA flow：`config/uno_single_dc_flow.txt`
+- 多 DC 拓扑：`config/cernet_topo.txt`
+- 多 DC 轻量 RDMA flow：`config/uno_multi_dc_smoke_flow.txt`
+- 多 DC 较重 RDMA flow：`config/w-dynamic-150-150.txt`
+- 多 DC TCP flow：`config/w-tcp-100.txt`
+
+### 单 DC：纯 RDMA
+
+```bash
+python3 run.py \
+  --cc unocc \
+  --topo uno_single_dc_topo \
+  --my_flow uno_single_dc_flow \
+  --simul_time 0.05 \
+  --stdout 1 \
+  --msg 'Uno single DC RDMA-only'
+```
+
+### 单 DC：TCP + RDMA 混跑
+
+如果只是做功能验证，最简单的做法是直接复用同一份 flow 文件给 TCP：
+
+```bash
+python3 run.py \
+  --cc unocc \
+  --topo uno_single_dc_topo \
+  --my_flow uno_single_dc_flow \
+  --tcp_flow config/uno_single_dc_flow.txt \
+  --simul_time 0.05 \
+  --stdout 1 \
+  --msg 'Uno single DC RDMA+TCP mixed'
+```
+
+如果需要单独的单 DC TCP flow 文件，可先生成：
+
+```bash
+python3 -c "import json, pathlib, os.path as op; from config.wan_traffic_gen import generate_flows; topo=json.loads(pathlib.Path('config/uno_single_dc_topo.txt').read_text()); hosts=topo['as_topologies'][0]['hosts']; cdf=op.join('traffic_gen','WebSearch.txt'); flows=generate_flows(hosts, hosts, cdf, '30G', 0.05); out=pathlib.Path('config/uno_single_dc_tcp_flow.txt'); out.write_text(str(len(flows))+'\\n'+'\\n'.join(str(f) for f in flows)+'\\n')"
+```
+
+然后把上面的 `--tcp_flow config/uno_single_dc_flow.txt` 改成：
+
+```bash
+--tcp_flow config/uno_single_dc_tcp_flow.txt
+```
+
+### 多 DC：纯 RDMA（轻量 smoke）
+
+```bash
+python3 run.py \
+  --cc unocc \
+  --topo cernet_topo \
+  --my_flow uno_multi_dc_smoke_flow \
+  --simul_time 0.02 \
+  --wan_cc_mode 2 \
+  --stdout 1 \
+  --msg 'Uno multi DC RDMA-only smoke'
+```
+
+### 多 DC：TCP + RDMA 混跑（轻量 smoke + WAN TCP 背景流）
+
+```bash
+python3 run.py \
+  --cc unocc \
+  --topo cernet_topo \
+  --my_flow uno_multi_dc_smoke_flow \
+  --tcp_flow config/w-tcp-100.txt \
+  --simul_time 0.02 \
+  --wan_cc_mode 2 \
+  --stdout 1 \
+  --msg 'Uno multi DC RDMA+TCP mixed smoke'
+```
+
+### 多 DC：较重负载版本
+
+如果要跑当前仓库已有的较重多 DC RDMA 负载，可以把 `--my_flow` 换成 `w-dynamic-150-150`：
+
+```bash
+python3 run.py \
+  --cc unocc \
+  --topo cernet_topo \
+  --my_flow w-dynamic-150-150 \
+  --simul_time 0.10 \
+  --wan_cc_mode 2 \
+  --stdout 1 \
+  --msg 'Uno multi DC RDMA-only heavy'
+```
+
+对应的混跑版本：
+
+```bash
+python3 run.py \
+  --cc unocc \
+  --topo cernet_topo \
+  --my_flow w-dynamic-150-150 \
+  --tcp_flow config/w-tcp-100.txt \
+  --simul_time 0.10 \
+  --wan_cc_mode 2 \
+  --stdout 1 \
+  --msg 'Uno multi DC RDMA+TCP mixed heavy'
+```
+
+### 如果输入文件不存在，先生成
+
+多 DC 拓扑：
+
+```bash
+python3 config/wan_topo_gen.py
+```
+
+多 DC 较重负载 RDMA/TCP 文件：
+
+```bash
+python3 config/large_traffic_gen.py -b 150 -d 200 -f w
+```
+
+单 DC 拓扑：
+
+```bash
+python3 -c "import pathlib, config.wan_topo_gen as g; g.next_node_id=0; g.dci_switches=[]; topo=g.generate_topology_file(1,[4]); topo['wan_switch_num']=0; topo['wan_switches']=[]; topo['wan_links']=[]; topo['wan_link_num']=0; topo['wan_hosts']=[]; topo['wan_host_num']=0; pathlib.Path('config/uno_single_dc_topo.txt').write_text(g.custom_json_dumps(topo, indent=4))"
+```
+
+单 DC RDMA flow：
+
+```bash
+python3 -c "import json, pathlib, os.path as op; from config.wan_traffic_gen import generate_flows; topo=json.loads(pathlib.Path('config/uno_single_dc_topo.txt').read_text()); hosts=topo['as_topologies'][0]['hosts']; cdf=op.join('traffic_gen','WebSearch.txt'); flows=generate_flows(hosts, hosts, cdf, '30G', 0.05); out=pathlib.Path('config/uno_single_dc_flow.txt'); out.write_text(str(len(flows))+'\\n'+'\\n'.join(str(f) for f in flows)+'\\n')"
+```
+
+多 DC 轻量 smoke RDMA flow：
+
+```bash
+python3 -c "import json, pathlib, os.path as op; from config.wan_traffic_gen import generate_flows; topo=json.loads(pathlib.Path('config/cernet_topo.txt').read_text()); as_list=[item['hosts'] for item in topo['as_topologies'][:3]]; cdf=op.join('traffic_gen','WebSearch.txt'); dur=0.02; flows=[]; intra='10G'; inter='3G'; flows += generate_flows(as_list[0], as_list[0], cdf, intra, dur); flows += generate_flows(as_list[1], as_list[1], cdf, intra, dur); flows += generate_flows(as_list[2], as_list[2], cdf, intra, dur); flows += generate_flows(as_list[0], as_list[1], cdf, inter, dur); flows += generate_flows(as_list[1], as_list[0], cdf, inter, dur); flows += generate_flows(as_list[1], as_list[2], cdf, inter, dur); flows += generate_flows(as_list[2], as_list[1], cdf, inter, dur); flows += generate_flows(as_list[0], as_list[2], cdf, inter, dur); flows += generate_flows(as_list[2], as_list[0], cdf, inter, dur); flows.sort(key=lambda f: f.t); out=pathlib.Path('config/uno_multi_dc_smoke_flow.txt'); out.write_text(str(len(flows))+'\\n'+'\\n'.join(str(f) for f in flows)+'\\n')"
+```
