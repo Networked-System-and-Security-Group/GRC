@@ -65,8 +65,8 @@ SwitchMmu::SwitchMmu(void) {
         m_unoPhantomEnabled[i] = false;
         m_unoUsePhysicalQueue[i] = false;
         m_unoPhantomSizeBytes[i] = 0;
-        m_unoPhantomKminPct[i] = 25;
-        m_unoPhantomKmaxPct[i] = 75;
+        m_unoPhantomKminPct[i] = 2;
+        m_unoPhantomKmaxPct[i] = 60;
         m_unoPhantomPmax[i] = 1.0;
         m_unoPhantomSlowdownPct[i] = 10.0;
         m_unoPhantomLineRateBps[i] = 0;

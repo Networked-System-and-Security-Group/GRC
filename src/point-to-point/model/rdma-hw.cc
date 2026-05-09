@@ -128,7 +128,7 @@ TypeId RdmaHw::GetTypeId(void) {
                           DoubleValue(0.5), MakeDoubleAccessor(&RdmaHw::m_uno_beta),
                           MakeDoubleChecker<double>())
             .AddAttribute("UnoEwmaGain", "UnoCC ECN fraction EWMA gain",
-                          DoubleValue(1.0), MakeDoubleAccessor(&RdmaHw::m_uno_ewma_gain),
+                          DoubleValue(0.65), MakeDoubleAccessor(&RdmaHw::m_uno_ewma_gain),
                           MakeDoubleChecker<double>())
             .AddAttribute("UnoK", "UnoCC multiplicative decrease K parameter in bytes",
                           DoubleValue(-1.0), MakeDoubleAccessor(&RdmaHw::m_uno_k),
@@ -1436,6 +1436,7 @@ void RdmaHw::InitUno(Ptr<RdmaQueuePair> qp) {
     qp->uno.m_baseRttNs = rttNs;
     qp->uno.m_lastRttNs = rttNs;
     qp->uno.m_epochStartTimeNs = Simulator::Now().GetNanoSeconds();
+    qp->uno.m_epochEndTxTsNs = 0;
     qp->uno.m_qaStartTimeNs = qp->uno.m_epochStartTimeNs;
     qp->uno.m_qaCooldownUntilNs = 0;
     qp->uno.m_ecnFractionEwma = 0.0;
@@ -1450,6 +1451,7 @@ void RdmaHw::HandleAckUno(Ptr<RdmaQueuePair> qp, Ptr<Packet> p, CustomHeader &ch
     (void)p;
     uint64_t nowNs = Simulator::Now().GetNanoSeconds();
     uint64_t rttNs = GetAckRttNsUno(qp, ch);
+    uint64_t ackedPktTxTsNs = GetAckTxTimestampNsUno(ch);
     if (rttNs > 0) {
         qp->uno.m_lastRttNs = rttNs;
         if (!qp->uno.m_firstRttSampleValid || qp->uno.m_baseRttNs == 0 ||
@@ -1457,6 +1459,9 @@ void RdmaHw::HandleAckUno(Ptr<RdmaQueuePair> qp, Ptr<Packet> p, CustomHeader &ch
             qp->uno.m_baseRttNs = rttNs;
             qp->uno.m_firstRttSampleValid = true;
         }
+    }
+    if (qp->uno.m_epochEndTxTsNs == 0) {
+        qp->uno.m_epochEndTxTsNs = nowNs;
     }
 
     bool cnpMarked = ((ch.ack.flags >> qbbHeader::FLAG_CNP) & 1) != 0;
@@ -1489,11 +1494,11 @@ void RdmaHw::HandleAckUno(Ptr<RdmaQueuePair> qp, Ptr<Packet> p, CustomHeader &ch
     UnoAdditiveIncrease(qp, bytesAcked, ecnMarked);
 
     bool inCooldown = nowNs < qp->uno.m_qaCooldownUntilNs;
-    if (UnoEpochEnded(qp, nowNs)) {
+    if (UnoEpochEnded(qp, ackedPktTxTsNs, nowNs)) {
         if (!inCooldown) {
             UnoProcessEpochEnd(qp);
         }
-        UnoResetEpoch(qp, nowNs);
+        UnoAdvanceEpoch(qp, nowNs, ackedPktTxTsNs);
     }
 
     if (UnoQaPeriodEnded(qp, nowNs)) {
@@ -1533,6 +1538,13 @@ uint64_t RdmaHw::GetAckRttNsUno(Ptr<RdmaQueuePair> qp, CustomHeader &ch) {
     return m_tmly_minRtt;
 }
 
+uint64_t RdmaHw::GetAckTxTimestampNsUno(CustomHeader &ch) {
+    if (IntHeader::mode == 1) {
+        return ch.ack.ih.ts;
+    }
+    return 0;
+}
+
 uint64_t RdmaHw::GetUnoEpochPeriodNs(Ptr<RdmaQueuePair> qp) {
     (void)qp;
     uint64_t rttNs = m_uno_intra_rtt_ns ? m_uno_intra_rtt_ns : m_tmly_minRtt;
@@ -1554,7 +1566,10 @@ void RdmaHw::UnoAdditiveIncrease(Ptr<RdmaQueuePair> qp, uint32_t bytesAcked, boo
     qp->uno.m_cwndBytes += incBytes;
 }
 
-bool RdmaHw::UnoEpochEnded(Ptr<RdmaQueuePair> qp, uint64_t nowNs) {
+bool RdmaHw::UnoEpochEnded(Ptr<RdmaQueuePair> qp, uint64_t ackedPktTxTsNs, uint64_t nowNs) {
+    if (ackedPktTxTsNs > 0 && qp->uno.m_epochEndTxTsNs > 0) {
+        return ackedPktTxTsNs >= qp->uno.m_epochEndTxTsNs;
+    }
     return nowNs >= qp->uno.m_epochStartTimeNs + GetUnoEpochPeriodNs(qp);
 }
 
@@ -1600,6 +1615,23 @@ void RdmaHw::UnoResetEpoch(Ptr<RdmaQueuePair> qp, uint64_t nowNs) {
     qp->uno.m_epochEcnMarkedBytes = 0;
     qp->uno.m_seenEcnInEpoch = false;
     qp->uno.m_epochStartTimeNs = nowNs;
+    qp->uno.m_epochEndTxTsNs = 0;
+}
+
+void RdmaHw::UnoAdvanceEpoch(Ptr<RdmaQueuePair> qp, uint64_t nowNs, uint64_t ackedPktTxTsNs) {
+    uint64_t periodNs = GetUnoEpochPeriodNs(qp);
+    uint64_t previousEpochEndTxTsNs = qp->uno.m_epochEndTxTsNs;
+    UnoResetEpoch(qp, nowNs);
+    if (ackedPktTxTsNs > 0 && previousEpochEndTxTsNs > 0) {
+        uint64_t nextEpochEndTxTsNs = previousEpochEndTxTsNs + periodNs;
+        if (periodNs > 0 && nextEpochEndTxTsNs <= ackedPktTxTsNs) {
+            uint64_t missedPeriods = (ackedPktTxTsNs - nextEpochEndTxTsNs) / periodNs + 1;
+            nextEpochEndTxTsNs += missedPeriods * periodNs;
+        }
+        qp->uno.m_epochEndTxTsNs = nextEpochEndTxTsNs;
+    } else {
+        qp->uno.m_epochEndTxTsNs = nowNs + periodNs;
+    }
 }
 
 bool RdmaHw::UnoQaPeriodEnded(Ptr<RdmaQueuePair> qp, uint64_t nowNs) {

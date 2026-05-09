@@ -197,11 +197,13 @@ class RdmaHw : public Object {
     void HandleCnpUno(Ptr<RdmaQueuePair> qp);
     void HandleTimeoutUno(Ptr<RdmaQueuePair> qp);
     uint64_t GetAckRttNsUno(Ptr<RdmaQueuePair> qp, CustomHeader &ch);
+    uint64_t GetAckTxTimestampNsUno(CustomHeader &ch);
     uint64_t GetUnoEpochPeriodNs(Ptr<RdmaQueuePair> qp);
     void UnoAdditiveIncrease(Ptr<RdmaQueuePair> qp, uint32_t bytesAcked, bool ecnMarked);
-    bool UnoEpochEnded(Ptr<RdmaQueuePair> qp, uint64_t nowNs);
+    bool UnoEpochEnded(Ptr<RdmaQueuePair> qp, uint64_t ackedPktTxTsNs, uint64_t nowNs);
     void UnoProcessEpochEnd(Ptr<RdmaQueuePair> qp);
     void UnoResetEpoch(Ptr<RdmaQueuePair> qp, uint64_t nowNs);
+    void UnoAdvanceEpoch(Ptr<RdmaQueuePair> qp, uint64_t nowNs, uint64_t ackedPktTxTsNs);
     bool UnoQaPeriodEnded(Ptr<RdmaQueuePair> qp, uint64_t nowNs);
     void UnoProcessQaEnd(Ptr<RdmaQueuePair> qp);
     DataRate UnoCwndToRate(Ptr<RdmaQueuePair> qp, uint64_t cwndBytes, uint64_t rttNs);

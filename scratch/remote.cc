@@ -85,16 +85,17 @@ std::string rate_ai, rate_hai, min_rate = "100Mb/s";
 std::string dctcp_rate_ai = "1000Mb/s";
 double uno_ai_factor = 0.001;
 double uno_beta = 0.5;
-double uno_ewma_gain = 1.0;
+double uno_ewma_gain = 0.65;
 double uno_k = -1.0;
 double uno_gentle_scale = 0.3;
 double uno_delay_threshold = 0.05;
 uint64_t uno_intra_rtt_ns = 14000;
+uint64_t uno_inter_rtt_ns = 2000000;
 uint32_t uno_epoch_rtt_factor = 1;
 int uno_phantom_enabled = -1;
 uint32_t uno_phantom_size_kb = 0;
-uint32_t uno_phantom_kmin_pct = 25;
-uint32_t uno_phantom_kmax_pct = 75;
+uint32_t uno_phantom_kmin_pct = 2;
+uint32_t uno_phantom_kmax_pct = 60;
 double uno_phantom_pmax = 1.0;
 double uno_phantom_slowdown_pct = 10.0;
 bool uno_phantom_use_physical = false;
@@ -1235,6 +1236,14 @@ int main(int argc, char *argv[]) {
                 conf >> v;
                 uno_intra_rtt_ns = (uint64_t)(v * 1000.0);
                 std::cerr << "UNO_INTRA_RTT_US\t\t\t" << v << "\n";
+            } else if (key.compare("UNO_INTER_RTT_NS") == 0) {
+                conf >> uno_inter_rtt_ns;
+                std::cerr << "UNO_INTER_RTT_NS\t\t\t" << uno_inter_rtt_ns << "\n";
+            } else if (key.compare("UNO_INTER_RTT_US") == 0) {
+                double v;
+                conf >> v;
+                uno_inter_rtt_ns = (uint64_t)(v * 1000.0);
+                std::cerr << "UNO_INTER_RTT_US\t\t\t" << v << "\n";
             } else if (key.compare("UNO_EPOCH_RTT_FACTOR") == 0) {
                 conf >> uno_epoch_rtt_factor;
                 std::cerr << "UNO_EPOCH_RTT_FACTOR\t\t\t" << uno_epoch_rtt_factor << "\n";
@@ -1562,8 +1571,11 @@ int main(int argc, char *argv[]) {
                 bool enableUnoPhantom =
                     (uno_phantom_enabled >= 0) ? (uno_phantom_enabled != 0)
                                                : (cc_mode == CC_MODE_UNOCC);
-                uint32_t phantomSizeBytes =
-                    (uno_phantom_size_kb > 0 ? uno_phantom_size_kb : ecnKmax) * 1000;
+                uint64_t phantomSizeBytes =
+                    (uno_phantom_size_kb > 0)
+                        ? (uint64_t)uno_phantom_size_kb * 1000ull
+                        : (uint64_t)((long double)rate * (long double)uno_inter_rtt_ns / 8.0L /
+                                     1000000000.0L);
                 sw->m_mmu->ConfigUnoPhantom(j, enableUnoPhantom, phantomSizeBytes,
                                             uno_phantom_kmin_pct, uno_phantom_kmax_pct,
                                             uno_phantom_pmax, uno_phantom_slowdown_pct, rate,
@@ -1594,8 +1606,11 @@ int main(int argc, char *argv[]) {
                 bool enableUnoPhantom =
                     (uno_phantom_enabled >= 0) ? (uno_phantom_enabled != 0)
                                                : (cc_mode == CC_MODE_UNOCC);
-                uint32_t phantomSizeBytes =
-                    (uno_phantom_size_kb > 0 ? uno_phantom_size_kb : ecnKmax) * 1000;
+                uint64_t phantomSizeBytes =
+                    (uno_phantom_size_kb > 0)
+                        ? (uint64_t)uno_phantom_size_kb * 1000ull
+                        : (uint64_t)((long double)rate * (long double)uno_inter_rtt_ns / 8.0L /
+                                     1000000000.0L);
                 sw->m_mmu->ConfigUnoPhantom(j, enableUnoPhantom, phantomSizeBytes,
                                             uno_phantom_kmin_pct, uno_phantom_kmax_pct,
                                             uno_phantom_pmax, uno_phantom_slowdown_pct, rate,
@@ -1632,8 +1647,11 @@ int main(int argc, char *argv[]) {
                 bool enableUnoPhantom =
                     (uno_phantom_enabled >= 0) ? (uno_phantom_enabled != 0)
                                                : (cc_mode == CC_MODE_UNOCC);
-                uint32_t phantomSizeBytes =
-                    (uno_phantom_size_kb > 0 ? uno_phantom_size_kb : ecnKmax) * 1000;
+                uint64_t phantomSizeBytes =
+                    (uno_phantom_size_kb > 0)
+                        ? (uint64_t)uno_phantom_size_kb * 1000ull
+                        : (uint64_t)((long double)rate * (long double)uno_inter_rtt_ns / 8.0L /
+                                     1000000000.0L);
                 sw->m_mmu->ConfigUnoPhantom(j, enableUnoPhantom, phantomSizeBytes,
                                             uno_phantom_kmin_pct, uno_phantom_kmax_pct,
                                             uno_phantom_pmax, uno_phantom_slowdown_pct, rate,

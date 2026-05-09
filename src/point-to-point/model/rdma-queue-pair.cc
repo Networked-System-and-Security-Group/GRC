@@ -75,6 +75,7 @@ RdmaQueuePair::RdmaQueuePair(uint16_t pg, Ipv4Address _sip, Ipv4Address _dip, ui
     uno.m_baseRttNs = 0;
     uno.m_lastRttNs = 0;
     uno.m_epochStartTimeNs = 0;
+    uno.m_epochEndTxTsNs = 0;
     uno.m_qaStartTimeNs = 0;
     uno.m_qaCooldownUntilNs = 0;
     uno.m_ecnFractionEwma = 0;
