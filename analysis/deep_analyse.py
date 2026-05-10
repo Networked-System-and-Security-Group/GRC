@@ -569,6 +569,155 @@ class Analyser:
         if self.buffer_info is None:
             self.buffer_info = pd.read_csv(op.join(self.dir,'buffer_monitor'))
 
+    def _read_optional_csv(self, attr_name: str, filename: str):
+        current = getattr(self, attr_name)
+        if current is not None:
+            return current
+        path = op.join(self.dir, filename)
+        if (not op.exists(path)) or os.path.getsize(path) == 0:
+            return None
+        try:
+            df = pd.read_csv(path)
+        except pd.errors.EmptyDataError:
+            return None
+        setattr(self, attr_name, df)
+        return df
+
+    def get_flow_detail(self, flow_id: int, top_links: int = 10) -> dict:
+        self.__read_flow_info()
+        flow_rows = self.flow_df[self.flow_df['flow_id'] == flow_id]
+        if flow_rows.empty:
+            raise ValueError(f'flow_id {flow_id} not found in experiment {self.id}')
+
+        flow = flow_rows.iloc[0].to_dict()
+        detail = {
+            'flow': flow,
+            'drop_events': None,
+            'drop_summary': None,
+            'qp_rate_samples': None,
+            'qp_rate_stats': None,
+            'cnp_events': None,
+            'link_samples': None,
+            'link_summary': None,
+        }
+
+        drop_df = self._read_optional_csv('drop_info', 'drop_log')
+        if drop_df is not None and not drop_df.empty and 'flow_id' in drop_df.columns:
+            if 'src_as' not in drop_df.columns or 'dst_as' not in drop_df.columns:
+                drop_df = drop_df.merge(
+                    self.flow_df[['flow_id', 'src_as', 'dst_as']],
+                    on='flow_id', how='left'
+                )
+                self.drop_info = drop_df
+            flow_drop = drop_df[drop_df['flow_id'] == flow_id].copy()
+            if not flow_drop.empty:
+                detail['drop_events'] = flow_drop
+                detail['drop_summary'] = (
+                    flow_drop.groupby(['switch_id', 'next_hop', 'type'])
+                    .size()
+                    .reset_index(name='count')
+                    .sort_values('count', ascending=False)
+                )
+
+        qp_df = self._read_optional_csv('qp_rate_info', 'qp_rate_log')
+        if qp_df is not None and not qp_df.empty and 'flow_id' in qp_df.columns:
+            flow_qp = qp_df[qp_df['flow_id'] == flow_id].copy()
+            if not flow_qp.empty:
+                detail['qp_rate_samples'] = flow_qp
+                rate_gbps = flow_qp['rate'] * 8 / 1e9
+                qp_stats = {
+                    'samples': int(len(flow_qp)),
+                    't_start_s': float(flow_qp['timestamp_ns'].min() / 1e9),
+                    't_end_s': float(flow_qp['timestamp_ns'].max() / 1e9),
+                    'rate_mean_gbps': float(rate_gbps.mean()),
+                    'rate_min_gbps': float(rate_gbps.min()),
+                    'rate_p50_gbps': float(rate_gbps.quantile(0.5)),
+                    'rate_p99_gbps': float(rate_gbps.quantile(0.99)),
+                    'rate_max_gbps': float(rate_gbps.max()),
+                }
+                if 'target_rate' in flow_qp.columns:
+                    target_gbps = flow_qp['target_rate'] * 8 / 1e9
+                    qp_stats.update({
+                        'target_mean_gbps': float(target_gbps.mean()),
+                        'target_max_gbps': float(target_gbps.max()),
+                    })
+                if 'alpha' in flow_qp.columns:
+                    qp_stats.update({
+                        'alpha_min': float(flow_qp['alpha'].min()),
+                        'alpha_max': float(flow_qp['alpha'].max()),
+                    })
+                detail['qp_rate_stats'] = qp_stats
+
+        cnp_df = self._read_optional_csv('cnp_info', 'cnp_log')
+        if cnp_df is not None and not cnp_df.empty and 'flow_id' in cnp_df.columns:
+            flow_cnp = cnp_df[cnp_df['flow_id'] == flow_id].copy()
+            if not flow_cnp.empty:
+                detail['cnp_events'] = flow_cnp
+
+        link_df = self._read_optional_csv('link_info', 'link_utilization')
+        if link_df is not None and not link_df.empty and 'flow_id' in link_df.columns:
+            flow_link = link_df[link_df['flow_id'] == flow_id].copy()
+            if not flow_link.empty:
+                detail['link_samples'] = flow_link
+                detail['link_summary'] = (
+                    flow_link.groupby(['src_id', 'dst_id'])['bytes']
+                    .agg(['count', 'sum', 'max'])
+                    .reset_index()
+                    .sort_values('sum', ascending=False)
+                    .head(top_links)
+                )
+
+        return detail
+
+    def print_flow_detail(self, flow_id: int, top_links: int = 10):
+        detail = self.get_flow_detail(flow_id, top_links=top_links)
+        flow = detail['flow']
+        duration = float(flow['finish_time'] - flow['start_time'])
+        path = flow.get('passed_nodes', [])
+
+        print(f'=== Flow {flow_id} @ Experiment {self.id} ===')
+        print(
+            f"src={flow['src']} (AS{flow['src_as']}) -> "
+            f"dst={flow['dst']} (AS{flow['dst_as']})"
+        )
+        print(
+            f"size={int(flow['fsize'])}B start={flow['start_time']:.9f}s "
+            f"finish={flow['finish_time']:.9f}s duration={duration:.9f}s"
+        )
+        print(
+            f"std_fct={flow['std_fct']:.9f}s slowdown={flow['fct_slowdown']:.6f}"
+        )
+        print(f"path={path} hop_count={len(path)}")
+
+        if detail['drop_events'] is None:
+            print('drops=0')
+        else:
+            print(f'drops={len(detail["drop_events"])}')
+            print(detail['drop_summary'].to_string(index=False))
+
+        if detail['cnp_events'] is None:
+            print('cnp_events=0')
+        else:
+            flow_cnp = detail['cnp_events']
+            print(
+                f"cnp_events={len(flow_cnp)} "
+                f"time_range=[{flow_cnp['timestamp_ns'].min()/1e9:.9f}, "
+                f"{flow_cnp['timestamp_ns'].max()/1e9:.9f}]s"
+            )
+
+        if detail['qp_rate_stats'] is None:
+            print('qp_rate_samples=0')
+        else:
+            print('qp_rate_stats=')
+            for k, v in detail['qp_rate_stats'].items():
+                print(f'  {k}: {v}')
+
+        if detail['link_summary'] is None:
+            print('link_samples=0')
+        else:
+            print('top_link_samples=')
+            print(detail['link_summary'].to_string(index=False))
+
     def wan_high_buffer_intervals(
         self,
         *,

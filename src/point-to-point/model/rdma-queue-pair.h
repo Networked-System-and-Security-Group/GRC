@@ -70,6 +70,7 @@ class RdmaQueuePair : public Object {
     uint32_t wp;          // current window of packets
     uint32_t lastPktSize;
     int32_t m_flow_id;
+    uint32_t m_ccMode;
     Time m_timeout;
 
     /******************************
@@ -128,10 +129,13 @@ class RdmaQueuePair : public Object {
         uint64_t m_epochStartTimeNs;
         uint64_t m_epochEndTxTsNs;
         uint64_t m_qaStartTimeNs;
+        uint64_t m_qaWindowEndNs;
+        uint64_t m_qaNextStartTxTsNs;
         uint64_t m_qaCooldownUntilNs;
         double m_ecnFractionEwma;
         bool m_seenEcnInEpoch;
         bool m_firstRttSampleValid;
+        bool m_qaActive;
     } uno;
 
     struct {

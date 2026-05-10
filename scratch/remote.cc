@@ -93,6 +93,7 @@ double uno_delay_threshold = 0.05;
 uint64_t uno_intra_rtt_ns = 14000;
 uint64_t uno_inter_rtt_ns = 2000000;
 uint32_t uno_epoch_rtt_factor = 1;
+bool uno_intra_rtt_explicit = false;
 int uno_phantom_enabled = -1;
 uint32_t uno_phantom_size_kb = 0;
 uint32_t uno_phantom_kmin_pct = 2;
@@ -374,7 +375,13 @@ void m_QP_rate_monitoring()
                 uint64_t m_bps = m_rate.GetBitRate();
                 auto& flowInfo = Settings::flowInfos[flowid];
                 if (Settings::nodeInfos[flowInfo.src].as_id != Settings::nodeInfos[flowInfo.dst].as_id) {
-                    fprintf(qp_rate_log, "%lu,%u,%lu,%lf,%lu\n", now, flowid, m_bps / 8, qp.second->mlx.m_alpha, qp.second->mlx.m_targetRate.GetBitRate() / 8);
+                    fprintf(qp_rate_log,
+                            "%lu,%u,%lu,%lf,%lu,%lu,%lu,%lu,%lf,%lu\n",
+                            now, flowid, m_bps / 8, qp.second->mlx.m_alpha,
+                            qp.second->mlx.m_targetRate.GetBitRate() / 8,
+                            qp.second->uno.m_cwndBytes, qp.second->uno.m_baseRttNs,
+                            qp.second->uno.m_lastRttNs, qp.second->uno.m_ecnFractionEwma,
+                            qp.second->GetWin());
                 }
                 // std::cout << "bps: " << now << flowid << m_bps << std::endl;
             }
@@ -1246,11 +1253,13 @@ int main(int argc, char *argv[]) {
                 std::cerr << "UNO_DELAY_THRESHOLD\t\t\t" << uno_delay_threshold << "\n";
             } else if (key.compare("UNO_INTRA_RTT_NS") == 0) {
                 conf >> uno_intra_rtt_ns;
+                uno_intra_rtt_explicit = true;
                 std::cerr << "UNO_INTRA_RTT_NS\t\t\t" << uno_intra_rtt_ns << "\n";
             } else if (key.compare("UNO_INTRA_RTT_US") == 0) {
                 double v;
                 conf >> v;
                 uno_intra_rtt_ns = (uint64_t)(v * 1000.0);
+                uno_intra_rtt_explicit = true;
                 std::cerr << "UNO_INTRA_RTT_US\t\t\t" << v << "\n";
             } else if (key.compare("UNO_INTER_RTT_NS") == 0) {
                 conf >> uno_inter_rtt_ns;
@@ -1822,6 +1831,7 @@ int main(int argc, char *argv[]) {
     //    as_delay[dst][src] = delay;
     //}
     maxRtt = maxBdp = 0;
+    uint64_t derived_intra_rtt_ns = 0;
     for (uint32_t i = 0; i < nodeInfos.size(); i++) {
         if (nodeInfos[i].node_type != NodeInfo::NodeType::HOST) continue;
         // 只考虑server
@@ -1837,6 +1847,9 @@ int main(int argc, char *argv[]) {
                 pairBdp[n.Get(j)][n.Get(i)] = bdp;
                 pairRtt[n.Get(i)][n.Get(j)] = rtt;
                 pairRtt[n.Get(j)][n.Get(i)] = rtt;
+                if (derived_intra_rtt_ns == 0 || rtt < derived_intra_rtt_ns) {
+                    derived_intra_rtt_ns = rtt;
+                }
                 if (rtt < server_rtt_mon_interval) server_rtt_mon_interval = rtt;
                 if (bdp > maxBdp) maxBdp = bdp;
                 if (rtt > maxRtt) maxRtt = rtt;
@@ -1862,6 +1875,17 @@ int main(int argc, char *argv[]) {
     }
     std::cout << "server_rtt_mon_interval: " << server_rtt_mon_interval << std::endl;
     fprintf(stderr, "maxRtt: %lu, maxBdp: %lu\n", maxRtt, maxBdp);
+    if (!uno_intra_rtt_explicit && derived_intra_rtt_ns > 0) {
+        uno_intra_rtt_ns = derived_intra_rtt_ns;
+        std::cerr << "UNO_INTRA_RTT_NS\t\t\t" << uno_intra_rtt_ns
+                  << " (derived from topology intra-DC RTT)\n";
+    }
+    for (uint32_t i = 0; i < nodeInfos.size(); i++) {
+        if (n.Get(i)->GetNodeType() != 0) continue;
+        Ptr<RdmaDriver> rdma = n.Get(i)->GetObject<RdmaDriver>();
+        if (rdma == nullptr || rdma->m_rdma == nullptr) continue;
+        rdma->m_rdma->SetAttribute("UnoIntraRttNs", UintegerValue(uno_intra_rtt_ns));
+    }
 
     std::cout << "Configuring switches" << std::endl;
     /* config ToR Switch, init TorSwitch_nodelist, hostId2ToRlist*/

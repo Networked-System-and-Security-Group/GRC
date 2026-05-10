@@ -101,6 +101,12 @@ python3 -c "from analysis.deep_analyse import get_basic_result; print(get_basic_
 python3 -c "from analysis.deep_analyse import show_fct; show_fct('7')"
 ```
 
+对单个实验做一轮“全面分析”（打印 avg/p99/drop/large/small，并保存一张 FCT CDF）：
+
+```bash
+cd analysis && python -c "from deep_analyse import get_analyser; from flow_analyse import plot_fct_cdf_custom; a = get_analyser(8); print('avg', a.get_avg_fct()); print('p99', a.get_p99_fct()); print('drop', a.get_drop_rate()); print('large', a.get_large_flow_fct()); print('small', a.get_small_flow_fct()); plot_fct_cdf_custom(a)"
+```
+
 拿到最新实验：
 
 ```bash
@@ -199,6 +205,12 @@ python3 -c "from analysis.deep_analyse import get_analyser; from analysis.flow_a
 
 ```bash
 python3 -c "from analysis.deep_analyse import get_analyser; from analysis.flow_analyse import plot_qp_rate_custom; a = get_analyser(7); plot_qp_rate_custom(a, flow_ids=[0,1,2])"
+```
+
+查看单条流的完整诊断信息（元数据、路径、drop、QP rate、CNP、链路样本汇总）：
+
+```bash
+source /home/micraow/miniconda3/etc/profile.d/conda.sh && conda activate math_modeling && python -c "from analysis.deep_analyse import get_analyser; a = get_analyser(8); a.print_flow_detail(13676)"
 ```
 
 直接执行脚本本体：

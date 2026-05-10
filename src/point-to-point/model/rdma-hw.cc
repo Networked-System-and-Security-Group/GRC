@@ -227,6 +227,7 @@ void RdmaHw::AddQueuePair(uint64_t size, uint16_t pg, Ipv4Address sip, Ipv4Addre
     qp->SetBaseRtt(baseRtt);
     qp->SetVarWin(m_var_win);
     qp->SetFlowId(flow_id);
+    qp->m_ccMode = m_cc_mode;
     auto& flow_info = Settings::flowInfos[flow_id];
     if (Settings::nodeInfos[flow_info.src].as_id == Settings::nodeInfos[flow_info.dst].as_id) {
         qp->SetTimeout(m_waitAckTimeout);
@@ -380,8 +381,14 @@ int RdmaHw::ReceiveUdp(Ptr<Packet> p, CustomHeader &ch) {
             ((ecnbits || cnp_check) &&
              Simulator::Now() - rxQp->last_cnp_send_time > MicroSeconds(10));
     }
+    // Uno uses ACKs to carry per-epoch ECN feedback. Keeping sparse ACK gating here can strand
+    // timeout recovery on non-ack_req packets and produce periodic RTO loops.
+    bool send_ack_or_nack = (x == 2 || x == 6);
+    if (x == 1) {
+        send_ack_or_nack = ack_req || (m_cc_mode == CC_MODE_UNOCC && !m_irn);
+    }
     //printf("Receive a udp\n");
-    if ((ack_req && x == 1) || x == 2 || x == 6) {  // generate ACK or NACK
+    if (send_ack_or_nack) {  // generate ACK or NACK
         qbbHeader seqh;
         seqh.SetSeq(rxQp->ReceiverNextExpectedSeq);
         seqh.SetPG(ch.udp.pg);
@@ -1424,6 +1431,7 @@ void RdmaHw::HandleAckDctcp(Ptr<RdmaQueuePair> qp, Ptr<Packet> p, CustomHeader &
 void RdmaHw::InitUno(Ptr<RdmaQueuePair> qp) {
     uint64_t rttNs = qp->m_baseRtt;
     if (rttNs == 0) rttNs = m_tmly_minRtt;
+    uint64_t nowNs = Simulator::Now().GetNanoSeconds();
 
     long double bdpBytes =
         (long double)qp->m_max_rate.GetBitRate() * (long double)rttNs / 8.0L / 1000000000.0L;
@@ -1435,15 +1443,20 @@ void RdmaHw::InitUno(Ptr<RdmaQueuePair> qp) {
     qp->uno.m_qaAckedBytes = 0;
     qp->uno.m_baseRttNs = rttNs;
     qp->uno.m_lastRttNs = rttNs;
-    qp->uno.m_epochStartTimeNs = Simulator::Now().GetNanoSeconds();
+    qp->uno.m_epochStartTimeNs = nowNs;
     qp->uno.m_epochEndTxTsNs = 0;
-    qp->uno.m_qaStartTimeNs = qp->uno.m_epochStartTimeNs;
+    qp->uno.m_qaStartTimeNs = 0;
+    qp->uno.m_qaWindowEndNs = 0;
+    qp->uno.m_qaNextStartTxTsNs = nowNs + GetUnoQaPeriodNs(qp);
     qp->uno.m_qaCooldownUntilNs = 0;
     qp->uno.m_ecnFractionEwma = 0.0;
     qp->uno.m_seenEcnInEpoch = false;
     qp->uno.m_firstRttSampleValid = false;
+    qp->uno.m_qaActive = false;
+    qp->mlx.m_alpha = 0.0;
 
     qp->m_rate = UnoCwndToRate(qp, qp->uno.m_cwndBytes, rttNs);
+    qp->mlx.m_targetRate = qp->m_rate;
 }
 
 void RdmaHw::HandleAckUno(Ptr<RdmaQueuePair> qp, Ptr<Packet> p, CustomHeader &ch,
@@ -1482,13 +1495,17 @@ void RdmaHw::HandleAckUno(Ptr<RdmaQueuePair> qp, Ptr<Packet> p, CustomHeader &ch
     bool ecnMarked = ecnMarkedBytes > 0 || (!hasUnoEcnCounts && cnpMarked);
     if (bytesAcked > 0) {
         qp->uno.m_epochAckedBytes += bytesAcked;
-        qp->uno.m_qaAckedBytes += bytesAcked;
         if (ecnMarkedBytes > 0) {
             qp->uno.m_epochEcnMarkedBytes += ecnMarkedBytes;
             qp->uno.m_seenEcnInEpoch = true;
         }
     } else if (ecnMarked) {
         qp->uno.m_seenEcnInEpoch = true;
+    }
+
+    UnoMaybeStartQaWindow(qp, nowNs, ackedPktTxTsNs);
+    if (qp->uno.m_qaActive && bytesAcked > 0) {
+        qp->uno.m_qaAckedBytes += bytesAcked;
     }
 
     UnoAdditiveIncrease(qp, bytesAcked, ecnMarked);
@@ -1503,10 +1520,12 @@ void RdmaHw::HandleAckUno(Ptr<RdmaQueuePair> qp, Ptr<Packet> p, CustomHeader &ch
 
     if (UnoQaPeriodEnded(qp, nowNs)) {
         if (!inCooldown) {
-            UnoProcessQaEnd(qp);
+            UnoProcessQaEnd(qp, nowNs);
         } else {
             qp->uno.m_qaAckedBytes = 0;
-            qp->uno.m_qaStartTimeNs = nowNs;
+            qp->uno.m_qaStartTimeNs = 0;
+            qp->uno.m_qaWindowEndNs = 0;
+            qp->uno.m_qaActive = false;
         }
     }
 
@@ -1518,12 +1537,15 @@ void RdmaHw::HandleCnpUno(Ptr<RdmaQueuePair> qp) {
 }
 
 void RdmaHw::HandleTimeoutUno(Ptr<RdmaQueuePair> qp) {
+    uint64_t nowNs = Simulator::Now().GetNanoSeconds();
     qp->uno.m_cwndBytes = std::max<uint64_t>(m_mtu, qp->uno.m_cwndBytes / 2);
-    qp->uno.m_qaCooldownUntilNs =
-        Simulator::Now().GetNanoSeconds() + GetUnoEpochPeriodNs(qp);
-    UnoResetEpoch(qp, Simulator::Now().GetNanoSeconds());
+    qp->uno.m_qaCooldownUntilNs = nowNs + GetUnoQaPeriodNs(qp);
+    UnoResetEpoch(qp, nowNs);
     qp->uno.m_qaAckedBytes = 0;
-    qp->uno.m_qaStartTimeNs = Simulator::Now().GetNanoSeconds();
+    qp->uno.m_qaStartTimeNs = 0;
+    qp->uno.m_qaWindowEndNs = 0;
+    qp->uno.m_qaNextStartTxTsNs = nowNs + GetUnoQaPeriodNs(qp);
+    qp->uno.m_qaActive = false;
     UnoApplyRateFromCwnd(qp);
 }
 
@@ -1550,6 +1572,12 @@ uint64_t RdmaHw::GetUnoEpochPeriodNs(Ptr<RdmaQueuePair> qp) {
     uint64_t rttNs = m_uno_intra_rtt_ns ? m_uno_intra_rtt_ns : m_tmly_minRtt;
     uint64_t factor = std::max<uint32_t>(1, m_uno_epoch_rtt_factor);
     return rttNs * factor;
+}
+
+uint64_t RdmaHw::GetUnoQaPeriodNs(Ptr<RdmaQueuePair> qp) {
+    uint64_t rttNs = qp->uno.m_baseRttNs ? qp->uno.m_baseRttNs : qp->m_baseRtt;
+    if (rttNs == 0) rttNs = qp->uno.m_lastRttNs ? qp->uno.m_lastRttNs : m_tmly_minRtt;
+    return std::max<uint64_t>(rttNs, 1);
 }
 
 void RdmaHw::UnoAdditiveIncrease(Ptr<RdmaQueuePair> qp, uint32_t bytesAcked, bool ecnMarked) {
@@ -1580,15 +1608,13 @@ void RdmaHw::UnoProcessEpochEnd(Ptr<RdmaQueuePair> qp) {
         std::min(1.0, (double)qp->uno.m_epochEcnMarkedBytes / qp->uno.m_epochAckedBytes);
     qp->uno.m_ecnFractionEwma =
         (1.0 - m_uno_ewma_gain) * qp->uno.m_ecnFractionEwma + m_uno_ewma_gain * ecnFraction;
+    qp->mlx.m_alpha = qp->uno.m_ecnFractionEwma;
 
     uint64_t rttNs = qp->uno.m_baseRttNs ? qp->uno.m_baseRttNs : qp->m_baseRtt;
     if (rttNs == 0) rttNs = m_tmly_minRtt;
     long double bdpBytes =
         (long double)qp->m_max_rate.GetBitRate() * (long double)rttNs / 8.0L / 1000000000.0L;
-    long double intraBdpBytes =
-        (long double)qp->m_max_rate.GetBitRate() * (long double)m_uno_intra_rtt_ns / 8.0L /
-        1000000000.0L;
-    double unoK = (m_uno_k > 0.0) ? m_uno_k : (double)(intraBdpBytes / 7.0L);
+    double unoK = (m_uno_k > 0.0) ? m_uno_k : (double)(bdpBytes / 7.0L);
     double mdGain = (unoK > 0.0) ? (4.0 * unoK / (unoK + (double)bdpBytes)) : 0.0;
 
     bool physicalQueueDelay =
@@ -1634,12 +1660,36 @@ void RdmaHw::UnoAdvanceEpoch(Ptr<RdmaQueuePair> qp, uint64_t nowNs, uint64_t ack
     }
 }
 
-bool RdmaHw::UnoQaPeriodEnded(Ptr<RdmaQueuePair> qp, uint64_t nowNs) {
-    return nowNs >= qp->uno.m_qaStartTimeNs + GetUnoEpochPeriodNs(qp);
+void RdmaHw::UnoMaybeStartQaWindow(Ptr<RdmaQueuePair> qp, uint64_t nowNs, uint64_t ackedPktTxTsNs) {
+    if (qp->uno.m_qaActive || nowNs < qp->uno.m_qaCooldownUntilNs) return;
+
+    uint64_t qaPeriodNs = GetUnoQaPeriodNs(qp);
+    uint64_t nextStartTxTsNs = qp->uno.m_qaNextStartTxTsNs;
+    if (nextStartTxTsNs == 0) {
+        nextStartTxTsNs = nowNs + qaPeriodNs;
+        qp->uno.m_qaNextStartTxTsNs = nextStartTxTsNs;
+    }
+
+    bool shouldStart = false;
+    if (ackedPktTxTsNs > 0) {
+        shouldStart = ackedPktTxTsNs >= nextStartTxTsNs;
+    } else {
+        shouldStart = nowNs >= nextStartTxTsNs;
+    }
+    if (!shouldStart) return;
+
+    qp->uno.m_qaActive = true;
+    qp->uno.m_qaAckedBytes = 0;
+    qp->uno.m_qaStartTimeNs = nowNs;
+    qp->uno.m_qaWindowEndNs = nowNs + qaPeriodNs;
 }
 
-void RdmaHw::UnoProcessQaEnd(Ptr<RdmaQueuePair> qp) {
-    uint64_t nowNs = Simulator::Now().GetNanoSeconds();
+bool RdmaHw::UnoQaPeriodEnded(Ptr<RdmaQueuePair> qp, uint64_t nowNs) {
+    return qp->uno.m_qaActive && nowNs >= qp->uno.m_qaWindowEndNs;
+}
+
+void RdmaHw::UnoProcessQaEnd(Ptr<RdmaQueuePair> qp, uint64_t nowNs) {
+    uint64_t qaPeriodNs = GetUnoQaPeriodNs(qp);
     long double threshold = (long double)qp->uno.m_cwndBytes * m_uno_beta;
     if ((long double)qp->uno.m_qaAckedBytes < threshold) {
 #if PRINT_LOG
@@ -1649,11 +1699,14 @@ void RdmaHw::UnoProcessQaEnd(Ptr<RdmaQueuePair> qp) {
                qp->uno.m_qaAckedBytes, threshold);
 #endif
         qp->uno.m_cwndBytes = std::max<uint64_t>(m_mtu, qp->uno.m_qaAckedBytes);
-        qp->uno.m_qaCooldownUntilNs = nowNs + GetUnoEpochPeriodNs(qp);
+        qp->uno.m_qaCooldownUntilNs = nowNs + qaPeriodNs;
         UnoResetEpoch(qp, nowNs);
     }
     qp->uno.m_qaAckedBytes = 0;
-    qp->uno.m_qaStartTimeNs = nowNs;
+    qp->uno.m_qaStartTimeNs = 0;
+    qp->uno.m_qaWindowEndNs = 0;
+    qp->uno.m_qaNextStartTxTsNs = nowNs + qaPeriodNs;
+    qp->uno.m_qaActive = false;
 }
 
 DataRate RdmaHw::UnoCwndToRate(Ptr<RdmaQueuePair> qp, uint64_t cwndBytes, uint64_t rttNs) {
@@ -1667,9 +1720,10 @@ DataRate RdmaHw::UnoCwndToRate(Ptr<RdmaQueuePair> qp, uint64_t cwndBytes, uint64
 }
 
 void RdmaHw::UnoApplyRateFromCwnd(Ptr<RdmaQueuePair> qp) {
-    uint64_t rttNs = qp->uno.m_lastRttNs ? qp->uno.m_lastRttNs : qp->uno.m_baseRttNs;
-    if (rttNs == 0) rttNs = qp->m_baseRtt ? qp->m_baseRtt : m_tmly_minRtt;
+    uint64_t rttNs = qp->uno.m_baseRttNs ? qp->uno.m_baseRttNs : qp->m_baseRtt;
+    if (rttNs == 0) rttNs = qp->uno.m_lastRttNs ? qp->uno.m_lastRttNs : m_tmly_minRtt;
     DataRate newRate = UnoCwndToRate(qp, qp->uno.m_cwndBytes, rttNs);
+    qp->mlx.m_targetRate = newRate;
     if (qp->lastPktSize == 0) {
         qp->m_rate = newRate;
     } else {
