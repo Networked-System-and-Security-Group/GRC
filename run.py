@@ -183,8 +183,8 @@ def main():
     parser.add_argument('--uno_k', type=float, default=-1.0, help="UnoCC MD constant in bytes; -1 means auto derive (default: -1)")
     parser.add_argument('--uno_gentle_scale', type=float, default=0.3, help="UnoCC gentle reduction scale (default: 0.3)")
     parser.add_argument('--uno_delay_threshold', type=float, default=0.05, help="UnoCC physical queue delay threshold fraction (default: 0.05)")
-    parser.add_argument('--uno_intra_rtt_ns', type=int, default=14000, help="UnoCC intra-DC RTT in ns (default: 14000)")
-    parser.add_argument('--uno_inter_rtt_ns', type=int, default=2000000, help="UnoCC inter-DC RTT in ns for phantom fallback sizing (default: 2000000)")
+    parser.add_argument('--uno_intra_rtt_ns', type=int, default=None, help="UnoCC intra-DC RTT in ns; unset means derive from topology")
+    parser.add_argument('--uno_inter_rtt_ns', type=int, default=None, help="UnoCC inter-DC RTT in ns for phantom fallback sizing; unset means derive from topology")
     parser.add_argument('--uno_epoch_rtt_factor', type=int, default=1, help="UnoCC epoch period multiplier on intra RTT (default: 1)")
     parser.add_argument('--uno_phantom_enabled', type=int, default=1, help="UnoCC phantom queue enable flag (default: 1)")
     parser.add_argument('--uno_phantom_size_kb', type=int, default=0, help="UnoCC phantom queue size in KB; 0 means auto derive (default: 0)")
@@ -255,8 +255,6 @@ def main():
         'UNO_K': args.uno_k,
         'UNO_GENTLE_SCALE': args.uno_gentle_scale,
         'UNO_DELAY_THRESHOLD': args.uno_delay_threshold,
-        'UNO_INTRA_RTT_NS': args.uno_intra_rtt_ns,
-        'UNO_INTER_RTT_NS': args.uno_inter_rtt_ns,
         'UNO_EPOCH_RTT_FACTOR': args.uno_epoch_rtt_factor,
         'UNO_PHANTOM_ENABLED': args.uno_phantom_enabled,
         'UNO_PHANTOM_SIZE_KB': args.uno_phantom_size_kb,
@@ -266,6 +264,10 @@ def main():
         'UNO_PHANTOM_SLOWDOWN_PCT': args.uno_phantom_slowdown_pct,
         'UNO_PHANTOM_USE_PHYSICAL': args.uno_phantom_use_physical,
     }
+    if args.uno_intra_rtt_ns is not None:
+        uno_params['UNO_INTRA_RTT_NS'] = args.uno_intra_rtt_ns
+    if args.uno_inter_rtt_ns is not None:
+        uno_params['UNO_INTER_RTT_NS'] = args.uno_inter_rtt_ns
 
     # Parse passthrough extras: KEY=VALUE (VALUE kept as raw string)
     extra_kv = {}
@@ -479,6 +481,10 @@ def main():
                 existing_config = _delete_line(existing_config, 'TCP_FLOW_FILE')
 
             if cc_mode == 9:
+                if args.uno_intra_rtt_ns is None:
+                    existing_config = _delete_line(existing_config, 'UNO_INTRA_RTT_NS')
+                if args.uno_inter_rtt_ns is None:
+                    existing_config = _delete_line(existing_config, 'UNO_INTER_RTT_NS')
                 for k, v in uno_params.items():
                     existing_config = _upsert_line(existing_config, k, str(v))
 

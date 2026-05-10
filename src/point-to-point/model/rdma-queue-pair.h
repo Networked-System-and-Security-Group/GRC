@@ -126,6 +126,7 @@ class RdmaQueuePair : public Object {
         uint64_t m_qaAckedBytes;
         uint64_t m_baseRttNs;
         uint64_t m_lastRttNs;
+        uint64_t m_targetRttNs;
         uint64_t m_epochStartTimeNs;
         uint64_t m_epochEndTxTsNs;
         uint64_t m_qaStartTimeNs;

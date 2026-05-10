@@ -381,11 +381,9 @@ int RdmaHw::ReceiveUdp(Ptr<Packet> p, CustomHeader &ch) {
             ((ecnbits || cnp_check) &&
              Simulator::Now() - rxQp->last_cnp_send_time > MicroSeconds(10));
     }
-    // Uno uses ACKs to carry per-epoch ECN feedback. Keeping sparse ACK gating here can strand
-    // timeout recovery on non-ack_req packets and produce periodic RTO loops.
     bool send_ack_or_nack = (x == 2 || x == 6);
     if (x == 1) {
-        send_ack_or_nack = ack_req || (m_cc_mode == CC_MODE_UNOCC && !m_irn);
+        send_ack_or_nack = ack_req;
     }
     //printf("Receive a udp\n");
     if (send_ack_or_nack) {  // generate ACK or NACK
@@ -849,6 +847,11 @@ Ptr<Packet> RdmaHw::GetNxtPacket(Ptr<RdmaQueuePair> qp) {
     //}
 
     bool ack_req = (seq + payload_size >= qp->m_size) || (seq % m_ack_interval == 0 && seq != 0);
+    if (qp->m_ccMode == CC_MODE_UNOCC && !qp->irn.m_enabled) {
+        // UnoCC relies on ACK-driven AI/epoch/QA bookkeeping. Sparse 40KB ACK gating can
+        // strand a flow after recovery, so UnoCC packets always request an ACK.
+        ack_req = true;
+    }
     // attach Stat Tag
     uint8_t packet_pos = UINT8_MAX;
     {
@@ -1443,6 +1446,7 @@ void RdmaHw::InitUno(Ptr<RdmaQueuePair> qp) {
     qp->uno.m_qaAckedBytes = 0;
     qp->uno.m_baseRttNs = rttNs;
     qp->uno.m_lastRttNs = rttNs;
+    qp->uno.m_targetRttNs = GetUnoTargetRttNs(qp);
     qp->uno.m_epochStartTimeNs = nowNs;
     qp->uno.m_epochEndTxTsNs = 0;
     qp->uno.m_qaStartTimeNs = 0;
@@ -1451,7 +1455,7 @@ void RdmaHw::InitUno(Ptr<RdmaQueuePair> qp) {
     qp->uno.m_qaCooldownUntilNs = 0;
     qp->uno.m_ecnFractionEwma = 0.0;
     qp->uno.m_seenEcnInEpoch = false;
-    qp->uno.m_firstRttSampleValid = false;
+    qp->uno.m_firstRttSampleValid = rttNs > 0;
     qp->uno.m_qaActive = false;
     qp->mlx.m_alpha = 0.0;
 
@@ -1472,6 +1476,7 @@ void RdmaHw::HandleAckUno(Ptr<RdmaQueuePair> qp, Ptr<Packet> p, CustomHeader &ch
             qp->uno.m_baseRttNs = rttNs;
             qp->uno.m_firstRttSampleValid = true;
         }
+        qp->uno.m_targetRttNs = GetUnoTargetRttNs(qp);
     }
     if (qp->uno.m_epochEndTxTsNs == 0) {
         qp->uno.m_epochEndTxTsNs = nowNs;
@@ -1574,10 +1579,19 @@ uint64_t RdmaHw::GetUnoEpochPeriodNs(Ptr<RdmaQueuePair> qp) {
     return rttNs * factor;
 }
 
+uint64_t RdmaHw::GetUnoTargetRttNs(Ptr<RdmaQueuePair> qp) {
+    uint64_t baseRttNs = qp->uno.m_baseRttNs ? qp->uno.m_baseRttNs : qp->m_baseRtt;
+    if (baseRttNs == 0) {
+        baseRttNs = qp->uno.m_lastRttNs ? qp->uno.m_lastRttNs : m_tmly_minRtt;
+    }
+    long double ratio = 1.0L + std::max(0.0, m_uno_delay_threshold);
+    uint64_t targetRttNs = (uint64_t)std::max<long double>(1.0L, (long double)baseRttNs * ratio);
+    return std::max<uint64_t>(targetRttNs, baseRttNs);
+}
+
 uint64_t RdmaHw::GetUnoQaPeriodNs(Ptr<RdmaQueuePair> qp) {
-    uint64_t rttNs = qp->uno.m_baseRttNs ? qp->uno.m_baseRttNs : qp->m_baseRtt;
-    if (rttNs == 0) rttNs = qp->uno.m_lastRttNs ? qp->uno.m_lastRttNs : m_tmly_minRtt;
-    return std::max<uint64_t>(rttNs, 1);
+    uint64_t targetRttNs = qp->uno.m_targetRttNs ? qp->uno.m_targetRttNs : GetUnoTargetRttNs(qp);
+    return std::max<uint64_t>(targetRttNs, 1);
 }
 
 void RdmaHw::UnoAdditiveIncrease(Ptr<RdmaQueuePair> qp, uint32_t bytesAcked, bool ecnMarked) {

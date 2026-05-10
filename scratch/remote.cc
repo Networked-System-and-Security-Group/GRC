@@ -94,6 +94,7 @@ uint64_t uno_intra_rtt_ns = 14000;
 uint64_t uno_inter_rtt_ns = 2000000;
 uint32_t uno_epoch_rtt_factor = 1;
 bool uno_intra_rtt_explicit = false;
+bool uno_inter_rtt_explicit = false;
 int uno_phantom_enabled = -1;
 uint32_t uno_phantom_size_kb = 0;
 uint32_t uno_phantom_kmin_pct = 2;
@@ -374,7 +375,8 @@ void m_QP_rate_monitoring()
                 DataRate m_rate = qp.second->m_rate;
                 uint64_t m_bps = m_rate.GetBitRate();
                 auto& flowInfo = Settings::flowInfos[flowid];
-                if (Settings::nodeInfos[flowInfo.src].as_id != Settings::nodeInfos[flowInfo.dst].as_id) {
+                if (cc_mode == CC_MODE_UNOCC ||
+                    Settings::nodeInfos[flowInfo.src].as_id != Settings::nodeInfos[flowInfo.dst].as_id) {
                     fprintf(qp_rate_log,
                             "%lu,%u,%lu,%lf,%lu,%lu,%lu,%lu,%lf,%lu\n",
                             now, flowid, m_bps / 8, qp.second->mlx.m_alpha,
@@ -1244,7 +1246,7 @@ int main(int argc, char *argv[]) {
             } else if (key.compare("UNO_K") == 0) {
                 conf >> uno_k;
                 std::cerr << "UNO_K\t\t\t\t" << uno_k
-                          << " (-1 means 1/7 * intra-DC BDP)\n";
+                          << " (-1 means 1/7 * flow BDP)\n";
             } else if (key.compare("UNO_GENTLE_SCALE") == 0) {
                 conf >> uno_gentle_scale;
                 std::cerr << "UNO_GENTLE_SCALE\t\t\t" << uno_gentle_scale << "\n";
@@ -1263,11 +1265,13 @@ int main(int argc, char *argv[]) {
                 std::cerr << "UNO_INTRA_RTT_US\t\t\t" << v << "\n";
             } else if (key.compare("UNO_INTER_RTT_NS") == 0) {
                 conf >> uno_inter_rtt_ns;
+                uno_inter_rtt_explicit = true;
                 std::cerr << "UNO_INTER_RTT_NS\t\t\t" << uno_inter_rtt_ns << "\n";
             } else if (key.compare("UNO_INTER_RTT_US") == 0) {
                 double v;
                 conf >> v;
                 uno_inter_rtt_ns = (uint64_t)(v * 1000.0);
+                uno_inter_rtt_explicit = true;
                 std::cerr << "UNO_INTER_RTT_US\t\t\t" << v << "\n";
             } else if (key.compare("UNO_EPOCH_RTT_FACTOR") == 0) {
                 conf >> uno_epoch_rtt_factor;
@@ -1582,6 +1586,106 @@ int main(int argc, char *argv[]) {
         Settings::hostId2IpMap[i] = nodeInfos[i].ip.Get();
         Settings::hostIp2IdMap[nodeInfos[i].ip.Get()] = i;
     }
+    nextHop.clear();
+    CalculateRoutes(n);
+    SetSPFWanRouting();
+    uint64_t derived_intra_rtt_ns = 0;
+    uint64_t derived_inter_rtt_ns = 0;
+    uint64_t derived_max_intra_bdp_bytes = 0;
+    uint64_t derived_max_inter_bdp_bytes = 0;
+    uint64_t derived_wan_min_bw_bps = 0;
+    for (const auto& node : nodeInfos) {
+        if (node.node_type != NodeInfo::NodeType::DCI_SWITCH &&
+            node.node_type != NodeInfo::NodeType::WAN_SWITCH) {
+            continue;
+        }
+        Ptr<Node> now = n.Get(node.id);
+        for (const auto& [nbr, iface] : nbr2if[now]) {
+            if (!iface.up) continue;
+            auto nbrType = nodeInfos[nbr->GetId()].node_type;
+            if (nbrType != NodeInfo::NodeType::DCI_SWITCH &&
+                nbrType != NodeInfo::NodeType::WAN_SWITCH) {
+                continue;
+            }
+            if (derived_wan_min_bw_bps == 0 || iface.bw < derived_wan_min_bw_bps) {
+                derived_wan_min_bw_bps = iface.bw;
+            }
+        }
+    }
+    for (uint32_t i = 0; i < nodeInfos.size(); i++) {
+        if (nodeInfos[i].node_type != NodeInfo::NodeType::HOST) continue;
+        for (uint32_t j = i + 1; j < nodeInfos.size(); j++) {
+            if (nodeInfos[j].node_type != NodeInfo::NodeType::HOST) continue;
+            if (nodeInfos[i].as_id == nodeInfos[j].as_id) {
+                uint64_t rtt = pairDelay[n.Get(i)][n.Get(j)] * 2 + pairTxDelay[n.Get(i)][n.Get(j)];
+                uint64_t bw = pairBw[n.Get(i)][n.Get(j)];
+                uint64_t bdp = rtt * bw / 1000000000 / 8;
+                if (derived_intra_rtt_ns == 0 || rtt < derived_intra_rtt_ns) {
+                    derived_intra_rtt_ns = rtt;
+                }
+                if (bdp > derived_max_intra_bdp_bytes) {
+                    derived_max_intra_bdp_bytes = bdp;
+                }
+            } else {
+                uint32_t as1 = nodeInfos[i].as_id;
+                uint32_t as2 = nodeInfos[j].as_id;
+                if (Settings::asId2DciId.find(as1) == Settings::asId2DciId.end() ||
+                    Settings::asId2DciId.find(as2) == Settings::asId2DciId.end()) {
+                    continue;
+                }
+                uint32_t dci1 = Settings::asId2DciId[as1];
+                uint32_t dci2 = Settings::asId2DciId[as2];
+                if (as_delay[dci1].find(dci2) == as_delay[dci1].end()) continue;
+                uint64_t rtt =
+                    (pairDelay[n.Get(i)][n.Get(dci1)] + static_cast<uint64_t>(as_delay[dci1][dci2]) +
+                     pairDelay[n.Get(dci2)][n.Get(j)]) *
+                    2;
+                uint64_t bw1 = pairBw[n.Get(i)][n.Get(dci1)];
+                uint64_t bw2 = pairBw[n.Get(dci2)][n.Get(j)];
+                uint64_t bw = std::min(bw1, bw2);
+                if (derived_wan_min_bw_bps > 0) {
+                    bw = std::min(bw, derived_wan_min_bw_bps);
+                }
+                uint64_t bdp = rtt * bw / 1000000000 / 8;
+                if (rtt > derived_inter_rtt_ns) {
+                    derived_inter_rtt_ns = rtt;
+                }
+                if (bdp > derived_max_inter_bdp_bytes) {
+                    derived_max_inter_bdp_bytes = bdp;
+                }
+            }
+        }
+    }
+    if (!uno_intra_rtt_explicit && derived_intra_rtt_ns > 0) {
+        uno_intra_rtt_ns = derived_intra_rtt_ns;
+        std::cerr << "UNO_INTRA_RTT_NS\t\t\t" << uno_intra_rtt_ns
+                  << " (derived from topology intra-DC RTT)\n";
+    }
+    if (!uno_inter_rtt_explicit) {
+        if (derived_inter_rtt_ns > 0) {
+            uno_inter_rtt_ns = derived_inter_rtt_ns;
+            std::cerr << "UNO_INTER_RTT_NS\t\t\t" << uno_inter_rtt_ns
+                      << " (derived from topology max inter-DC RTT)\n";
+        } else if (derived_intra_rtt_ns > 0) {
+            uno_inter_rtt_ns = derived_intra_rtt_ns;
+            std::cerr << "UNO_INTER_RTT_NS\t\t\t" << uno_inter_rtt_ns
+                      << " (no inter-DC host pair; using derived intra-DC RTT)\n";
+        }
+    }
+    uint64_t derived_uno_phantom_size_bytes = 0;
+    if (uno_phantom_size_kb == 0) {
+        derived_uno_phantom_size_bytes =
+            (derived_max_inter_bdp_bytes > 0) ? derived_max_inter_bdp_bytes : derived_max_intra_bdp_bytes;
+        if (derived_uno_phantom_size_bytes == 0 && derived_wan_min_bw_bps > 0) {
+            derived_uno_phantom_size_bytes =
+                (uint64_t)((long double)derived_wan_min_bw_bps * (long double)uno_inter_rtt_ns /
+                           8.0L / 1000000000.0L);
+        }
+        if (derived_uno_phantom_size_bytes > 0) {
+            std::cerr << "UNO_PHANTOM_SIZE_BYTES\t\t\t" << derived_uno_phantom_size_bytes
+                      << " (derived from topology flow BDP)\n";
+        }
+    }
     // config switch
     for (const auto& node : nodeInfos) {
         if (node.node_type == NodeInfo::NodeType::DC_SWITCH) {
@@ -1599,8 +1703,7 @@ int main(int argc, char *argv[]) {
                 uint64_t phantomSizeBytes =
                     (uno_phantom_size_kb > 0)
                         ? (uint64_t)uno_phantom_size_kb * 1000ull
-                        : (uint64_t)((long double)rate * (long double)uno_inter_rtt_ns / 8.0L /
-                                     1000000000.0L);
+                        : derived_uno_phantom_size_bytes;
                 sw->m_mmu->ConfigUnoPhantom(j, enableUnoPhantom, phantomSizeBytes,
                                             uno_phantom_kmin_pct, uno_phantom_kmax_pct,
                                             uno_phantom_pmax, uno_phantom_slowdown_pct, rate,
@@ -1634,8 +1737,7 @@ int main(int argc, char *argv[]) {
                 uint64_t phantomSizeBytes =
                     (uno_phantom_size_kb > 0)
                         ? (uint64_t)uno_phantom_size_kb * 1000ull
-                        : (uint64_t)((long double)rate * (long double)uno_inter_rtt_ns / 8.0L /
-                                     1000000000.0L);
+                        : derived_uno_phantom_size_bytes;
                 sw->m_mmu->ConfigUnoPhantom(j, enableUnoPhantom, phantomSizeBytes,
                                             uno_phantom_kmin_pct, uno_phantom_kmax_pct,
                                             uno_phantom_pmax, uno_phantom_slowdown_pct, rate,
@@ -1675,8 +1777,7 @@ int main(int argc, char *argv[]) {
                 uint64_t phantomSizeBytes =
                     (uno_phantom_size_kb > 0)
                         ? (uint64_t)uno_phantom_size_kb * 1000ull
-                        : (uint64_t)((long double)rate * (long double)uno_inter_rtt_ns / 8.0L /
-                                     1000000000.0L);
+                        : derived_uno_phantom_size_bytes;
                 sw->m_mmu->ConfigUnoPhantom(j, enableUnoPhantom, phantomSizeBytes,
                                             uno_phantom_kmin_pct, uno_phantom_kmax_pct,
                                             uno_phantom_pmax, uno_phantom_slowdown_pct, rate,
@@ -1789,6 +1890,7 @@ int main(int argc, char *argv[]) {
     /**
      * @brief setup routing
      */
+    nextHop.clear();
     CalculateRoutes(n);
     SetRoutingEntries();
     SetSPFWanRouting();
@@ -1831,7 +1933,6 @@ int main(int argc, char *argv[]) {
     //    as_delay[dst][src] = delay;
     //}
     maxRtt = maxBdp = 0;
-    uint64_t derived_intra_rtt_ns = 0;
     for (uint32_t i = 0; i < nodeInfos.size(); i++) {
         if (nodeInfos[i].node_type != NodeInfo::NodeType::HOST) continue;
         // 只考虑server
@@ -1875,11 +1976,6 @@ int main(int argc, char *argv[]) {
     }
     std::cout << "server_rtt_mon_interval: " << server_rtt_mon_interval << std::endl;
     fprintf(stderr, "maxRtt: %lu, maxBdp: %lu\n", maxRtt, maxBdp);
-    if (!uno_intra_rtt_explicit && derived_intra_rtt_ns > 0) {
-        uno_intra_rtt_ns = derived_intra_rtt_ns;
-        std::cerr << "UNO_INTRA_RTT_NS\t\t\t" << uno_intra_rtt_ns
-                  << " (derived from topology intra-DC RTT)\n";
-    }
     for (uint32_t i = 0; i < nodeInfos.size(); i++) {
         if (n.Get(i)->GetNodeType() != 0) continue;
         Ptr<RdmaDriver> rdma = n.Get(i)->GetObject<RdmaDriver>();

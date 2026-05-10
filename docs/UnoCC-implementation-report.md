@@ -41,7 +41,7 @@
   - `m_cwndBytes`
   - epoch ACKed bytes / ECN marked bytes
   - QA ACKed bytes
-  - base RTT / last RTT
+  - base RTT / last RTT / target RTT
   - epoch / QA start time
   - epoch end packet timestamp boundary
   - QA cooldown
@@ -81,6 +81,7 @@
   - `GetAckRttNsUno`
   - `GetAckTxTimestampNsUno`
   - `GetUnoEpochPeriodNs`
+  - `GetUnoTargetRttNs`
   - `UnoAdditiveIncrease`
   - `UnoEpochEnded`
   - `UnoProcessEpochEnd`
@@ -213,10 +214,10 @@
 | `alpha` | Table 2: `0.001 * BDP`; Section 4.1.1 说明 alpha 是 BDP fraction | `lcp.cpp` 中 `ai_bytes = _bdp * 0.001` | `UNO_AI_FACTOR = 0.001` | `UnoAiFactor <= 1` 时按 BDP fraction 解释。 |
 | `beta` | Table 2: `0.5`; QA 段说明阈值为 `cwnd * beta` | `common.cpp`: `QA_CWND_RATIO_THRESHOLD = 0.5` | `UNO_BETA = 0.5` | 对齐论文和开源。 |
 | `K` | Table 2: `1/7 * intra-DC BDP` | `lcp.cpp` 默认 `lcp_k = _bdp / 7`，其中 `_bdp` 是 flow-specific BDP | `UNO_K = -1` 自动派生 `flowBdp / 7` | 当前默认跟随 Uno_SC25 的 flow-specific BDP；若要强制固定 K，可显式配置 `UNO_K`。 |
-| `Intra-DC RTT` | Table 2: `14us` | main 程序将 base intra RTT 传给 LCP | 默认先取 `14000`，但若配置文件未显式给出则运行时从 topology 推导最小 intra-DC host RTT | 该值作为统一 epoch granularity；更贴近当前生成拓扑的真实 intra RTT。 |
-| `Inter-DC RTT` | Table 2: `2ms` | 论文脚本中的 inter-DC 场景也围绕该量级配置 | `UNO_INTER_RTT_NS = 2000000` | 这里只用于 phantom size 自动派生的 fallback；真实流 RTT 仍由 topology/link delay 决定。 |
+| `Intra-DC RTT` | Table 2: `14us` | main 程序将 base intra RTT 传给 LCP | `run.py` 默认不写 `UNO_INTRA_RTT_NS`，由 `remote.cc` 从 topology 推导最小 intra-DC host RTT；只有显式传 `--uno_intra_rtt_ns` 才覆盖 | 该值作为统一 epoch granularity；更贴近当前生成拓扑的真实 intra RTT。 |
+| `Inter-DC RTT` | Table 2: `2ms` | 论文脚本中的 inter-DC 场景也围绕该量级配置 | `run.py` 默认不写 `UNO_INTER_RTT_NS`，由 `remote.cc` 从 topology 推导最大 inter-DC host RTT；只有显式传 `--uno_inter_rtt_ns` 才覆盖 | 这里只用于 phantom size 自动派生的 fallback；真实流 RTT 仍由 topology/link delay 决定。 |
 | `epoch_period` | 论文说明 inter/intra 使用相同 epoch period，基于 intra-DC RTT | Uno_SC25 有 timestamp/ratio 相关逻辑 | `UNO_EPOCH_RTT_FACTOR = 1`，period = `UNO_INTRA_RTT_NS * factor` | inter / intra flow 共用同一个由 topology 推导出的 intra RTT 粒度；若配置显式指定 `UNO_INTRA_RTT_NS`，则优先使用配置值。 |
-| `QA period` | Section 4.1.2: once every RTT | Uno_SC25 `qa_type=long` 用 flow `target_rtt` 作为 QA measurement period | 当前实现用 per-flow RTT | 不再复用统一短 epoch period，避免多 DC flow 被过早触发 QA。 |
+| `QA period` | Section 4.1.2: once every RTT | Uno_SC25 `qa_type=long` 用 flow `target_rtt` 作为 QA measurement period | 当前实现用 per-flow `target_rtt`，其中 `target_rtt = baseRTT * (1 + UNO_DELAY_THRESHOLD)`，默认即 `1.05 * baseRTT` | `baseRTT` 由 ACK RTT sample 动态更新，不需要手动指定 `target_rtt`。 |
 | `phantom drain rate` | Table 2: `0.9 * physical queue drain rate`; Section 4.1.3 同义说明 | `CompositeQueue::_phantom_queue_slowdown = 10` | `UNO_PHANTOM_SLOWDOWN_PCT = 10` | drain rate = `1 - 10% = 0.9` line rate。 |
 | phantom 是否叠加 physical ECN | 论文正文未强制要求两者串联 | `paper_script` / `artifact_scripts` 中 Uno 使用 `-use_phantom 1`，但未传 `-phantom_both_queues` | `UNO_PHANTOM_USE_PHYSICAL = false` | 当前默认按开源脚本走 phantom-only marking；物理 `25/75` 仍单独保留。 |
 | `gentle scale` | Algorithm 1: phantom-only 时 scale 乘 `0.3` | Uno_SC25 `aimd_phantom` 里使用 `0.35` | `UNO_GENTLE_SCALE = 0.3` | 这里优先匹配论文算法。 |
@@ -225,7 +226,7 @@
 | 物理 ECN Min/Max threshold | 论文 parameter settings: 25% / 75% queue capacity | Uno_SC25 多数非-phantom ECN 场景也用 `kmin 25 / kmax 75` | 由原有物理 ECN 配置控制 | 这是物理队列 RED 阈值，不是 phantom queue 阈值。 |
 | phantom ECN Min/Max threshold | 论文正文未单列默认值 | `paper_script` / `artifact_scripts` 中 Uno 常用 `-phantom_kmin 2 -phantom_kmax 60` | `UNO_PHANTOM_KMIN_PCT = 2`, `UNO_PHANTOM_KMAX_PCT = 60` | 当前默认优先贴近论文实际脚本，而不是沿用物理队列的 25/75。 |
 | phantom `pmax` | 论文未单列 | `CompositeQueue` 在 `kmin..kmax` 区间线性增长，到 `kmax` 直接等价于概率 1 | `UNO_PHANTOM_PMAX = 1.0` | ns-3 这里显式参数化为 `1.0`，以复现开源实现的线性到满概率标记行为。 |
-| phantom size | 论文 Table 2 未给统一默认值 | Uno_SC25 脚本按实验设置传 `22400515` 或 `89602060` 等 | 默认 `0`，运行时自动派生 `lineRate * UNO_INTER_RTT_NS / 8` | 该 fallback 比旧的 `ecnKmax` 更接近论文语义；若要精确复现实验图，应显式设置 `UNO_PHANTOM_SIZE_KB`。 |
+| phantom size | 论文 Table 2 未给统一默认值 | Uno_SC25 脚本按实验设置传 `22400515` 或 `89602060` 等 | 默认 `0`，运行时优先自动派生为 topology-derived `max inter-DC flow BDP`；若无跨 DC host pair，则退回 `max intra-DC flow BDP` | 这比按端口 line rate 直接乘 RTT 更贴近“按当前网络路径瓶颈 BDP 定 phantom headroom”的语义；若要精确复现实验图，仍应显式设置 `UNO_PHANTOM_SIZE_KB`。 |
 
 ## 行为对照
 
@@ -360,20 +361,27 @@ Uno_SC25 也通过 `acked_pkt_ts` 判断 `shouldTriggerEpochEnd()`。
 - 当 `m_irn == true` 时，这两个字段属于 IRN NACK 语义，UnoCC ECN 计数不会复用它们；此时退回 CNP bit。
 - marked bytes 是基于 packet fraction 的估计，不是逐 byte 标记。
 
-### 4. QA period 仍是 ns-3 适配，但不再错误复用固定 epoch period
+### 4. QA period 已改成 target RTT 语义，不再复用固定 epoch period
 
 论文 QA 写的是 once every RTT。Uno_SC25 里 `qa_type=long` 也按 flow 的长窗口做 QA，而不是按 short epoch 的粒度。
 
 当前实现：
 
-- QA period 使用 per-flow RTT。
+- QA period 使用 per-flow `target_rtt`。
+- `target_rtt` 不单独手动配置，而是每个 flow 根据 ACK RTT sample 动态更新：
+  - `baseRTT` 初始值来自 topology-derived `pairRtt`
+  - 后续 ACK RTT sample 只在更小时更新 `baseRTT`
+  - `target_rtt = baseRTT * (1 + UNO_DELAY_THRESHOLD)`
+- 默认 `UNO_DELAY_THRESHOLD = 0.05`，因此默认 `target_rtt = 1.05 * baseRTT`，与 Uno_SC25 默认 `TARGET_TO_BAREMETAL_RATIO = 1.05` 对齐。
 - epoch period 仍使用统一的 `UNO_INTRA_RTT_NS * UNO_EPOCH_RTT_FACTOR`。
 - QA window 的启动由 ACKed packet send timestamp 跨过边界来决定，而不是单纯 wall-clock。
 
 影响：
 
 - 这修正了旧实现把 inter-DC flow 的 QA 错误压到固定短 epoch 的问题。
-- 仍不完全等同于 Uno_SC25 的 `target_rtt` 模型，因为当前 ns-3 直接使用 flow RTT，而没有额外的 `target_to_baremetal_ratio` 参数。
+- `target_rtt` 来自 flow 自身测到的 `baseRTT`，不需要再手动指定一个固定值。
+- topology 已经提供无拥塞 RTT，因此第一个 ACK sample 不再无条件覆盖 `baseRTT`，避免启动阶段已有排队时把 `RTTbase` 抬高。
+- 当前仍有一个实现层面的近似：ns-3 复用了 `UNO_DELAY_THRESHOLD` 来表达 `target_to_baremetal_ratio - 1`，而没有单独暴露一个独立的 `TARGET_TO_BAREMETAL_RATIO` 参数。
 
 ### 5. QA cwnd 下限和 Uno_SC25 的 `0.96` 差异
 
@@ -436,26 +444,29 @@ Uno_SC25 `CompositeQueue` 通过事件调度定期 decrease phantom queue。
 当前实现：
 
 - `UNO_PHANTOM_SIZE_KB = 0` 表示自动 fallback。
-- fallback 使用 `lineRate * UNO_INTER_RTT_NS / 8` 自动派生。
+- `remote.cc` 在配置 switch phantom queue 之前，先遍历 topology 的 host pair，估计 path RTT、瓶颈带宽和 flow BDP。
+- 若存在跨 DC host pair，则 fallback 取 topology-derived `max inter-DC flow BDP`。
+- 若是单 DC topology、没有 inter-DC host pair，则 fallback 取 topology-derived `max intra-DC flow BDP`。
+- 只有在无法从 host pair 得到 BDP、但能识别 WAN 最小带宽时，才继续退回到 `wanMinBw * derivedInterRtt / 8` 的保底估计。
 
 影响：
 
-- 这比旧的“直接拿物理 ECN `kmax` 当 phantom size”更符合论文里 phantom queue 应显著长于物理队列、并与跨 DC 带宽时延积相关的语义。
+- 这比旧的“直接拿物理 ECN `kmax` 当 phantom size”或“按单端口 line rate 直接乘 RTT”都更符合论文里 phantom queue 应与当前网络可承载的 flow BDP 对齐的语义。
 - 但它仍不是论文脚本中的精确值；若要严格复现实验，需要在配置中显式给出 `UNO_PHANTOM_SIZE_KB`。
 
-### 9. `UNO_INTER_RTT_NS` 只是 phantom size fallback 的实验默认值
+### 9. `UNO_INTER_RTT_NS` 只是 phantom size fallback 的覆盖项
 
 论文 Table 2 的 `Inter-DC RTT = 2ms` 是实验默认参数。
 
 当前实现：
 
-- 新增 `UNO_INTER_RTT_NS = 2000000` / `UNO_INTER_RTT_US`。
-- 该值只用于 `UNO_PHANTOM_SIZE_KB = 0` 时的自动派生。
+- `UNO_INTER_RTT_NS` / `UNO_INTER_RTT_US` 只在配置文件显式给出时覆盖 topology 推导结果。
+- 该值只用于 `UNO_PHANTOM_SIZE_KB = 0` 时的 phantom size 自动派生。
 - `qp->m_baseRtt`、链路 delay、topology 文件仍决定实际 flow RTT。
 
 影响：
 
-- 如果你的实验 inter-DC RTT 不是 2ms，应同时覆盖 `UNO_INTER_RTT_NS` 或直接显式设置 `UNO_PHANTOM_SIZE_KB`。
+- 常规实验不应传 `--uno_inter_rtt_ns`；如果要复现某个固定参数实验，才覆盖 `UNO_INTER_RTT_NS` 或直接显式设置 `UNO_PHANTOM_SIZE_KB`。
 
 ## 当前对齐结论
 
@@ -483,23 +494,25 @@ Uno_SC25 `CompositeQueue` 通过事件调度定期 decrease phantom queue。
 - ECN fraction 使用 ACK interval packet fraction 估算 bytes fraction。
 - IRN 与 UnoCC 精确 ECN count 复用字段冲突，IRN 开启时退回 CNP bit。
 - QA 不使用 Uno_SC25 的 `0.96` 系数，并保留 MTU cwnd 下限。
-- QA 使用 per-flow RTT window 和 ACKed packet timestamp 启动边界，已修正旧实现“QA 与统一短 epoch 共用同一周期”的偏差；但仍未引入 Uno_SC25 的 `target_rtt` 比例参数。
+- QA 使用 per-flow `target_rtt` window 和 ACKed packet timestamp 启动边界，已修正旧实现“QA 与统一短 epoch 共用同一周期”的偏差；但 `target_rtt` 比例当前复用 `UNO_DELAY_THRESHOLD`，而不是单独暴露独立参数。
 - phantom queue drain 使用 lazy update，而不是独立 periodic event。
 - phantom queue size 需要实验配置显式指定才能精确复现论文场景。
-- `qp_rate_log` 是增强版观测：额外记录 `uno_cwnd_bytes`、`uno_base_rtt_ns`、`uno_last_rtt_ns`、`uno_ewma`、`win_bytes`，用于逐流排查。
+- `qp_rate_log` 是增强版观测：额外记录 `uno_cwnd_bytes`、`uno_base_rtt_ns`、`uno_last_rtt_ns`、`uno_ewma`、`win_bytes`，用于逐流排查。当前 UnoCC 会记录 intra/inter 全部 QP；其他 CC 仍只记录 inter-DC QP，避免日志过大。
+- `cnp_trigger_prob_log` 的表头已修正为 8 列：`timestamp_ns,switch_id,src_as,dst_as,cnp_cnt,pkt_cnt,prob,w`，与实际输出字段一致。
 
 ## 2026-05-09 异常重传排查补充
 
 针对 `mix/output/[9]-05-09-22:09:45` 和 `mix/output/[11]-05-09-22:11:03` 的异常重传，本次额外确认了一处和论文无关、但会严重破坏 Uno 运行结果的 ns-3 集成问题：
 
-- sender 发送数据包时只有最后一个包或每 `L2_ACK_INTERVAL` 一个包会打 `ack_req`。
+- sender 原先只有最后一个包或每 `L2_ACK_INTERVAL` 一个包会打 `ack_req`。
 - receiver 原逻辑只对 `ack_req` 的顺序包回 ACK。
-- 当某个跨过 ACK 边界后的普通数据包丢失时，sender 超时重传该包；但因为它仍不是 `ack_req`，receiver 即使顺序收到了也不会回 ACK。
-- 结果就是 sender 每个 timeout 周期都把 `snd_nxt` 拉回 `snd_una`，形成永久 RTO 循环。
+- Uno_SC25 的 UEC/LCP receiver 对每个收到的数据包都会生成 ACK/NACK；因此稀疏 ACK 不是 UnoCC 原始语义。
+- 当前修复只在 `CC_MODE_UNOCC` 且非 IRN 时让 sender 对每个数据包设置 `ack_req`，receiver 仍按通用 `ack_req` 规则回 ACK。
+- 这样既保留其他 CC 的稀疏 ACK 语义，又让 UnoCC 恢复到 Uno_SC25 所依赖的 per-packet ACK 时钟。
 
 在实验 9 和实验 11 中，这个模式都能直接看到：大量 RTO 的 `snd_una` 都落在 `L2_ACK_INTERVAL = 40000` 的边界后第一个 MTU 位置，即 `snd_una % 40000 == 1000`。
 
-这不是论文或 Uno_SC25 的设计点，而是当前 ns-3 RDMA 栈把“稀疏 ACK”与“timeout recovery”组合后引入的行为偏差。当前修复只对 UnoCC 放宽顺序包 ACK，以消除此类假性重传。
+这不是论文或 Uno_SC25 的设计点，而是当前 ns-3 RDMA 栈把“稀疏 ACK”与“timeout recovery”组合后引入的行为偏差。当前修复只对 UnoCC 数据包强制请求 ACK，以消除此类假性重传。
 
 修复后的直接验证：
 
@@ -532,6 +545,7 @@ Uno_SC25 `CompositeQueue` 通过事件调度定期 decrease phantom queue。
 - 纯 RDMA 实验不需要传 `--tcp_flow`；当前 `run.py` 默认就是空，不会再隐式带上 `config/w-tcp-100.txt`。
 - TCP + RDMA 混跑实验只需要额外传 `--tcp_flow <path>`。
 - 多 DC UnoCC 实验建议显式带 `--wan_cc_mode 2`，这样 WAN switch 侧也开启 ECN。
+- UnoCC 实验默认不要传 `--uno_intra_rtt_ns` 或 `--uno_inter_rtt_ns`；`run.py` 不再把论文表中的固定 RTT 写入 config，`remote.cc` 会从当前 topology 推导实际 intra/inter RTT。只有要强制复现某个固定 RTT 时才显式传这些参数。
 
 ### 当前仓库中已存在的输入文件
 

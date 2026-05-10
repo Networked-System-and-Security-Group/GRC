@@ -199,6 +199,7 @@ class RdmaHw : public Object {
     uint64_t GetAckRttNsUno(Ptr<RdmaQueuePair> qp, CustomHeader &ch);
     uint64_t GetAckTxTimestampNsUno(CustomHeader &ch);
     uint64_t GetUnoEpochPeriodNs(Ptr<RdmaQueuePair> qp);
+    uint64_t GetUnoTargetRttNs(Ptr<RdmaQueuePair> qp);
     uint64_t GetUnoQaPeriodNs(Ptr<RdmaQueuePair> qp);
     void UnoAdditiveIncrease(Ptr<RdmaQueuePair> qp, uint32_t bytesAcked, bool ecnMarked);
     bool UnoEpochEnded(Ptr<RdmaQueuePair> qp, uint64_t ackedPktTxTsNs, uint64_t nowNs);
