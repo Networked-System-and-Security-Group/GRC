@@ -86,6 +86,7 @@ cc_modes = {
     "hpcc": 3,
     "timely": 7,
     "dctcp": 8,
+    "unocc": 9,
 }
 
 lb_modes = {
@@ -174,6 +175,20 @@ def main():
     parser.add_argument('--inter_load_all', type=int, default=60, help="不同DC之间之间通信的负载，单位Gbps")
     parser.add_argument('--intra_load', type=int, default=30, help="单个host在DC内之间通信的负载")
     parser.add_argument('--wan_cc_mode', type=int, default=1, help="DC间拥塞控制方案")#
+    parser.add_argument('--uno_ai_factor', type=float, default=0.001)
+    parser.add_argument('--uno_beta', type=float, default=0.5)
+    parser.add_argument('--uno_ewma_gain', type=float, default=0.65)
+    parser.add_argument('--uno_k', type=float, default=-1.0, help="UnoCC K in bytes; <=0 means BDP/7")
+    parser.add_argument('--uno_gentle_scale', type=float, default=0.3)
+    parser.add_argument('--uno_delay_threshold', type=float, default=0.05)
+    parser.add_argument('--uno_epoch_rtt_factor', type=float, default=2.0)
+    parser.add_argument('--uno_intra_rtt_ns', type=int, default=0, help="0 derives min intra-DC RTT from topology")
+    parser.add_argument('--uno_phantom_enabled', type=int, default=1)
+    parser.add_argument('--uno_phantom_size_kb', type=int, default=50150)
+    parser.add_argument('--uno_phantom_kmin_pct', type=int, default=5)
+    parser.add_argument('--uno_phantom_kmax_pct', type=int, default=60)
+    parser.add_argument('--uno_phantom_pmax', type=float, default=1.0)
+    parser.add_argument('--uno_phantom_slowdown_pct', type=float, default=10.0)
     parser.add_argument('--msg', type=str, default='', help="message")
     parser.add_argument('--config', type=str, default='', help="config.txt file to use, if '', generate a new config.txt file")
     parser.add_argument(
@@ -313,7 +328,7 @@ def main():
     # By default, DCQCN uses no window (rate-based).
     has_win = 0
     var_win = 0
-    if (cc_mode == 3 or cc_mode == 8 or enforce_win == 1):  # HPCC or DCTCP or enforcement
+    if (cc_mode == 3 or cc_mode == 8 or cc_mode == 9 or enforce_win == 1):  # HPCC, DCTCP, UnoCC or enforcement
         has_win = 1
         var_win = 1
         if enforce_win == 1:
@@ -346,13 +361,13 @@ def main():
         config = config_template.format(id=config_ID, topo=topo, flow=flow,
                         flowgen_start_time=flowgen_start_time,
                                         flowgen_stop_time=flowgen_stop_time, sw_monitoring_interval=sw_monitoring_interval,
-                                        buffer_size=buffer, dci_buffer_size=dci_buffer, wan_buffer_size=wan_buffer, lb_mode=lb_mode, 
+                                        buffer_size=buffer, dci_buffer_size=dci_buffer, wan_buffer_size=wan_buffer, lb_mode=lb_mode,
                                         enabled_pfc=enabled_pfc, enabled_irn=enabled_irn,
                                         cc_mode=cc_mode,
                                         ai=ai, hai=hai, dctcp_ai=dctcp_ai,
                                         has_win=has_win, var_win=var_win,
                                         fast_react=fast_react, mi=mi, int_multi=int_multi, ewma_gain=ewma_gain,
-                                        kmax_map=kmax_map, kmin_map=kmin_map, pmax_map=pmax_map, random_seed=1, time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"), 
+                                        kmax_map=kmax_map, kmin_map=kmin_map, pmax_map=pmax_map, random_seed=1, time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                                         wan_cc_mode=wan_cc_mode, msg=msg)
     elif cc_mode == 7:
         ai = 10 * bw / 10
@@ -366,6 +381,26 @@ def main():
         config = config_template.format(id=config_ID, topo=topo, flow=flow,
                         flowgen_start_time=flowgen_start_time,
                                         flowgen_stop_time=flowgen_stop_time, sw_monitoring_interval=sw_monitoring_interval,
+                                        buffer_size=buffer, dci_buffer_size=dci_buffer, wan_buffer_size=wan_buffer, lb_mode=lb_mode,
+                                        enabled_pfc=enabled_pfc, enabled_irn=enabled_irn,
+                                        cc_mode=cc_mode,
+                                        ai=ai, hai=hai, dctcp_ai=dctcp_ai,
+                                        has_win=has_win, var_win=var_win,
+                                        fast_react=fast_react, mi=mi, int_multi=int_multi, ewma_gain=ewma_gain,
+                                        kmax_map=kmax_map, kmin_map=kmin_map, pmax_map=pmax_map, random_seed=1, time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                                        wan_cc_mode=wan_cc_mode, msg=msg)
+    elif cc_mode == 9:
+        ai = 10 * bw / 25
+        hai = 25 * bw / 25
+        dctcp_ai = 1000
+        fast_react = 0
+        mi = 0
+        int_multi = 1
+        ewma_gain = 0.65
+
+        config = config_template.format(id=config_ID, topo=topo, flow=flow,
+                        flowgen_start_time=flowgen_start_time,
+                                        flowgen_stop_time=flowgen_stop_time, sw_monitoring_interval=sw_monitoring_interval,
                                         buffer_size=buffer, dci_buffer_size=dci_buffer, wan_buffer_size=wan_buffer, lb_mode=lb_mode, 
                                         enabled_pfc=enabled_pfc, enabled_irn=enabled_irn,
                                         cc_mode=cc_mode,
@@ -374,6 +409,22 @@ def main():
                                         fast_react=fast_react, mi=mi, int_multi=int_multi, ewma_gain=ewma_gain,
                                         kmax_map=kmax_map, kmin_map=kmin_map, pmax_map=pmax_map, random_seed=1, time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"), 
                                         wan_cc_mode=wan_cc_mode, msg=msg)
+        config += (
+            f"UNO_AI_FACTOR {args.uno_ai_factor}\n"
+            f"UNO_BETA {args.uno_beta}\n"
+            f"UNO_EWMA_GAIN {args.uno_ewma_gain}\n"
+            f"UNO_K {args.uno_k}\n"
+            f"UNO_GENTLE_SCALE {args.uno_gentle_scale}\n"
+            f"UNO_DELAY_THRESHOLD {args.uno_delay_threshold}\n"
+            f"UNO_EPOCH_RTT_FACTOR {args.uno_epoch_rtt_factor}\n"
+            f"UNO_INTRA_RTT_NS {args.uno_intra_rtt_ns}\n"
+            f"UNO_PHANTOM_ENABLED {args.uno_phantom_enabled}\n"
+            f"UNO_PHANTOM_SIZE_KB {args.uno_phantom_size_kb}\n"
+            f"UNO_PHANTOM_KMIN_PCT {args.uno_phantom_kmin_pct}\n"
+            f"UNO_PHANTOM_KMAX_PCT {args.uno_phantom_kmax_pct}\n"
+            f"UNO_PHANTOM_PMAX {args.uno_phantom_pmax}\n"
+            f"UNO_PHANTOM_SLOWDOWN_PCT {args.uno_phantom_slowdown_pct}\n"
+        )
     else:
         print("unknown cc:{}".format(args.cc))
 
@@ -437,4 +488,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

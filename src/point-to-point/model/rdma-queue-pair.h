@@ -30,6 +30,7 @@ enum CcMode {
     CC_MODE_HPCC = 3,
     CC_MODE_TIMELY = 7,
     CC_MODE_DCTCP = 8,
+    CC_MODE_UNOCC = 9,
     CC_MODE_UNDEFINED = 0,
 };
 
@@ -118,6 +119,29 @@ class RdmaQueuePair : public Object {
     } dctcp;
 
     struct {
+        double m_cwnd;
+        double m_aiBytes;
+        double m_kBytes;
+        double m_mdGainEcn;
+        double m_ecnFractionEwma;
+        uint64_t m_baseRtt;
+        uint64_t m_lastRtt;
+        uint64_t m_epochPeriodNs;
+        uint64_t m_epochStartTs;
+        uint64_t m_epochEndTs;
+        uint64_t m_epochAckedBytes;
+        double m_epochMarkedBytes;
+        uint64_t m_qaPeriodNs;
+        uint64_t m_qaEndTimeNs;
+        uint64_t m_qaAckedBytes;
+        uint64_t m_skipUntilNs;
+        uint64_t m_lastAckSeq;
+        bool m_qaEnabled;
+        bool m_epochInitialized;
+        bool m_initialized;
+    } uno;
+
+    struct {
         bool m_enabled;
         uint32_t m_bdp;          // m_irn_maxAck_
         uint32_t m_highest_ack;  // m_irn_maxAck_
@@ -193,8 +217,8 @@ class RdmaRxQueuePair : public Object {  // Rx side queue pair
     struct ECNAccount {
         uint16_t qIndex;
         uint8_t ecnbits;
-        uint16_t qfb;
-        uint16_t total;
+        uint32_t qfb;
+        uint32_t total;
 
         ECNAccount() { memset(this, 0, sizeof(ECNAccount)); }
     };

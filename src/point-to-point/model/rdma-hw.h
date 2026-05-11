@@ -181,6 +181,23 @@ class RdmaHw : public Object {
     void HandleAckDctcp(Ptr<RdmaQueuePair> qp, Ptr<Packet> p, CustomHeader &ch);
 
     /**********************
+     * UnoCC
+     *********************/
+    double m_unoAiFactor;
+    double m_unoBeta;
+    double m_unoEwmaGain;
+    double m_unoK;
+    double m_unoGentleScale;
+    double m_unoDelayThreshold;
+    double m_unoEpochRttFactor;
+    uint64_t m_unoIntraRttNs;
+    void InitUno(Ptr<RdmaQueuePair> qp);
+    void HandleAckUno(Ptr<RdmaQueuePair> qp, Ptr<Packet> p, CustomHeader &ch, uint64_t oldSndUna);
+    void UnoProcessEpochEnd(Ptr<RdmaQueuePair> qp);
+    void UnoProcessQa(Ptr<RdmaQueuePair> qp);
+    void UnoApplyRateFromCwnd(Ptr<RdmaQueuePair> qp);
+
+    /**********************
      * IRN
      *********************/
     bool m_irn;

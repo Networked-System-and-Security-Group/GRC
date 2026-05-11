@@ -68,6 +68,27 @@ RdmaQueuePair::RdmaQueuePair(uint16_t pg, Ipv4Address _sip, Ipv4Address _dip, ui
     dctcp.m_ecnCnt = 0;
     dctcp.m_batchSizeOfAlpha = 0;
 
+    uno.m_cwnd = 0;
+    uno.m_aiBytes = 0;
+    uno.m_kBytes = 0;
+    uno.m_mdGainEcn = 0;
+    uno.m_ecnFractionEwma = 0;
+    uno.m_baseRtt = 0;
+    uno.m_lastRtt = 0;
+    uno.m_epochPeriodNs = 0;
+    uno.m_epochStartTs = 0;
+    uno.m_epochEndTs = 0;
+    uno.m_epochAckedBytes = 0;
+    uno.m_epochMarkedBytes = 0;
+    uno.m_qaPeriodNs = 0;
+    uno.m_qaEndTimeNs = 0;
+    uno.m_qaAckedBytes = 0;
+    uno.m_skipUntilNs = 0;
+    uno.m_lastAckSeq = 0;
+    uno.m_qaEnabled = false;
+    uno.m_epochInitialized = false;
+    uno.m_initialized = false;
+
     irn.m_enabled = false;
     irn.m_highest_ack = 0;
     irn.m_max_seq = 0;
@@ -137,6 +158,9 @@ bool RdmaQueuePair::IsWinBound() {
 }
 
 uint64_t RdmaQueuePair::GetWin() {
+    if (uno.m_initialized && uno.m_cwnd > 0) {
+        return std::max<uint64_t>(1, static_cast<uint64_t>(uno.m_cwnd));
+    }
     if (m_win == 0) return 0;
     uint64_t w;
     if (m_var_win) {

@@ -6,6 +6,7 @@
 #include <ns3/udp-header.h>
 
 #include <climits>
+#include <cmath>
 
 #include "cn-header.h"
 #include "flow-stat-tag.h"
@@ -118,6 +119,30 @@ TypeId RdmaHw::GetTypeId(void) {
             .AddAttribute("DctcpRateAI", "DCTCP's Rate increment unit in AI period",
                           DataRateValue(DataRate("1000Mb/s")),
                           MakeDataRateAccessor(&RdmaHw::m_dctcp_rai), MakeDataRateChecker())
+            .AddAttribute("UnoAiFactor", "UnoCC additive increase as a BDP fraction",
+                          DoubleValue(0.001), MakeDoubleAccessor(&RdmaHw::m_unoAiFactor),
+                          MakeDoubleChecker<double>())
+            .AddAttribute("UnoBeta", "UnoCC quick-adapt cwnd ratio threshold",
+                          DoubleValue(0.5), MakeDoubleAccessor(&RdmaHw::m_unoBeta),
+                          MakeDoubleChecker<double>())
+            .AddAttribute("UnoEwmaGain", "UnoCC ECN fraction EWMA gain",
+                          DoubleValue(0.65), MakeDoubleAccessor(&RdmaHw::m_unoEwmaGain),
+                          MakeDoubleChecker<double>())
+            .AddAttribute("UnoK", "UnoCC K in bytes; <=0 means BDP/7",
+                          DoubleValue(-1.0), MakeDoubleAccessor(&RdmaHw::m_unoK),
+                          MakeDoubleChecker<double>())
+            .AddAttribute("UnoGentleScale", "UnoCC MD scale for phantom-only congestion",
+                          DoubleValue(0.3), MakeDoubleAccessor(&RdmaHw::m_unoGentleScale),
+                          MakeDoubleChecker<double>())
+            .AddAttribute("UnoDelayThreshold", "Relative RTT threshold for physical queues",
+                          DoubleValue(0.05), MakeDoubleAccessor(&RdmaHw::m_unoDelayThreshold),
+                          MakeDoubleChecker<double>())
+            .AddAttribute("UnoEpochRttFactor", "UnoCC epoch length in intra-DC RTTs",
+                          DoubleValue(2.0), MakeDoubleAccessor(&RdmaHw::m_unoEpochRttFactor),
+                          MakeDoubleChecker<double>())
+            .AddAttribute("UnoIntraRttNs", "Topology-derived intra-DC RTT for UnoCC epoch",
+                          UintegerValue(0), MakeUintegerAccessor(&RdmaHw::m_unoIntraRttNs),
+                          MakeUintegerChecker<uint64_t>())
             .AddAttribute("IrnEnable", "Enable IRN", BooleanValue(false),
                           MakeBooleanAccessor(&RdmaHw::m_irn), MakeBooleanChecker())
             .AddAttribute("IrnRtoLow", "Low RTO for IRN", TimeValue(MicroSeconds(454)),
@@ -237,6 +262,8 @@ void RdmaHw::AddQueuePair(uint64_t size, uint16_t pg, Ipv4Address sip, Ipv4Addre
         }
     } else if (m_cc_mode == 7) {
         qp->tmly.m_curRate = m_bps;
+    } else if (m_cc_mode == CC_MODE_UNOCC) {
+        InitUno(qp);
     }
 
     // Notify Nic
@@ -329,6 +356,8 @@ int RdmaHw::ReceiveUdp(Ptr<Packet> p, CustomHeader &ch) {
     }
 
     rxQp->m_ecn_source.total++;
+    const uint32_t unoEcnMarked = rxQp->m_ecn_source.qfb;
+    const uint32_t unoEcnTotal = rxQp->m_ecn_source.total;
     if (rxQp->m_milestone_rx == 0) {
         rxQp->m_milestone_rx = m_ack_interval;
     }
@@ -343,7 +372,10 @@ int RdmaHw::ReceiveUdp(Ptr<Packet> p, CustomHeader &ch) {
         //printf("[%ld]Out of order，Flow:%u, 期待Seq：%u，当前Seq:%u\n", Simulator::Now().GetNanoSeconds(), flow_id, rxQp->ReceiverNextExpectedSeq, ch.udp.seq);
         //fflush(stdout);
     }
-    rxQp->send_cnp = ((ecnbits || cnp_check) && Simulator::Now() - rxQp->last_cnp_send_time > MicroSeconds(10));
+    rxQp->send_cnp =
+        (m_cc_mode == CC_MODE_UNOCC) ? (ecnbits || cnp_check)
+                                     : ((ecnbits || cnp_check) &&
+                                        Simulator::Now() - rxQp->last_cnp_send_time > MicroSeconds(10));
     //printf("Receive a udp\n");
     if ((ack_req && x == 1) || x == 2 || x == 6) {  // generate ACK or NACK
         qbbHeader seqh;
@@ -353,7 +385,12 @@ int RdmaHw::ReceiveUdp(Ptr<Packet> p, CustomHeader &ch) {
         seqh.SetDport(ch.udp.sport);
         seqh.SetIntHeader(ch.udp.ih);
 
-        if (m_irn) {
+        if (m_cc_mode == CC_MODE_UNOCC) {
+            seqh.SetIrnNack(unoEcnMarked);
+            seqh.SetIrnNackSize(unoEcnTotal);
+            rxQp->m_ecn_source.qfb = 0;
+            rxQp->m_ecn_source.total = 0;
+        } else if (m_irn) {
             if (x == 2) {
                 seqh.SetIrnNack(ch.udp.seq);
                 seqh.SetIrnNackSize(payload_size);
@@ -434,6 +471,7 @@ int RdmaHw::ReceiveAck(Ptr<Packet> p, CustomHeader &ch) {
     int i;
     uint64_t key = GetQpKey(ch.sip, port, sport, qIndex);
     Ptr<RdmaQueuePair> qp = GetQp(key);
+    uint64_t oldSndUna = qp ? qp->snd_una : 0;
 
     uint32_t nic_idx = GetNicIdxOfQp(qp);
     Ptr<QbbNetDevice> dev = m_nic[nic_idx].dev;
@@ -538,6 +576,8 @@ int RdmaHw::ReceiveAck(Ptr<Packet> p, CustomHeader &ch) {
         HandleAckTimely(qp, p, ch);
     } else if (m_cc_mode == 8) {
         HandleAckDctcp(qp, p, ch);
+    } else if (m_cc_mode == CC_MODE_UNOCC) {
+        HandleAckUno(qp, p, ch, oldSndUna);
     }
     // ACK may advance the on-the-fly window, allowing more packets to send
     dev->TriggerTransmit();
@@ -782,7 +822,8 @@ Ptr<Packet> RdmaHw::GetNxtPacket(Ptr<RdmaQueuePair> qp) {
     //    printf("Generate a packet, FlowId:%u, Seq:%u\n", qp->m_flow_id, seq);
     //}
 
-    bool ack_req = (seq + payload_size >= qp->m_size) || (seq % m_ack_interval == 0 && seq != 0);
+    bool ack_req = (m_cc_mode == CC_MODE_UNOCC) || (seq + payload_size >= qp->m_size) ||
+                   (m_ack_interval > 0 && seq % m_ack_interval == 0 && seq != 0);
     // attach Stat Tag
     uint8_t packet_pos = UINT8_MAX;
     {
@@ -869,6 +910,10 @@ void RdmaHw::HandleTimeout(Ptr<RdmaQueuePair> qp, Time rto) {
     if (m_cc_mode == 1){ // mlx version
         cnp_received_mlx(qp); //当超时发生的时候，等效于接收到CNP？
 	}
+    if (m_cc_mode == CC_MODE_UNOCC && qp->uno.m_initialized) {
+        qp->uno.m_cwnd = std::max<double>(m_mtu, qp->uno.m_cwnd - m_mtu);
+        UnoApplyRateFromCwnd(qp);
+    }
     printf("[%ld]Retransmission Timeout! FlowId:%u, %lu->%lu, fsize:%lu, Rate:%lu, Alpha:%lf\n", 
         Simulator::Now().GetNanoSeconds(), qp->m_flow_id, qp->snd_nxt, qp->snd_una,
         qp->m_size, qp->m_rate.GetBitRate(), qp->mlx.m_alpha);
@@ -1355,6 +1400,138 @@ void RdmaHw::HandleAckDctcp(Ptr<RdmaQueuePair> qp, Ptr<Packet> p, CustomHeader &
     // additive inc
     if (qp->dctcp.m_caState == 0 && new_batch)
         qp->m_rate = std::min(qp->m_max_rate, qp->m_rate + m_dctcp_rai);
+}
+
+void RdmaHw::InitUno(Ptr<RdmaQueuePair> qp) {
+    const double bdp = std::max<double>(m_mtu, qp->m_baseRtt * qp->m_max_rate.GetBitRate() / 8e9);
+    qp->uno.m_cwnd = bdp;
+    qp->uno.m_aiBytes = std::max<double>(1.0, m_unoAiFactor * bdp);
+    qp->uno.m_kBytes = m_unoK > 0 ? m_unoK : std::max<double>(1.0, bdp / 7.0);
+    qp->uno.m_mdGainEcn = 4.0 * qp->uno.m_kBytes / (bdp + qp->uno.m_kBytes);
+    qp->uno.m_ecnFractionEwma = 0;
+    qp->uno.m_baseRtt = qp->m_baseRtt ? qp->m_baseRtt : 1;
+    qp->uno.m_lastRtt = qp->uno.m_baseRtt;
+    qp->uno.m_epochPeriodNs =
+        std::max<uint64_t>(1, static_cast<uint64_t>((m_unoIntraRttNs ? m_unoIntraRttNs : qp->uno.m_baseRtt) *
+                                                    m_unoEpochRttFactor));
+    qp->uno.m_epochStartTs = 0;
+    qp->uno.m_epochEndTs = 0;
+    qp->uno.m_epochAckedBytes = 0;
+    qp->uno.m_epochMarkedBytes = 0;
+    qp->uno.m_qaPeriodNs = qp->uno.m_baseRtt;
+    qp->uno.m_qaEndTimeNs = qp->uno.m_qaPeriodNs;
+    qp->uno.m_qaAckedBytes = 0;
+    qp->uno.m_skipUntilNs = 0;
+    qp->uno.m_lastAckSeq = 0;
+    qp->uno.m_qaEnabled = false;
+    qp->uno.m_epochInitialized = false;
+    qp->uno.m_initialized = true;
+    qp->m_win = static_cast<uint32_t>(std::min<double>(UINT32_MAX, qp->uno.m_cwnd));
+    UnoApplyRateFromCwnd(qp);
+}
+
+void RdmaHw::HandleAckUno(Ptr<RdmaQueuePair> qp, Ptr<Packet> p, CustomHeader &ch, uint64_t oldSndUna) {
+    if (!qp->uno.m_initialized) {
+        InitUno(qp);
+    }
+
+    const uint64_t ackSeq = ch.ack.seq;
+    const uint64_t bytesAcked = ackSeq > oldSndUna ? ackSeq - oldSndUna : 0;
+    const bool marked = ((ch.ack.flags >> qbbHeader::FLAG_CNP) & 1) != 0;
+    const double ackMarkedFraction =
+        ch.ack.irnNackSize > 0
+            ? std::min(1.0, static_cast<double>(ch.ack.irnNack) / ch.ack.irnNackSize)
+            : (marked ? 1.0 : 0.0);
+    const uint64_t nowNs = Simulator::Now().GetNanoSeconds();
+    const uint64_t ackedPktTs = ch.ack.ih.GetTs();
+
+    if (ackedPktTs > 0 && nowNs > ackedPktTs) {
+        const uint64_t rtt = nowNs - ackedPktTs;
+        qp->uno.m_lastRtt = rtt;
+        if (qp->uno.m_baseRtt == 0 || rtt < qp->uno.m_baseRtt) {
+            qp->uno.m_baseRtt = rtt;
+            qp->uno.m_qaPeriodNs = std::max<uint64_t>(1, rtt);
+        }
+    }
+
+    if (bytesAcked > 0) {
+        if (ackMarkedFraction == 0.0) {
+            qp->uno.m_cwnd += qp->uno.m_aiBytes * bytesAcked / std::max<double>(1.0, qp->uno.m_cwnd);
+        }
+        qp->uno.m_epochAckedBytes += bytesAcked;
+        qp->uno.m_epochMarkedBytes += bytesAcked * ackMarkedFraction;
+        if (qp->uno.m_qaEnabled) {
+            qp->uno.m_qaAckedBytes += bytesAcked;
+        }
+    }
+
+    const uint64_t epochProbe = ackedPktTs > 0 ? ackedPktTs : nowNs;
+    if (!qp->uno.m_epochInitialized) {
+        qp->uno.m_epochStartTs = epochProbe;
+        qp->uno.m_epochEndTs = epochProbe + qp->uno.m_epochPeriodNs;
+        qp->uno.m_epochInitialized = true;
+    } else {
+        while (epochProbe >= qp->uno.m_epochEndTs) {
+            UnoProcessEpochEnd(qp);
+            qp->uno.m_epochStartTs = qp->uno.m_epochEndTs;
+            qp->uno.m_epochEndTs += qp->uno.m_epochPeriodNs;
+        }
+    }
+
+    if (ackedPktTs > 0 && nowNs >= qp->uno.m_skipUntilNs) {
+        if (!qp->uno.m_qaEnabled && ackedPktTs >= qp->uno.m_qaEndTimeNs) {
+            qp->uno.m_qaEnabled = true;
+            qp->uno.m_qaAckedBytes = 0;
+            qp->uno.m_qaEndTimeNs = nowNs + qp->uno.m_qaPeriodNs;
+        } else if (qp->uno.m_qaEnabled && nowNs >= qp->uno.m_qaEndTimeNs) {
+            UnoProcessQa(qp);
+        }
+    }
+
+    UnoApplyRateFromCwnd(qp);
+}
+
+void RdmaHw::UnoProcessEpochEnd(Ptr<RdmaQueuePair> qp) {
+    const uint64_t nowNs = Simulator::Now().GetNanoSeconds();
+    const double frac = qp->uno.m_epochAckedBytes > 0
+                            ? std::min(1.0, static_cast<double>(qp->uno.m_epochMarkedBytes) /
+                                                 qp->uno.m_epochAckedBytes)
+                            : 0.0;
+    qp->uno.m_ecnFractionEwma =
+        (1.0 - m_unoEwmaGain) * qp->uno.m_ecnFractionEwma + m_unoEwmaGain * frac;
+
+    if (qp->uno.m_epochMarkedBytes > 0 && nowNs >= qp->uno.m_skipUntilNs) {
+        const double targetRtt = qp->uno.m_baseRtt * (1.0 + m_unoDelayThreshold);
+        const double mdScale = qp->uno.m_lastRtt <= targetRtt ? m_unoGentleScale : 1.0;
+        double reduction = qp->uno.m_ecnFractionEwma * qp->uno.m_mdGainEcn * mdScale;
+        reduction = std::min(0.95, std::max(0.0, reduction));
+        qp->uno.m_cwnd = std::max<double>(m_mtu, qp->uno.m_cwnd * (1.0 - reduction));
+    }
+
+    qp->uno.m_epochAckedBytes = 0;
+    qp->uno.m_epochMarkedBytes = 0;
+}
+
+void RdmaHw::UnoProcessQa(Ptr<RdmaQueuePair> qp) {
+    const uint64_t nowNs = Simulator::Now().GetNanoSeconds();
+    if (nowNs >= qp->uno.m_skipUntilNs &&
+        qp->uno.m_qaAckedBytes < static_cast<uint64_t>(qp->uno.m_cwnd * m_unoBeta)) {
+        qp->uno.m_cwnd = std::max<double>(m_mtu, qp->uno.m_qaAckedBytes);
+        qp->uno.m_skipUntilNs = nowNs + qp->uno.m_qaPeriodNs;
+        qp->uno.m_qaEnabled = false;
+        qp->uno.m_qaEndTimeNs = nowNs;
+    } else {
+        qp->uno.m_qaEndTimeNs = nowNs + qp->uno.m_qaPeriodNs;
+    }
+    qp->uno.m_qaAckedBytes = 0;
+}
+
+void RdmaHw::UnoApplyRateFromCwnd(Ptr<RdmaQueuePair> qp) {
+    const uint64_t rtt = std::max<uint64_t>(1, qp->uno.m_baseRtt);
+    const uint64_t bps = static_cast<uint64_t>(std::max<double>(
+        m_minRate.GetBitRate(), std::min<double>(qp->m_max_rate.GetBitRate(), qp->uno.m_cwnd * 8e9 / rtt)));
+    ChangeRate(qp, DataRate(bps));
+    qp->m_win = static_cast<uint32_t>(std::min<double>(UINT32_MAX, std::max<double>(1, qp->uno.m_cwnd)));
 }
 
 }  // namespace ns3

@@ -60,6 +60,16 @@ SwitchMmu::SwitchMmu(void) {
 
     // dynamic threshold
     m_dynamicth = false;
+    for (uint32_t i = 0; i < pCnt; i++) {
+        unoPhantomEnabled[i] = false;
+        unoPhantomBytes[i] = 0;
+        unoPhantomLastUpdateNs[i] = 0;
+        unoPhantomSizeBytes[i] = 0;
+        unoPhantomKminBytes[i] = 0;
+        unoPhantomKmaxBytes[i] = 0;
+        unoPhantomPmax[i] = 0;
+        unoPhantomDrainBps[i] = 0;
+    }
 
     //InitSwitch();
 }
@@ -82,6 +92,15 @@ void SwitchMmu::InitSwitch(void) {
     {
         m_usedIngressPortBytes[i] = 0;
         m_usedEgressPortBytes[i] = 0;
+        unoPhantomBytes[i] = 0;
+        unoPhantomLastUpdateNs[i] = Simulator::Now().GetNanoSeconds();
+        if (unoPhantomSizeBytes[i] == 0) {
+            unoPhantomEnabled[i] = false;
+            unoPhantomKminBytes[i] = 0;
+            unoPhantomKmaxBytes[i] = 0;
+            unoPhantomPmax[i] = 0;
+            unoPhantomDrainBps[i] = 0;
+        }
         for (uint32_t j = 0; j < qCnt; j++) {
             m_usedIngressPGBytes[i][j] = 0;
             m_usedIngressPGHeadroomBytes[i][j] = 0;
@@ -236,6 +255,14 @@ void SwitchMmu::UpdateIngressAdmission(uint32_t port, uint32_t qIndex, uint32_t 
 
 void SwitchMmu::UpdateEgressAdmission(uint32_t port, uint32_t qIndex, uint32_t psize) {
     m_usedEgressBytes[port][qIndex] += psize;  // count total buffer usage
+    if (unoPhantomEnabled[port] && qIndex != 0) {
+        const uint64_t nowNs = Simulator::Now().GetNanoSeconds();
+        const uint64_t elapsed = nowNs - unoPhantomLastUpdateNs[port];
+        const double drained = unoPhantomDrainBps[port] * elapsed / 8e9;
+        unoPhantomBytes[port] = std::max(0.0, unoPhantomBytes[port] - drained);
+        unoPhantomBytes[port] = std::min<double>(unoPhantomSizeBytes[port], unoPhantomBytes[port] + psize);
+        unoPhantomLastUpdateNs[port] = nowNs;
+    }
     //if (m_usedEgressQMinBytes[port][qIndex] + psize < m_q_min_cell)  // guaranteed
     //{
     //    m_usedEgressQMinBytes[port][qIndex] += psize;
@@ -434,6 +461,24 @@ uint32_t SwitchMmu::GetusedEgressQSharedBytes(uint32_t port, uint32_t qIndex){
 bool SwitchMmu::ShouldSendCN(uint32_t ifindex, uint32_t qIndex) {
     if (qIndex == 0)  // qidx=0 as highest priority
         return false;
+    if (unoPhantomEnabled[ifindex]) {
+        const uint64_t nowNs = Simulator::Now().GetNanoSeconds();
+        const uint64_t elapsed = nowNs - unoPhantomLastUpdateNs[ifindex];
+        const double drained = unoPhantomDrainBps[ifindex] * elapsed / 8e9;
+        unoPhantomBytes[ifindex] = std::max(0.0, unoPhantomBytes[ifindex] - drained);
+        unoPhantomLastUpdateNs[ifindex] = nowNs;
+        if (unoPhantomBytes[ifindex] > unoPhantomKmaxBytes[ifindex])
+            return true;
+        if (unoPhantomBytes[ifindex] > unoPhantomKminBytes[ifindex] &&
+            unoPhantomKmaxBytes[ifindex] > unoPhantomKminBytes[ifindex]) {
+            double p = unoPhantomPmax[ifindex] *
+                       (unoPhantomBytes[ifindex] - unoPhantomKminBytes[ifindex]) /
+                       (unoPhantomKmaxBytes[ifindex] - unoPhantomKminBytes[ifindex]);
+            if (m_uniform_random_var.GetValue(0, 1) < p)
+                return true;
+        }
+        return false;
+    }
     if (m_usedEgressBytes[ifindex][qIndex] > kmax[ifindex])
         return true;
     if (m_usedEgressBytes[ifindex][qIndex] > kmin[ifindex]){
@@ -496,6 +541,19 @@ void SwitchMmu::ConfigEcn(uint32_t port, uint32_t _kmin, uint32_t _kmax, double 
     kmin[port] = _kmin * 1000;
     kmax[port] = _kmax * 1000;
     pmax[port] = _pmax;
+}
+
+void SwitchMmu::ConfigUnoPhantom(uint32_t port, uint32_t sizeBytes, uint32_t kminPct,
+                                 uint32_t kmaxPct, double _pmax, double slowdownPct,
+                                 uint64_t lineRate) {
+    unoPhantomEnabled[port] = sizeBytes > 0;
+    unoPhantomBytes[port] = 0;
+    unoPhantomLastUpdateNs[port] = Simulator::Now().GetNanoSeconds();
+    unoPhantomSizeBytes[port] = sizeBytes;
+    unoPhantomKminBytes[port] = sizeBytes * kminPct / 100;
+    unoPhantomKmaxBytes[port] = sizeBytes * kmaxPct / 100;
+    unoPhantomPmax[port] = _pmax;
+    unoPhantomDrainBps[port] = lineRate * std::max(0.0, 1.0 - slowdownPct / 100.0);
 }
 
 void SwitchMmu::SetPause(uint32_t port, uint32_t qIndex, uint32_t pause_time) {
