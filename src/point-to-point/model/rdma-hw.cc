@@ -822,7 +822,7 @@ Ptr<Packet> RdmaHw::GetNxtPacket(Ptr<RdmaQueuePair> qp) {
     //    printf("Generate a packet, FlowId:%u, Seq:%u\n", qp->m_flow_id, seq);
     //}
 
-    bool ack_req = (m_cc_mode == CC_MODE_UNOCC) || (seq + payload_size >= qp->m_size) ||
+    bool ack_req = (seq + payload_size >= qp->m_size) ||
                    (m_ack_interval > 0 && seq % m_ack_interval == 0 && seq != 0);
     // attach Stat Tag
     uint8_t packet_pos = UINT8_MAX;

@@ -51,7 +51,7 @@ DCTCP_RATE_AI {dctcp_ai}Mb/s
 
 ERROR_RATE_PER_LINK 0.0000
 L2_CHUNK_SIZE 40000
-L2_ACK_INTERVAL 40000
+L2_ACK_INTERVAL {l2_ack_interval}
 L2_BACK_TO_ZERO 0
 
 RATE_BOUND 1
@@ -246,6 +246,7 @@ def main():
     inter_load_all = args.inter_load_all
     wan_cc_mode = args.wan_cc_mode
     msg = args.msg
+    l2_ack_interval = 1 if cc_mode == 9 else 40000
 
     # Parse passthrough extras: KEY=VALUE (VALUE kept as raw string)
     extra_kv = {}
@@ -368,7 +369,7 @@ def main():
                                         has_win=has_win, var_win=var_win,
                                         fast_react=fast_react, mi=mi, int_multi=int_multi, ewma_gain=ewma_gain,
                                         kmax_map=kmax_map, kmin_map=kmin_map, pmax_map=pmax_map, random_seed=1, time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                                        wan_cc_mode=wan_cc_mode, msg=msg)
+                                        wan_cc_mode=wan_cc_mode, msg=msg, l2_ack_interval=l2_ack_interval)
     elif cc_mode == 7:
         ai = 10 * bw / 10
         hai = 50 * bw / 10
@@ -388,7 +389,7 @@ def main():
                                         has_win=has_win, var_win=var_win,
                                         fast_react=fast_react, mi=mi, int_multi=int_multi, ewma_gain=ewma_gain,
                                         kmax_map=kmax_map, kmin_map=kmin_map, pmax_map=pmax_map, random_seed=1, time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                                        wan_cc_mode=wan_cc_mode, msg=msg)
+                                        wan_cc_mode=wan_cc_mode, msg=msg, l2_ack_interval=l2_ack_interval)
     elif cc_mode == 9:
         ai = 10 * bw / 25
         hai = 25 * bw / 25
@@ -408,7 +409,7 @@ def main():
                                         has_win=has_win, var_win=var_win,
                                         fast_react=fast_react, mi=mi, int_multi=int_multi, ewma_gain=ewma_gain,
                                         kmax_map=kmax_map, kmin_map=kmin_map, pmax_map=pmax_map, random_seed=1, time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"), 
-                                        wan_cc_mode=wan_cc_mode, msg=msg)
+                                        wan_cc_mode=wan_cc_mode, msg=msg, l2_ack_interval=l2_ack_interval)
         config += (
             f"UNO_AI_FACTOR {args.uno_ai_factor}\n"
             f"UNO_BETA {args.uno_beta}\n"
@@ -460,6 +461,7 @@ def main():
 
             existing_config = _upsert_line(existing_config, 'DCI_BUFFER_SIZE', str(dci_buffer))
             existing_config = _upsert_line(existing_config, 'WAN_BUFFER_SIZE', str(wan_buffer))
+            existing_config = _upsert_line(existing_config, 'L2_ACK_INTERVAL', str(l2_ack_interval))
 
             if tcp_flow:
                 existing_config = _upsert_line(existing_config, 'TCP_FLOW_FILE', tcp_flow)
