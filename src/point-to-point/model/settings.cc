@@ -206,6 +206,7 @@ namespace logfile {
     FILE* cnp_log = nullptr;
     FILE* cnp_trigger_prob_log = nullptr;
     FILE* accumulated_bytes_log = nullptr;
+    FILE* flow_debug_log = nullptr;
 
     
 
@@ -246,6 +247,11 @@ namespace logfile {
         fprintf(cnp_trigger_prob_log, "timestamp_ns,switch_id,src_as,dst_as,cnp_cnt,pkt_cnt,prob,w\n");
         OPEN_EMPTY_FILE(accumulated_bytes_log);
         fprintf(accumulated_bytes_log, "timestamp_ns,switch_id,dst_as,accumulated_bytes\n");
+        OPEN_FILE(flow_debug_log);
+        fprintf(flow_debug_log, "# Natural-language debug log. grep examples:\n");
+        fprintf(flow_debug_log, "#   grep 'FlowId:423,' flow_debug_log\n");
+        fprintf(flow_debug_log, "#   grep 'FlowId:423, Receiver got data' flow_debug_log\n");
+        fprintf(flow_debug_log, "#   grep 'FlowId:0, GEMINI' flow_debug_log\n");
 
         OPEN_EMPTY_FILE(cnp_output);
         OPEN_EMPTY_FILE(voq_output);

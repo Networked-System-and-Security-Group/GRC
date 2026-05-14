@@ -51,7 +51,7 @@ DCTCP_RATE_AI {dctcp_ai}Mb/s
 
 ERROR_RATE_PER_LINK 0.0000
 L2_CHUNK_SIZE 40000
-L2_ACK_INTERVAL 40000
+L2_ACK_INTERVAL {ack_interval}
 L2_BACK_TO_ZERO 0
 
 RATE_BOUND 1
@@ -86,6 +86,7 @@ cc_modes = {
     "hpcc": 3,
     "timely": 7,
     "dctcp": 8,
+    "gemini": 9,
 }
 
 lb_modes = {
@@ -138,7 +139,7 @@ def main():
 
     parser = argparse.ArgumentParser(description='run simulation')
     parser.add_argument('--cc', dest='cc', action='store',
-                        default='dcqcn', help="hpcc/dcqcn/timely/dctcp (default: dcqcn)")
+                        default='dcqcn', help="hpcc/dcqcn/timely/dctcp/gemini (default: dcqcn)")
     parser.add_argument('--lb', dest='lb', action='store',
                         default='fecmp', help="fecmp/pecmp/drill/conga (default: fecmp)")
     parser.add_argument('--pfc', dest='pfc', action='store',
@@ -313,7 +314,7 @@ def main():
     # By default, DCQCN uses no window (rate-based).
     has_win = 0
     var_win = 0
-    if (cc_mode == 3 or cc_mode == 8 or enforce_win == 1):  # HPCC or DCTCP or enforcement
+    if (cc_mode == 3 or cc_mode == 8 or cc_mode == 9 or enforce_win == 1):  # HPCC or DCTCP or GEMINI or enforcement
         has_win = 1
         var_win = 1
         if enforce_win == 1:
@@ -334,6 +335,8 @@ def main():
     pmax_map = "6 %d %d %d %d %d %.2f %d %.2f %d %.2f %d %.2f" % (
         bw*200000000, 0.2, bw*500000000, 0.2, bw*1000000000, 0.2, bw*2*1000000000, 0.2, bw*2500000000, 0.2, bw*4*1000000000, 0.2)
 
+    ack_interval = 1 if cc_mode == 9 else 40000
+
     if (cc_mode == 1):  # DCQCN
         ai = 10 * bw / 25
         hai = 25 * bw / 25
@@ -346,14 +349,14 @@ def main():
         config = config_template.format(id=config_ID, topo=topo, flow=flow,
                         flowgen_start_time=flowgen_start_time,
                                         flowgen_stop_time=flowgen_stop_time, sw_monitoring_interval=sw_monitoring_interval,
-                                        buffer_size=buffer, dci_buffer_size=dci_buffer, wan_buffer_size=wan_buffer, lb_mode=lb_mode, 
+                                        buffer_size=buffer, dci_buffer_size=dci_buffer, wan_buffer_size=wan_buffer, lb_mode=lb_mode,
                                         enabled_pfc=enabled_pfc, enabled_irn=enabled_irn,
                                         cc_mode=cc_mode,
                                         ai=ai, hai=hai, dctcp_ai=dctcp_ai,
                                         has_win=has_win, var_win=var_win,
                                         fast_react=fast_react, mi=mi, int_multi=int_multi, ewma_gain=ewma_gain,
-                                        kmax_map=kmax_map, kmin_map=kmin_map, pmax_map=pmax_map, random_seed=1, time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"), 
-                                        wan_cc_mode=wan_cc_mode, msg=msg)
+                                        kmax_map=kmax_map, kmin_map=kmin_map, pmax_map=pmax_map, random_seed=1, time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                                        ack_interval=ack_interval, wan_cc_mode=wan_cc_mode, msg=msg)
     elif cc_mode == 7:
         ai = 10 * bw / 10
         hai = 50 * bw / 10
@@ -366,14 +369,41 @@ def main():
         config = config_template.format(id=config_ID, topo=topo, flow=flow,
                         flowgen_start_time=flowgen_start_time,
                                         flowgen_stop_time=flowgen_stop_time, sw_monitoring_interval=sw_monitoring_interval,
+                                        buffer_size=buffer, dci_buffer_size=dci_buffer, wan_buffer_size=wan_buffer, lb_mode=lb_mode,
+                                        enabled_pfc=enabled_pfc, enabled_irn=enabled_irn,
+                                        cc_mode=cc_mode,
+                                        ai=ai, hai=hai, dctcp_ai=dctcp_ai,
+                                        has_win=has_win, var_win=var_win,
+                                        fast_react=fast_react, mi=mi, int_multi=int_multi, ewma_gain=ewma_gain,
+                                        kmax_map=kmax_map, kmin_map=kmin_map, pmax_map=pmax_map, random_seed=1, time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                                        ack_interval=ack_interval, wan_cc_mode=wan_cc_mode, msg=msg)
+    elif cc_mode == 9:
+        ai = 10 * bw / 10
+        hai = 50 * bw / 10
+        dctcp_ai = 1000
+        fast_react = 0
+        mi = 0
+        int_multi = 1
+        ewma_gain = 0.0625
+        # GEMINI uses a dedicated shallow ECN window: 400KB hard threshold.
+        kmax_map = "6 %d %d %d %d %d %d %d %d %d %d %d %d" % (
+            bw*200000000, 400, bw*500000000, 400, bw*1000000000, 400, bw*2*1000000000, 400, bw*2500000000, 400, bw*4*1000000000, 400)
+        kmin_map = "6 %d %d %d %d %d %d %d %d %d %d %d %d" % (
+            bw*200000000, 400, bw*500000000, 400, bw*1000000000, 400, bw*2*1000000000, 400, bw*2500000000, 400, bw*4*1000000000, 400)
+        pmax_map = "6 %d %d %d %d %d %.2f %d %.2f %d %.2f %d %.2f" % (
+            bw*200000000, 1.0, bw*500000000, 1.0, bw*1000000000, 1.0, bw*2*1000000000, 1.0, bw*2500000000, 1.0, bw*4*1000000000, 1.0)
+
+        config = config_template.format(id=config_ID, topo=topo, flow=flow,
+                        flowgen_start_time=flowgen_start_time,
+                                        flowgen_stop_time=flowgen_stop_time, sw_monitoring_interval=sw_monitoring_interval,
                                         buffer_size=buffer, dci_buffer_size=dci_buffer, wan_buffer_size=wan_buffer, lb_mode=lb_mode, 
                                         enabled_pfc=enabled_pfc, enabled_irn=enabled_irn,
                                         cc_mode=cc_mode,
                                         ai=ai, hai=hai, dctcp_ai=dctcp_ai,
                                         has_win=has_win, var_win=var_win,
                                         fast_react=fast_react, mi=mi, int_multi=int_multi, ewma_gain=ewma_gain,
-                                        kmax_map=kmax_map, kmin_map=kmin_map, pmax_map=pmax_map, random_seed=1, time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"), 
-                                        wan_cc_mode=wan_cc_mode, msg=msg)
+                                        kmax_map=kmax_map, kmin_map=kmin_map, pmax_map=pmax_map, random_seed=1, time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                                        ack_interval=ack_interval, wan_cc_mode=wan_cc_mode, msg=msg)
     else:
         print("unknown cc:{}".format(args.cc))
 
@@ -437,4 +467,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

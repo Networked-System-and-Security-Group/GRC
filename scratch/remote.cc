@@ -139,6 +139,8 @@ std::unordered_map<uint32_t, uint16_t> tcpDportNumber;
 
 std::string tcp_flow_file;
 std::vector<FlowInput> tcpFlowInfos;
+uint64_t pfc_pause_event_count = 0;
+uint64_t pfc_resume_event_count = 0;
 
 using json = nlohmann::json;
 json topo_json;
@@ -398,6 +400,11 @@ void get_pfc(FILE *fout, Ptr<QbbNetDevice> dev, uint32_t type) {
     //std::cout << "PFC event: " << Simulator::Now().GetTimeStep() << " " << dev->GetNode()->GetId()
     //          << " " << dev->GetNode()->GetNodeType() << " " << dev->GetIfIndex() << " " << type
     //          << std::endl;
+    if (type == 1) {
+        ++pfc_pause_event_count;
+    } else if (type == 0) {
+        ++pfc_resume_event_count;
+    }
     fprintf(fout, "%lu,%u,%u,%u,%u\n", Simulator::Now().GetNanoSeconds(), dev->GetNode()->GetId(),
             dev->GetNode()->GetNodeType(), if2id[dev->GetNode()][dev->GetIfIndex()] , type);
 }
@@ -1292,7 +1299,7 @@ int main(int argc, char *argv[]) {
      */
     IntHop::multi = int_multi;
     // IntHeader::mode
-    if (cc_mode == 7)  // timely, use ts
+    if (cc_mode == 7 || cc_mode == 9)  // timely/gemini, use ts
         IntHeader::mode = 1;
     else if (cc_mode == 3)  // hpcc, use int
         IntHeader::mode = 0;
@@ -1812,6 +1819,8 @@ int main(int argc, char *argv[]) {
                         &stop_simulation_middle);  // check every 100us
     Simulator::Stop(Seconds(flowgen_stop_time + 10.0));
     Simulator::Run();
+    std::cout << "PFC summary: pause_triggers=" << pfc_pause_event_count
+              << ", resumes=" << pfc_resume_event_count << std::endl;
 
     // Dump TCP flow metadata for reproducibility/debugging.
     // Note: tcpFlowInfos keeps all TCP flows that were read from TCP_FLOW_FILE.

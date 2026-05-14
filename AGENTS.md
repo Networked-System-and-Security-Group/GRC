@@ -16,7 +16,7 @@ This repository is an ns-3.19-based RDMA-over-WAN simulator for GSCC-style WAN c
 - Shared settings, raw params, and log files: `src/point-to-point/model/settings.h/.cc`
 - DC transport and congestion control: `src/point-to-point/model/rdma-hw.*`, `rdma-queue-pair.*`, `qbb-net-device.*`
 - WAN routing and GSCC logic: `src/point-to-point/model/wan-routing.*`
-- Post-processing: `analysis/deep_analyse.py` and `analysis/*.py`
+- Post-processing: `analysis/deep_analyse.py` and `analysis/*.py`, using .venv python environment
 
 ## Canonical Docs
 

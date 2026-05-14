@@ -349,7 +349,7 @@ if __name__ == '__main__':
     #                      output_filename=f'concurrent_flows{"_d" if dynamic_load > 0 else ""}.png')
     
     # 输出到文件 (原始逻辑：包含 DC 背景流 + Dynamic 流)
-    saved_path = op.join(op.dirname(__file__), f'{flow_set}-dynamic-70-{int(background_inter_load)}-{int(dynamic_load)}.txt')
+    saved_path = op.join(op.dirname(__file__), f'{flow_set}-dynamic-{int(background_inter_load)}-{int(dynamic_load)}.txt')
     print(f'Original Flow count: {len(flows)}, Saved to: {saved_path}')
     with open(saved_path, 'w') as ofile:
         ofile.write(f"{len(flows)}\n")

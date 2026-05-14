@@ -280,6 +280,7 @@ namespace logfile {
     extern FILE* cnp_log;
     extern FILE* cnp_trigger_prob_log;
     extern FILE* accumulated_bytes_log;
+    extern FILE* flow_debug_log;
 
     extern FILE* cnp_output;
     extern FILE* voq_output;

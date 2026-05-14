@@ -30,6 +30,7 @@ enum CcMode {
     CC_MODE_HPCC = 3,
     CC_MODE_TIMELY = 7,
     CC_MODE_DCTCP = 8,
+    CC_MODE_GEMINI = 9,
     CC_MODE_UNDEFINED = 0,
 };
 
@@ -65,6 +66,8 @@ class RdmaQueuePair : public Object {
     uint64_t m_baseRtt;   // base RTT of this qp
     DataRate m_max_rate;  // max rate
     bool m_var_win;       // variable window size
+    bool m_useExplicitWin;
+    uint64_t m_ccWin;
     Time m_nextAvail;     //< Soonest time of next send
     uint32_t wp;          // current window of packets
     uint32_t lastPktSize;
@@ -116,6 +119,16 @@ class RdmaQueuePair : public Object {
         uint32_t m_ecnCnt;
         uint32_t m_batchSizeOfAlpha;
     } dctcp;
+    struct {
+        uint32_t m_lastUpdateSeq;
+        double m_alpha;
+        bool m_inSlowStart;
+        bool m_baseRttValid;
+        uint64_t m_baseRtt;
+        uint64_t m_rttMinThisRtt;
+        uint64_t m_ecnBytes;
+        uint64_t m_ackedBytes;
+    } gemini;
 
     struct {
         bool m_enabled;

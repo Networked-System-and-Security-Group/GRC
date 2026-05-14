@@ -85,7 +85,6 @@ class RdmaHw : public Object {
                 CustomHeader &
                     ch);  // callback function that the QbbNetDevice should use when receive
                           // packets. Only NIC can call this function. And do not call this upon PFC
-
     void CheckandSendQCN(Ptr<RdmaRxQueuePair> q);
     int ReceiverCheckSeq(uint32_t seq, Ptr<RdmaRxQueuePair> q, uint32_t size, bool &cnp);
     void AddHeader(Ptr<Packet> p, uint16_t protocolNumber);
@@ -179,6 +178,21 @@ class RdmaHw : public Object {
      *********************/
     DataRate m_dctcp_rai;
     void HandleAckDctcp(Ptr<RdmaQueuePair> qp, Ptr<Packet> p, CustomHeader &ch);
+
+    /**********************
+     * GEMINI
+     *********************/
+    double m_gemini_h;
+    double m_gemini_beta;
+    uint64_t m_gemini_t;
+    uint64_t m_gemini_k;
+    uint64_t m_gemini_init_cwnd;
+    void HandleAckGemini(Ptr<RdmaQueuePair> qp, Ptr<Packet> p, CustomHeader &ch,
+                         uint32_t ackedBytes);
+    void UpdateCwndGemini(Ptr<RdmaQueuePair> qp, uint32_t ackedBytes, uint32_t ackSeq,
+                          uint64_t rttNs, bool ecn);
+    void UpdateGeminiPacingRate(Ptr<RdmaQueuePair> qp);
+    uint64_t ClampGeminiCwnd(const Ptr<RdmaQueuePair>& qp, double cwndBytes) const;
 
     /**********************
      * IRN

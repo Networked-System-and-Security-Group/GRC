@@ -39,6 +39,8 @@ RdmaQueuePair::RdmaQueuePair(uint16_t pg, Ipv4Address _sip, Ipv4Address _dip, ui
     m_baseRtt = 0;
     m_max_rate = 0;
     m_var_win = false;
+    m_useExplicitWin = false;
+    m_ccWin = 0;
     m_rate = 0;
     m_nextAvail = Time(0);
     mlx.m_alpha = 1;
@@ -67,6 +69,15 @@ RdmaQueuePair::RdmaQueuePair(uint16_t pg, Ipv4Address _sip, Ipv4Address _dip, ui
     dctcp.m_alpha = 1;
     dctcp.m_ecnCnt = 0;
     dctcp.m_batchSizeOfAlpha = 0;
+
+    gemini.m_lastUpdateSeq = 0;
+    gemini.m_alpha = 0;
+    gemini.m_inSlowStart = true;
+    gemini.m_baseRttValid = false;
+    gemini.m_baseRtt = 0;
+    gemini.m_rttMinThisRtt = 0;
+    gemini.m_ecnBytes = 0;
+    gemini.m_ackedBytes = 0;
 
     irn.m_enabled = false;
     irn.m_highest_ack = 0;
@@ -137,6 +148,7 @@ bool RdmaQueuePair::IsWinBound() {
 }
 
 uint64_t RdmaQueuePair::GetWin() {
+    if (m_useExplicitWin) return m_ccWin;
     if (m_win == 0) return 0;
     uint64_t w;
     if (m_var_win) {
