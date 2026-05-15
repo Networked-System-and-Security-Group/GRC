@@ -26,6 +26,27 @@ constexpr const char* kBetaDefault = "0.3";
 constexpr const char* kEnableVDefault = "TRUE";
 constexpr const char* kWanEpochUsDefault = "1000";  // 1ms
 constexpr const char* kEnable2LayerHashDefault = "TRUE";
+constexpr const char* kGsccFairDefault = "FALSE";
+
+bool IsEnabledRawParam(const std::string& value) {
+    return value == "TRUE" || value == "true" || value == "1" || value == "YES" ||
+           value == "yes" || value == "ON" || value == "on";
+}
+
+void ClearIpv4EcnMark(Ptr<Packet> p, CustomHeader& ch) {
+    if (ch.GetIpv4EcnBits() == 0) {
+        return;
+    }
+
+    PppHeader ppp;
+    Ipv4Header ipv4;
+    p->RemoveHeader(ppp);
+    p->RemoveHeader(ipv4);
+    ipv4.SetEcn(Ipv4Header::NotECT);
+    ch.m_tos &= 0xFC;
+    p->AddHeader(ipv4);
+    p->AddHeader(ppp);
+}
 }  // namespace
 
 Time WanRouting::epoch_duration = MicroSeconds(1000); // 1ms
@@ -125,6 +146,10 @@ void WanRouting::init() {
         int64_t epoch_us = std::stoll(Settings::GetRawParam("WAN_EPOCH_US", kWanEpochUsDefault));
         WanRouting::epoch_duration = MicroSeconds(epoch_us);
     }
+    m_gsccFair = IsEnabledRawParam(Settings::GetRawParam("GSCC_FAIR", kGsccFairDefault));
+    if (m_gsccFair) {
+        printf("[Info] WanRouting on switch %u enables GSCC_FAIR mode\n", m_switch_id);
+    }
 
     for (const auto& [dst_as, next_hops] : Settings::wan_routing[m_switch_id]) {
         if (next_hops.empty()) {
@@ -223,9 +248,14 @@ void WanRouting::HandleUdpReceived(Ptr<Packet> p, CustomHeader& ch) {
     dc_handler.cur_rate *= w;
     dc_handler.cur_rate += p->GetSize();
     dc_handler.cc_last_update = Simulator::Now();
-  
-    if (Settings::wan_cc_mode == Settings::WanCCMode::WAN_OPT
-        && dc_handler.update_and_check_cnp(p->GetSize())) {
+
+    const bool ecn_marked = ch.GetIpv4EcnBits() != 0;
+    if (Settings::wan_cc_mode == Settings::WanCCMode::WAN_OPT && m_gsccFair && ecn_marked) {
+        dc_handler.epoch_cnp_cnt++;
+        send_cnp(p, ch);
+        ClearIpv4EcnMark(p, ch);
+    } else if (Settings::wan_cc_mode == Settings::WanCCMode::WAN_OPT &&
+               dc_handler.update_and_check_cnp(p->GetSize())) {
         dc_handler.epoch_cnp_cnt++;
         send_cnp(p, ch);
     }

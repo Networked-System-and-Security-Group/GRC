@@ -1,0 +1,4 @@
+interface:
+  display_name: "NS-3 Deep Analyse"
+  short_description: "Guide for deep_analyse.py workflows"
+  default_prompt: "Use $ns3-deep-analyse to inspect a finished NS-3 run with analysis/deep_analyse.py."

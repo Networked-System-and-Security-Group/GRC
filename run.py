@@ -167,7 +167,7 @@ def main():
     parser.add_argument('--sw_monitoring_interval', dest='sw_monitoring_interval', action='store',
                         type=int, default=10000, help="interval of sampling statistics for queue status (default: 10000ns)")
     parser.add_argument('--my_flow', type=str, default='w-dynamic-100-150', help="use my own flow, if '', use default flow")#
-    parser.add_argument('--tcp_flow', type=str, default='config/w-tcp-100.txt', help="optional TCP flow file path; enables TCP/RDMA mixed-run")
+    parser.add_argument('--tcp_flow', type=str, default='', help="optional TCP flow file path; enables TCP/RDMA mixed-run")
     # NOTE: argparse with type=bool is almost always wrong (e.g. "0" becomes True).
     # Use 0/1 integers for stable CLI behavior.
     parser.add_argument('--debug', type=int, default=0, help="debug (0/1)")
@@ -201,7 +201,20 @@ def main():
         file.write(str(number))
         file.truncate()
 
-    config_ID = f"[{config_index}]-{datetime.now().strftime('%m-%d-%H:%M:%S')}" 
+    def _slugify_msg(raw: str) -> str:
+        raw = raw.strip()
+        if not raw:
+            return ""
+        raw = re.sub(r"\s+", "-", raw)
+        raw = re.sub(r"[^\w.-]+", "-", raw, flags=re.UNICODE)
+        raw = re.sub(r"-{2,}", "-", raw).strip("-_.")
+        return raw
+
+    msg = args.msg.strip()
+    config_ID = f"[{config_index}]-{datetime.now().strftime('%m%d-%H%M')}"
+    msg_tag = _slugify_msg(msg)
+    if msg_tag:
+        config_ID = f"{config_ID}-{msg_tag}"
     
     # while (isExist):
     #     config_ID = str(random.randrange(MAX_RAND_RANGE))
@@ -231,8 +244,6 @@ def main():
     intra_load = args.intra_load
     inter_load_all = args.inter_load_all
     wan_cc_mode = args.wan_cc_mode
-    msg = args.msg
-
     # Parse passthrough extras: KEY=VALUE (VALUE kept as raw string)
     extra_kv = {}
     for item in args.extra:

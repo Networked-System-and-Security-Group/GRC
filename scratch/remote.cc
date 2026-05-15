@@ -894,18 +894,31 @@ void init_nodeinfo_links() {
     // 处理广域网部分
     auto wan_switches = j["wan_switches"];
     auto wan_links = j["wan_links"];
-    auto wan_hosts = j["wan_hosts"]; // 获取所有 WAN Hosts 的列表
+    json wan_hosts = json::array();
+    if (j.contains("wan_hosts") && j["wan_hosts"].is_array()) {
+        wan_hosts = j["wan_hosts"];
+    }
 
-    int wan_host_idx = 0; // 全局索引，用于从 wan_hosts 数组中顺序取值
+    size_t wan_host_idx = 0; // 全局索引，用于从 wan_hosts 数组中顺序取值
+    size_t wan_hosts_per_switch = 0;
+    if (!wan_hosts.empty() && !wan_switches.empty()) {
+        if (j.contains("wan_host_num_per_switch")) {
+            wan_hosts_per_switch = j["wan_host_num_per_switch"].get<size_t>();
+        } else if (wan_hosts.size() % wan_switches.size() == 0) {
+            wan_hosts_per_switch = wan_hosts.size() / wan_switches.size();
+        } else {
+            // Preserve the historical 20-host behavior for older topologies with irregular metadata.
+            wan_hosts_per_switch = 20;
+        }
+    }
 
     for (const auto &wan_switch : wan_switches) {
         uint32_t wan_switch_id = wan_switch.get<uint32_t>();
         // 将 WAN Switch 配置为 WAN_SWITCH 类型
         nodeInfos[wan_switch_id].basic_config(wan_switch_id, wan_switch_id, NodeInfo::NodeType::WAN_SWITCH);
         
-        // 配置20个wan hosts
-        // 每个 WAN Switch 挂载 20 个 Host
-        for (int k = 0; k < 20; ++k) {
+        // 可选的 WAN hosts：老拓扑会给出一组顺序列表，新拓扑可以完全省略。
+        for (size_t k = 0; k < wan_hosts_per_switch; ++k) {
             if (wan_host_idx >= wan_hosts.size()) {
                 printf("Error: Not enough wan_hosts defined in topology json!\n");
                 break;

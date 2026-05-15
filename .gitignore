@@ -27,3 +27,4 @@ Notes.md
 *.csv
 package.json
 package-lock.json
+expr*

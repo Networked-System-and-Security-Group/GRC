@@ -239,7 +239,7 @@ namespace logfile {
         fprintf(buffer_monitor, "timestamp_ns,switch_id,next_hop,ingress_bytes,egress_bytes\n");
         OPEN_FILE(rate_monitor);
         fprintf(rate_monitor, "timestamp_ns,src_as,dst_as,real_rate,ref_rate\n");
-        OPEN_EMPTY_FILE(qp_rate_log);
+        OPEN_FILE(qp_rate_log);
         fprintf(qp_rate_log, "timestamp_ns,flow_id,rate,alpha,target_rate\n");
         OPEN_FILE(cnp_log);
         fprintf(cnp_log, "timestamp_ns,switch_id,flow_id\n");

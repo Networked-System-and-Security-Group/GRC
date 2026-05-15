@@ -29,8 +29,8 @@ python3 run.py \
 
 Important details:
 
-- `run.py` creates `mix/output/[id]-<timestamp>/` for every launch.
-- It writes the exact runtime config to `mix/output/[id]-.../config.txt`.
+- `run.py` creates `mix/output/[id]-MMDD-HHMM[-msg]/` for every launch.
+- It writes the exact runtime config to `mix/output/[id]-MMDD-HHMM[-msg]/config.txt`.
 - It launches `./waf --run 'scratch/remote <config>'` in the background unless `--stdout 1` or `--debug 1` is used.
 - If the target flow file does not exist, it auto-generates one with `config/wan_traffic_gen.py`.
 
@@ -62,7 +62,7 @@ Relevant files:
 
 - `mix/index.txt`: next experiment id
 - `mix/history.txt`: optional run messages written by `--msg`
-- `mix/output/[id]-.../config.log`: stdout and stderr from `scratch/remote`
+- `mix/output/[id]-MMDD-HHMM[-msg]/config.log`: stdout and stderr from `scratch/remote`
 
 `check.py` identifies `scratch/remote` processes for this repository only, then maps them back to `config.txt` paths under `mix/output/`.
 
@@ -84,4 +84,4 @@ If the task changes how an experiment is launched, `run.py` is the first file to
 - Be explicit about `--tcp_flow`. The current default is not empty, so omitting it can accidentally enable TCP+RDMA mixed runs.
 - Be explicit about `--my_flow`. The current default is also not empty, so omitting it does not necessarily regenerate a flow file from the load parameters.
 - `run.py` currently materializes config blocks only for `dcqcn` and `timely`. The enum map contains more names than the config-generation branch actually supports.
-- When reproducing a past run, the most trustworthy source is the archived `mix/output/[id]-.../config.txt`, not the shell command you think was used.
+- When reproducing a past run, the most trustworthy source is the archived `mix/output/[id]-MMDD-HHMM[-msg]/config.txt`, not the shell command you think was used.

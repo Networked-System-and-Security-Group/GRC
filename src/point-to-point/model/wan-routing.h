@@ -56,6 +56,7 @@ private:
     uint32_t m_hash_seed1, m_hash_seed2;
     void HandleUdpReceived(Ptr<Packet> p, CustomHeader& ch);
     void HandleAckReceived(Ptr<Packet> p, CustomHeader& ch);
+    bool m_gsccFair = false;
 
     /************数据平面延迟检测*********/
     static const inline int rtt_table_size = 64 * 16;

@@ -1477,7 +1477,7 @@ void RdmaHw::UpdateCwndGemini(Ptr<RdmaQueuePair> qp, uint32_t ackedBytes, uint32
     // Clamp bounds for the AI step size h = H * C * RTT / 8.
     // Prevents degenerate behaviour on very short or very long RTT paths.
     constexpr double kGeminiMinHBytes = 100.0;
-    constexpr double kGeminiMaxHBytes = 50000.0;
+    constexpr double kGeminiMaxHBytes = 500000.0;
 
     if (rttNs == 0) {
         return;

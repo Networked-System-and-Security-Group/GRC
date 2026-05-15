@@ -7,7 +7,7 @@ Open this document when the task is to inspect outputs, parse a finished run, ad
 Each run creates a directory under `mix/output/`:
 
 ```text
-mix/output/[id]-timestamp/
+mix/output/[id]-MMDD-HHMM[-msg]/
 ```
 
 Common files inside:

@@ -13,8 +13,8 @@ ROOT = Path(__file__).resolve().parent.parent
 # - gscc: WAN_CC_MODE=1
 # - dcqcn_ecn: WAN_CC_MODE=2 (WAN ECN on, no GSCC)
 PRESETS = {
-    #"wo_gscc": {"wan_cc_mode": 0, "dci": 0, "wan": 0},
-    #"inf_wo_gscc": {"wan_cc_mode": 0, "wan":4000},
+    "wo_gscc": {"wan_cc_mode": 0},
+    "inf_wo_gscc": {"wan_cc_mode": 0, "wan_buffer":4000, "dci_buffer":4000},
     "gscc": {"wan_cc_mode": 1},
     "gemini": {"wan_cc_mode": 0, "cc": "gemini"},
 }

@@ -1,0 +1,3 @@
+# source_path -> overleaf_dir
+expr-motivation/figures/moti-buffer.pdf -> figures/moti
+expr-motivation/figures/moti-cdf.pdf -> figures/moti
