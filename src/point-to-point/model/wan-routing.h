@@ -141,6 +141,10 @@ private:
 
     static Time epoch_duration;
     void controlplane_logic();
+    static bool s_w_k_update_scheduled;
+    static double s_w_k;
+    static std::vector<double> s_w_k_samples;
+    static void update_w_k();
 
     //Congestion control module
     void send_cnp(Ptr<Packet> p, CustomHeader& ch);
@@ -148,4 +152,3 @@ private:
 
 
 }  // namespace ns3
- 

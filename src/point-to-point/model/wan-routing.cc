@@ -15,6 +15,9 @@
 namespace ns3 {
 
 Time WanRouting::epoch_duration = MicroSeconds(1000); // 1ms
+bool WanRouting::s_w_k_update_scheduled = false;
+double WanRouting::s_w_k = 0;
+std::vector<double> WanRouting::s_w_k_samples;
 
 WanRouting::WanRouting() {
     // 初始化回调函数为空
@@ -115,6 +118,11 @@ void WanRouting::init() {
     m_epoch_start_time = Seconds(2);
     Simulator::Schedule(Seconds(2), &WanRouting::controlplane_logic, this);
     Simulator::Schedule(Seconds(2), &WanRouting::periodic_decrease_bytes, this);
+    if (Settings::GetRawParam("ENABLE_W", "TRUE") == "TRUE" && !s_w_k_update_scheduled) {
+        s_w_k = std::stod(Settings::GetRawParam("W_K", "0.0000001"));
+        s_w_k_update_scheduled = true;
+        Simulator::Schedule(Seconds(2) + MilliSeconds(20), &WanRouting::update_w_k);
+    }
 }
 
 void WanRouting::RouteInput(Ptr<Packet> p, CustomHeader& ch) {
@@ -290,9 +298,13 @@ void WanRouting::controlplane_logic() {
             double w = 1.0;
             if (Settings::GetRawParam("ENABLE_W", "FALSE") == "TRUE") {
                 double w_max = std::stod(Settings::GetRawParam("W_MAX", "4.0"));
-                double k = std::stod(Settings::GetRawParam("W_K", "0.0000001"));
+                double k = s_w_k;
                 w = std::pow(prob, 0.75) * dc_handler.ref_rate * k;
                 w = std::max(1.0, std::min(w, w_max));
+                double x = std::pow(prob, 0.75) * dc_handler.ref_rate;
+                if (x > 1e-9) {
+                    s_w_k_samples.push_back(x);
+                }
             }
             fprintf(logfile::cnp_trigger_prob_log, "%lu,%u,%u,%u,%lu,%lu,%.6f,%.6f\n",
                     Simulator::Now().GetNanoSeconds(),
@@ -333,6 +345,40 @@ void WanRouting::controlplane_logic() {
     fflush(logfile::rate_monitor);
 }
 
+void WanRouting::update_w_k() {
+    Simulator::Schedule(MilliSeconds(20), &WanRouting::update_w_k);
+    if (s_w_k_samples.empty()) {
+        return;
+    }
+    double w_max = std::stod(Settings::GetRawParam("W_MAX", "4.0"));
+    std::vector<std::pair<double, int> > events;
+    events.reserve(s_w_k_samples.size() * 2);
+    for (double x : s_w_k_samples) {
+        events.push_back(std::make_pair(1.0 / x, 1));
+        events.push_back(std::make_pair(w_max / x, -1));
+    }
+    s_w_k_samples.clear();
+
+    std::sort(events.begin(), events.end(), [](const std::pair<double, int>& a, const std::pair<double, int>& b) {
+        if (a.first != b.first) {
+            return a.first < b.first;
+        }
+        return a.second > b.second;
+    });
+
+    int max_overlap = 0;
+    int current_overlap = 0;
+    double best_k = s_w_k;
+    for (const auto& event : events) {
+        current_overlap += event.second;
+        if (current_overlap > max_overlap) {
+            max_overlap = current_overlap;
+            best_k = event.first;
+        }
+    }
+    s_w_k = best_k;
+}
+
 void WanRouting::DstDCHandler::update_ref_rate() {
     // update ref_rate
     int hsize = send_bytes_history.size();
@@ -367,7 +413,7 @@ void WanRouting::DstDCHandler::update_ref_rate() {
     double w = 1;
     if (Settings::GetRawParam("ENABLE_W", "FALSE") == "TRUE") {
         double w_max = std::stod(Settings::GetRawParam("W_MAX", "4.0"));
-        double k = std::stod(Settings::GetRawParam("W_K", "0.0000001"));
+        double k = WanRouting::s_w_k;
         double p = epoch_pkt_cnt ? static_cast<double>(epoch_cnp_cnt) / static_cast<double>(epoch_pkt_cnt) : 0.0;
         // w = clip(p^0.75 * pre_ref_rate * k, 1, w_max)
         w = std::pow(p, 0.75) * pre_ref_rate * k;
