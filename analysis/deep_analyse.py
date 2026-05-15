@@ -1490,8 +1490,8 @@ def get_basic_result(config_ids_str: str):
     return df
         
 def plot_motivation_expr():
-    a = get_analyser(863)
-    b = get_analyser(864)
+    a = get_analyser(40)
+    b = get_analyser(41)
     plt.figure(figsize=(5, 4), dpi=300)
     plot_cdf(a.get_inter_df()['fct_slowdown'], label='Disable-ECN')
     plot_cdf(b.get_inter_df()['fct_slowdown'], label='Enable-ECN')
@@ -1509,7 +1509,7 @@ def plot_motivation_expr():
     #plt.grid(True, linestyle='--', alpha=0.7)
 
 def plot_motivation_expr2():
-    get_analyser(863).plot_qp_rate([467])
+    get_analyser(40).plot_qp_rate([467])
 
 if __name__ == '__main__':
     pass

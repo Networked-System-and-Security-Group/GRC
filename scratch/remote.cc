@@ -237,6 +237,22 @@ void ScheduleFlowInputs() {
     Simulator::Schedule(Seconds(Settings::flowInfos.back().start_time) - Simulator::Now(), &ScheduleFlowInputs);
 }
 
+// 这是流完成后的回调处理函数
+void TcpFlowFinish(uint32_t flowId, uint32_t targetSize, Ptr<PacketSink> sink,
+    Ptr<const Packet> p, const Address& addr)
+{
+// 获取当前已接收的总字节数
+// 注意：GetTotalRx() 返回的是应用层收到的有效载荷字节数
+
+if (sink->GetTotalRx() >= targetSize) {
+std::cout << "TCP Flow " << flowId << " finished at "
+   << Simulator::Now().GetSeconds() << "s" << std::endl;
+
+// 可选：如果只需要触发一次，可以在这里断开 Trace（需要保存 Connection 对象），
+// 但鉴于 TCP 有序传输，通常 == targetSize 只会触发一次（除非有后续数据）。
+}
+}
+
 /**
  * Scheduling TCP flows from TCP_FLOW_FILE using ns-3 standard applications:
  * - Sender: BulkSendApplication (TcpSocketFactory)
@@ -263,15 +279,25 @@ void ScheduleTcpFlowInputs() {
         Time start = Simulator::Now();
         Time sinkStart = start;
         Time senderStart = start + NanoSeconds(1);
-
         PacketSinkHelper sinkHelper("ns3::TcpSocketFactory",
-                                   Address(InetSocketAddress(Ipv4Address::GetAny(), dport)));
+            Address(InetSocketAddress(Ipv4Address::GetAny(), dport)));
         ApplicationContainer sinkApps = sinkHelper.Install(n.Get(dst));
         sinkApps.Start(sinkStart);
         sinkApps.Stop(Seconds(100.0));
 
+        // ================== 新增代码开始 ==================
+        // 1. 获取 PacketSink 应用的指针
+        Ptr<PacketSink> sink = DynamicCast<PacketSink>(sinkApps.Get(0));
+
+        // 2. 绑定 Rx TraceSource
+        // "Rx" 是 PacketSink 在收到数据包时触发的 Trace
+        // 我们使用 MakeBoundCallback 将 flowInfo.idx, fsize 和 sink 指针传递给回调
+        sink->TraceConnectWithoutContext("Rx",
+        MakeBoundCallback(&TcpFlowFinish, flowInfo.idx, fsize, sink));
+        // ================== 新增代码结束 ==================
+
         BulkSendHelper senderHelper("ns3::TcpSocketFactory",
-                                   Address(InetSocketAddress(nodeInfos[dst].ip, dport)));
+                Address(InetSocketAddress(nodeInfos[dst].ip, dport)));
         senderHelper.SetAttribute("MaxBytes", UintegerValue(fsize));
         ApplicationContainer senderApps = senderHelper.Install(n.Get(src));
         senderApps.Start(senderStart);
