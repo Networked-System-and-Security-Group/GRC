@@ -4,7 +4,7 @@
 
 #include <string>
 #include <fstream>
-
+#include <cstdint>      // 用于 uint32_t 类型
 class RouteLogger {
 public:
     // 设置日志文件夹
