@@ -31,6 +31,7 @@ enum CcMode {
     CC_MODE_TIMELY = 7,
     CC_MODE_DCTCP = 8,
     CC_MODE_GEMINI = 9,
+    CC_MODE_UNOCC = 10,
     CC_MODE_UNDEFINED = 0,
 };
 
@@ -65,6 +66,7 @@ class RdmaQueuePair : public Object {
     uint32_t m_win;       // bound of on-the-fly packets
     uint64_t m_baseRtt;   // base RTT of this qp
     DataRate m_max_rate;  // max rate
+    uint32_t m_ccMode;
     bool m_var_win;       // variable window size
     bool m_useExplicitWin;
     uint64_t m_ccWin;
@@ -131,6 +133,29 @@ class RdmaQueuePair : public Object {
     } gemini;
 
     struct {
+        double m_cwnd;
+        double m_aiBytes;
+        double m_kBytes;
+        double m_mdGainEcn;
+        double m_ecnFractionEwma;
+        uint64_t m_baseRtt;
+        uint64_t m_lastRtt;
+        uint64_t m_epochPeriodNs;
+        uint64_t m_epochStartTs;
+        uint64_t m_epochEndTs;
+        uint64_t m_epochAckedBytes;
+        double m_epochMarkedBytes;
+        uint64_t m_qaPeriodNs;
+        uint64_t m_qaEndTimeNs;
+        uint64_t m_qaAckedBytes;
+        uint64_t m_skipUntilNs;
+        uint64_t m_lastAckSeq;
+        bool m_qaEnabled;
+        bool m_epochInitialized;
+        bool m_initialized;
+    } uno;
+
+    struct {
         bool m_enabled;
         uint32_t m_bdp;          // m_irn_maxAck_
         uint32_t m_highest_ack;  // m_irn_maxAck_
@@ -161,6 +186,7 @@ class RdmaQueuePair : public Object {
     void SetSize(uint64_t size);
     void SetWin(uint32_t win);
     void SetBaseRtt(uint64_t baseRtt);
+    void SetCcMode(uint32_t ccMode);
     void SetVarWin(bool v);
     void SetFlowId(int32_t v);
     void SetTimeout(Time v);
@@ -206,8 +232,8 @@ class RdmaRxQueuePair : public Object {  // Rx side queue pair
     struct ECNAccount {
         uint16_t qIndex;
         uint8_t ecnbits;
-        uint16_t qfb;
-        uint16_t total;
+        uint32_t qfb;
+        uint32_t total;
 
         ECNAccount() { memset(this, 0, sizeof(ECNAccount)); }
     };

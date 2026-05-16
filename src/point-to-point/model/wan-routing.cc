@@ -368,7 +368,7 @@ void WanRouting::controlplane_logic() {
             const uint64_t cnp_cnt = dc_handler.epoch_cnp_cnt;
             const double prob = (pkt_cnt == 0) ? 0.0 : (static_cast<double>(cnp_cnt) / static_cast<double>(pkt_cnt));
             double w = 1.0;
-            if (Settings::GetRawParam("ENABLE_W", "FALSE") == "TRUE") {
+            if (Settings::GetRawParam("ENABLE_W", kEnableWDefault) == "TRUE") {
                 double w_max = std::stod(Settings::GetRawParam("W_MAX", kWMaxDefault));
                 double k = s_w_k;
                 w = std::pow(prob, 0.75) * dc_handler.ref_rate * k;

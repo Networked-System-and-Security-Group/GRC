@@ -38,6 +38,7 @@ RdmaQueuePair::RdmaQueuePair(uint16_t pg, Ipv4Address _sip, Ipv4Address _dip, ui
     m_win = 0;
     m_baseRtt = 0;
     m_max_rate = 0;
+    m_ccMode = CC_MODE_UNDEFINED;
     m_var_win = false;
     m_useExplicitWin = false;
     m_ccWin = 0;
@@ -79,6 +80,27 @@ RdmaQueuePair::RdmaQueuePair(uint16_t pg, Ipv4Address _sip, Ipv4Address _dip, ui
     gemini.m_ecnBytes = 0;
     gemini.m_ackedBytes = 0;
 
+    uno.m_cwnd = 0;
+    uno.m_aiBytes = 0;
+    uno.m_kBytes = 0;
+    uno.m_mdGainEcn = 0;
+    uno.m_ecnFractionEwma = 0;
+    uno.m_baseRtt = 0;
+    uno.m_lastRtt = 0;
+    uno.m_epochPeriodNs = 0;
+    uno.m_epochStartTs = 0;
+    uno.m_epochEndTs = 0;
+    uno.m_epochAckedBytes = 0;
+    uno.m_epochMarkedBytes = 0;
+    uno.m_qaPeriodNs = 0;
+    uno.m_qaEndTimeNs = 0;
+    uno.m_qaAckedBytes = 0;
+    uno.m_skipUntilNs = 0;
+    uno.m_lastAckSeq = 0;
+    uno.m_qaEnabled = false;
+    uno.m_epochInitialized = false;
+    uno.m_initialized = false;
+
     irn.m_enabled = false;
     irn.m_highest_ack = 0;
     irn.m_max_seq = 0;
@@ -92,6 +114,8 @@ void RdmaQueuePair::SetSize(uint64_t size) { m_size = size; }
 void RdmaQueuePair::SetWin(uint32_t win) { m_win = win; }
 
 void RdmaQueuePair::SetBaseRtt(uint64_t baseRtt) { m_baseRtt = baseRtt; }
+
+void RdmaQueuePair::SetCcMode(uint32_t ccMode) { m_ccMode = ccMode; }
 
 void RdmaQueuePair::SetVarWin(bool v) { m_var_win = v; }
 
@@ -149,6 +173,9 @@ bool RdmaQueuePair::IsWinBound() {
 
 uint64_t RdmaQueuePair::GetWin() {
     if (m_useExplicitWin) return m_ccWin;
+    if (m_ccMode == CC_MODE_UNOCC && uno.m_initialized && uno.m_cwnd > 0) {
+        return std::max<uint64_t>(1, static_cast<uint64_t>(uno.m_cwnd));
+    }
     if (m_win == 0) return 0;
     uint64_t w;
     if (m_var_win) {

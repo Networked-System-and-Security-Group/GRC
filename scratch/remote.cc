@@ -98,6 +98,21 @@ bool rate_bound = true;
 unordered_map<uint64_t, uint32_t> rate2kmax, rate2kmin;
 unordered_map<uint64_t, double> rate2pmax;
 
+double uno_ai_factor = 0.001;
+double uno_beta = 0.5;
+double uno_ewma_gain = 0.65;
+double uno_k = -1.0;
+double uno_gentle_scale = 0.3;
+double uno_delay_threshold = 0.05;
+double uno_epoch_rtt_factor = 2.0;
+uint64_t uno_intra_rtt_ns = 0;
+uint32_t uno_phantom_enabled = 1;
+uint32_t uno_phantom_size_kb = 50150;
+uint32_t uno_phantom_kmin_pct = 5;
+uint32_t uno_phantom_kmax_pct = 60;
+double uno_phantom_pmax = 1.0;
+double uno_phantom_slowdown_pct = 10.0;
+
 // config of link-down scenario, ACK priority, and buffer
 uint32_t buffer_size = 0;  // 0 to set buffer size automatically
 uint32_t dci_buffer_size = 0;  // MB, 0 keeps default
@@ -350,7 +365,13 @@ void m_QP_rate_monitoring()
                 uint64_t m_bps = m_rate.GetBitRate();
                 auto& flowInfo = Settings::flowInfos[flowid];
                 if (Settings::nodeInfos[flowInfo.src].as_id != Settings::nodeInfos[flowInfo.dst].as_id) {
-                    fprintf(qp_rate_log, "%lu,%u,%lu,%lf,%lu\n", now, flowid, m_bps / 8, qp.second->mlx.m_alpha, qp.second->mlx.m_targetRate.GetBitRate() / 8);
+                    if (cc_mode == 10) {
+                        fprintf(qp_rate_log, "%lu,%u,%lu,%lf,%lu\n", now, flowid, m_bps / 8,
+                                qp.second->uno.m_ecnFractionEwma, (uint64_t)qp.second->uno.m_cwnd);
+                    } else {
+                        fprintf(qp_rate_log, "%lu,%u,%lu,%lf,%lu\n", now, flowid, m_bps / 8,
+                                qp.second->mlx.m_alpha, qp.second->mlx.m_targetRate.GetBitRate() / 8);
+                    }
                 }
                 // std::cout << "bps: " << now << flowid << m_bps << std::endl;
             }
@@ -1213,6 +1234,48 @@ int main(int argc, char *argv[]) {
             } else if (key.compare("DCTCP_RATE_AI") == 0) {
                 conf >> dctcp_rate_ai;
                 std::cerr << "DCTCP_RATE_AI\t\t\t\t" << dctcp_rate_ai << "\n";
+            } else if (key.compare("UNO_AI_FACTOR") == 0) {
+                conf >> uno_ai_factor;
+                std::cerr << "UNO_AI_FACTOR\t\t\t" << uno_ai_factor << "\n";
+            } else if (key.compare("UNO_BETA") == 0) {
+                conf >> uno_beta;
+                std::cerr << "UNO_BETA\t\t\t" << uno_beta << "\n";
+            } else if (key.compare("UNO_EWMA_GAIN") == 0) {
+                conf >> uno_ewma_gain;
+                std::cerr << "UNO_EWMA_GAIN\t\t\t" << uno_ewma_gain << "\n";
+            } else if (key.compare("UNO_K") == 0) {
+                conf >> uno_k;
+                std::cerr << "UNO_K\t\t\t\t" << uno_k << "\n";
+            } else if (key.compare("UNO_GENTLE_SCALE") == 0) {
+                conf >> uno_gentle_scale;
+                std::cerr << "UNO_GENTLE_SCALE\t\t" << uno_gentle_scale << "\n";
+            } else if (key.compare("UNO_DELAY_THRESHOLD") == 0) {
+                conf >> uno_delay_threshold;
+                std::cerr << "UNO_DELAY_THRESHOLD\t\t" << uno_delay_threshold << "\n";
+            } else if (key.compare("UNO_EPOCH_RTT_FACTOR") == 0) {
+                conf >> uno_epoch_rtt_factor;
+                std::cerr << "UNO_EPOCH_RTT_FACTOR\t\t" << uno_epoch_rtt_factor << "\n";
+            } else if (key.compare("UNO_INTRA_RTT_NS") == 0) {
+                conf >> uno_intra_rtt_ns;
+                std::cerr << "UNO_INTRA_RTT_NS\t\t" << uno_intra_rtt_ns << "\n";
+            } else if (key.compare("UNO_PHANTOM_ENABLED") == 0) {
+                conf >> uno_phantom_enabled;
+                std::cerr << "UNO_PHANTOM_ENABLED\t\t" << uno_phantom_enabled << "\n";
+            } else if (key.compare("UNO_PHANTOM_SIZE_KB") == 0) {
+                conf >> uno_phantom_size_kb;
+                std::cerr << "UNO_PHANTOM_SIZE_KB\t\t" << uno_phantom_size_kb << "\n";
+            } else if (key.compare("UNO_PHANTOM_KMIN_PCT") == 0) {
+                conf >> uno_phantom_kmin_pct;
+                std::cerr << "UNO_PHANTOM_KMIN_PCT\t\t" << uno_phantom_kmin_pct << "\n";
+            } else if (key.compare("UNO_PHANTOM_KMAX_PCT") == 0) {
+                conf >> uno_phantom_kmax_pct;
+                std::cerr << "UNO_PHANTOM_KMAX_PCT\t\t" << uno_phantom_kmax_pct << "\n";
+            } else if (key.compare("UNO_PHANTOM_PMAX") == 0) {
+                conf >> uno_phantom_pmax;
+                std::cerr << "UNO_PHANTOM_PMAX\t\t" << uno_phantom_pmax << "\n";
+            } else if (key.compare("UNO_PHANTOM_SLOWDOWN_PCT") == 0) {
+                conf >> uno_phantom_slowdown_pct;
+                std::cerr << "UNO_PHANTOM_SLOWDOWN_PCT\t" << uno_phantom_slowdown_pct << "\n";
             } else if (key.compare("KMAX_MAP") == 0) {
                 int n_k;
                 conf >> n_k;
@@ -1338,7 +1401,7 @@ int main(int argc, char *argv[]) {
      */
     IntHop::multi = int_multi;
     // IntHeader::mode
-    if (cc_mode == 7 || cc_mode == 9)  // timely/gemini, use ts
+    if (cc_mode == 7 || cc_mode == 9 || cc_mode == 10)  // timely/gemini/unocc use packet timestamps
         IntHeader::mode = 1;
     else if (cc_mode == 3)  // hpcc, use int
         IntHeader::mode = 0;
@@ -1511,6 +1574,11 @@ int main(int argc, char *argv[]) {
                 // set ecn
                 uint64_t rate = dev->GetDataRate().GetBitRate();
                 sw->m_mmu->ConfigEcn(j, rate2kmin.at(rate), rate2kmax.at(rate), rate2pmax.at(rate));
+                if (cc_mode == 10 && uno_phantom_enabled) {
+                    sw->m_mmu->ConfigUnoPhantom(j, uno_phantom_size_kb * 1024,
+                                                uno_phantom_kmin_pct, uno_phantom_kmax_pct,
+                                                uno_phantom_pmax, uno_phantom_slowdown_pct, rate);
+                }
                 // set pfc
                 uint64_t delay = DynamicCast<QbbChannel>(dev->GetChannel())->GetDelay().GetTimeStep();
                 uint32_t headroom = rate * delay / 8 / 1000000000 * 2 + 2 * sw->m_mmu->MTU;
@@ -1533,6 +1601,11 @@ int main(int argc, char *argv[]) {
                 uint64_t rate = dev->GetDataRate().GetBitRate();
                 //sw->m_mmu->ConfigEcn(j, rate2kmin.at(rate), rate2kmax.at(rate), rate2pmax.at(rate));
                 sw->m_mmu->ConfigEcn(j, 1000, 20000, 0.15);
+                if (cc_mode == 10 && uno_phantom_enabled) {
+                    sw->m_mmu->ConfigUnoPhantom(j, uno_phantom_size_kb * 1024,
+                                                uno_phantom_kmin_pct, uno_phantom_kmax_pct,
+                                                uno_phantom_pmax, uno_phantom_slowdown_pct, rate);
+                }
                 // set pfc
                 uint64_t delay = DynamicCast<QbbChannel>(dev->GetChannel())->GetDelay().GetTimeStep();
                 uint32_t headroom = rate * delay / 8 / 1000000000 * 2 + 2 * sw->m_mmu->MTU;
@@ -1561,6 +1634,11 @@ int main(int argc, char *argv[]) {
                 uint64_t rate = dev->GetDataRate().GetBitRate();
                 //sw->m_mmu->ConfigEcn(j, rate2kmin.at(rate), rate2kmax.at(rate), rate2pmax.at(rate));
                 sw->m_mmu->ConfigEcn(j, 1000, 20000, 0.15);
+                if (cc_mode == 10 && uno_phantom_enabled) {
+                    sw->m_mmu->ConfigUnoPhantom(j, uno_phantom_size_kb * 1024,
+                                                uno_phantom_kmin_pct, uno_phantom_kmax_pct,
+                                                uno_phantom_pmax, uno_phantom_slowdown_pct, rate);
+                }
                 // set pfc
                 //uint64_t delay = DynamicCast<QbbChannel>(dev->GetChannel())->GetDelay().GetTimeStep();
                 //uint32_t headroom = rate * delay / 8 / 1000000000 * 2 + 2 * sw->m_mmu->MTU;
@@ -1635,6 +1713,16 @@ int main(int argc, char *argv[]) {
             rdmaHw->SetAttribute("TargetUtil", DoubleValue(u_target));
             rdmaHw->SetAttribute("RateBound", BooleanValue(rate_bound));
             rdmaHw->SetAttribute("DctcpRateAI", DataRateValue(DataRate(dctcp_rate_ai)));
+            if (cc_mode == 10) {
+                rdmaHw->SetAttribute("UnoAiFactor", DoubleValue(uno_ai_factor));
+                rdmaHw->SetAttribute("UnoBeta", DoubleValue(uno_beta));
+                rdmaHw->SetAttribute("UnoEwmaGain", DoubleValue(uno_ewma_gain));
+                rdmaHw->SetAttribute("UnoK", DoubleValue(uno_k));
+                rdmaHw->SetAttribute("UnoGentleScale", DoubleValue(uno_gentle_scale));
+                rdmaHw->SetAttribute("UnoDelayThreshold", DoubleValue(uno_delay_threshold));
+                rdmaHw->SetAttribute("UnoEpochRttFactor", DoubleValue(uno_epoch_rtt_factor));
+                rdmaHw->SetAttribute("UnoIntraRttNs", UintegerValue(uno_intra_rtt_ns));
+            }
             rdmaHw->SetAttribute("IrnEnable", BooleanValue(enable_irn));
             // topo2bdpMap (e.g., longest BDP 25000: 8us * 25Gbps)
             rdmaHw->SetAttribute("IrnRtoHigh", TimeValue(MicroSeconds(320)));  // 1930
@@ -1743,6 +1831,28 @@ int main(int argc, char *argv[]) {
     }
     std::cout << "server_rtt_mon_interval: " << server_rtt_mon_interval << std::endl;
     fprintf(stderr, "maxRtt: %lu, maxBdp: %lu\n", maxRtt, maxBdp);
+    if (cc_mode == 10 && uno_intra_rtt_ns == 0) {
+        for (uint32_t i = 0; i < nodeInfos.size(); i++) {
+            if (nodeInfos[i].node_type != NodeInfo::NodeType::HOST) continue;
+            for (uint32_t j = 0; j < nodeInfos.size(); j++) {
+                if (i == j || nodeInfos[j].node_type != NodeInfo::NodeType::HOST) continue;
+                if (nodeInfos[i].as_id == nodeInfos[j].as_id && pairRtt[n.Get(i)][n.Get(j)] > 0) {
+                    if (uno_intra_rtt_ns == 0 || pairRtt[n.Get(i)][n.Get(j)] < uno_intra_rtt_ns) {
+                        uno_intra_rtt_ns = pairRtt[n.Get(i)][n.Get(j)];
+                    }
+                }
+            }
+        }
+        std::cerr << "UNO_INTRA_RTT_NS derived\t" << uno_intra_rtt_ns << "\n";
+    }
+    if (cc_mode == 10) {
+        for (uint32_t i = 0; i < nodeInfos.size(); i++) {
+            if (n.Get(i)->GetNodeType() == 0) {
+                n.Get(i)->GetObject<RdmaDriver>()->m_rdma->SetAttribute("UnoIntraRttNs",
+                                                                        UintegerValue(uno_intra_rtt_ns));
+            }
+        }
+    }
 
     std::cout << "Configuring switches" << std::endl;
     /* config ToR Switch, init TorSwitch_nodelist, hostId2ToRlist*/

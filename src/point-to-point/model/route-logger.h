@@ -2,6 +2,7 @@
 #ifndef ROUTE_LOGGER_H
 #define ROUTE_LOGGER_H
 
+#include <cstdint>
 #include <string>
 #include <fstream>
 #include <cstdint>      // 用于 uint32_t 类型
