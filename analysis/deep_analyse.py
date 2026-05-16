@@ -1247,7 +1247,10 @@ class Analyser:
         with open(op.join(self.dir, 'config.txt')) as f:
             lines = f.readlines()
             lines = [l.strip() for l in lines if l.strip()]
-            self.config = {l.split()[0] : l.split(maxsplit=2)[-1] for l in lines}
+            self.config = {}
+            for line in lines:
+                parts = line.split(maxsplit=1)
+                self.config[parts[0]] = parts[1] if len(parts) > 1 else ''
 
     def rtt_detail(self):
         file_path = op.join(self.dir, 'wan_log')
@@ -1473,16 +1476,20 @@ def get_basic_result(config_ids_str: str):
     results = []
     for ana in analyser_iter(config_ids_str):
         try:
+            msg = ana.config.get('MSG', '')
+            if msg == 'MSG':
+                msg = ''
             avg_vals, avg_intra, avg_inter = ana.get_avg_fct()
             p99_vals, p99_intra, p99_inter = ana.get_p99_fct()
             results.append({
                 'ID': ana.id,
+                'MSG': msg,
                 'Avg_FCT': avg_vals,
                 'Avg_Intra_FCT': avg_intra,
                 'Avg_Inter_FCT': avg_inter,
                 'P99_FCT': p99_vals,
                 'P99_Intra_FCT': p99_intra,
-                'P99_Inter_FCT': p99_inter
+                'P99_Inter_FCT': p99_inter,
             })
         except Exception as e:
             print(f'Error processing {ana.id}: {e}')
