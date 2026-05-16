@@ -28,3 +28,4 @@ Notes.md
 package.json
 package-lock.json
 expr*
+venv/*
