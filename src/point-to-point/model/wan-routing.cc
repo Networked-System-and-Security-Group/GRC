@@ -23,6 +23,7 @@ constexpr const char* kWMaxDefault = "4.0";
 constexpr const char* kWKDefault = "0.0000001";
 constexpr const char* kInvDeltaDefault = "20971520";  // 1/20MB
 constexpr const char* kBetaDefault = "0.3";
+constexpr const char* kGuaranteedRateFactorDefault = "0.3";
 constexpr const char* kEnableVDefault = "TRUE";
 constexpr const char* kWanEpochUsDefault = "1000";  // 1ms
 constexpr const char* kEnable2LayerHashDefault = "TRUE";
@@ -106,7 +107,9 @@ WanRouting::WanRouting() {
 void WanRouting::DstDCHandler::Init(WanRouting* wan_routing, int64_t max_rate) {
     m_wanRouting = wan_routing;
     this->max_rate = max_rate;
-    guaranteed_rate = static_cast<int64_t>(max_rate * 0.3);
+    const double guaranteed_rate_factor =
+        std::stod(Settings::GetRawParam("GUARANTEED_RATE_FACTOR", kGuaranteedRateFactorDefault));
+    guaranteed_rate = static_cast<int64_t>(max_rate * guaranteed_rate_factor);
 
     sensitive_rtt = MicroSeconds(0);
     last_update_time = Seconds(0);
@@ -603,12 +606,13 @@ void WanRouting::DstDCHandler::update_ref_rate() {
 
     //Get w
     double w = 1;
-        if (Settings::GetRawParam("ENABLE_W", kEnableWDefault) == "TRUE") {
-            double w_max = std::stod(Settings::GetRawParam("W_MAX", kWMaxDefault));
-        double k = WanRouting::s_w_k;
+    double k_used = std::numeric_limits<double>::quiet_NaN();
+    if (Settings::GetRawParam("ENABLE_W", kEnableWDefault) == "TRUE") {
+        double w_max = std::stod(Settings::GetRawParam("W_MAX", kWMaxDefault));
+        k_used = WanRouting::s_w_k;
         double p = epoch_pkt_cnt ? static_cast<double>(epoch_cnp_cnt) / static_cast<double>(epoch_pkt_cnt) : 0.0;
         // w = clip(p^0.75 * pre_ref_rate * k, 1, w_max)
-        w = std::pow(p, 0.75) * pre_ref_rate * k;
+        w = std::pow(p, 0.75) * pre_ref_rate * k_used;
         w = std::max(1.0, std::min(w, w_max));
     }
 
@@ -663,9 +667,9 @@ void WanRouting::DstDCHandler::update_ref_rate() {
     }
     printf(
         "cur_rtt: %.2lfms, min_rtt: %.2lfms, queue_delay: %.2lfms, target_rate: %.2lfGB/s, step: %.2lfGB/s "
-        "state: %d, consecutive: %u ",
+        "state: %d, consecutive: %u, w: %.6f, k: %.9g ",
         cur_rtt.GetSeconds() * 1000, min_rtt.GetSeconds() * 1000, queue_delay.GetSeconds() * 1000,
-        target_rate / 1e9, step / 1e9, (int)rate_change_state, consecutive_state_epochs);
+        target_rate / 1e9, step / 1e9, (int)rate_change_state, consecutive_state_epochs, w, k_used);
 
     if (flag && ref_rate > upper_rate) {
         ref_rate = upper_rate + (ref_rate - upper_rate) * 0.8;
