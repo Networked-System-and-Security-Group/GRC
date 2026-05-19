@@ -27,6 +27,49 @@ constexpr const char* kEnableVDefault = "TRUE";
 constexpr const char* kWanEpochUsDefault = "1000";  // 1ms
 constexpr const char* kEnable2LayerHashDefault = "TRUE";
 constexpr const char* kGsccFairDefault = "FALSE";
+constexpr const char* kGsccAckTsDefault = "TRUE";
+
+class GSCCAckTag : public Tag {
+public:
+    GSCCAckTag() = default;
+
+    static TypeId GetTypeId(void) {
+        static TypeId tid =
+            TypeId("ns3::GSCCAckTag").SetParent<Tag>().AddConstructor<GSCCAckTag>();
+        return tid;
+    }
+
+    TypeId GetInstanceTypeId(void) const override {
+        return GetTypeId();
+    }
+
+    uint32_t GetSerializedSize(void) const override {
+        return sizeof(m_timestampNs);
+    }
+
+    void Serialize(TagBuffer i) const override {
+        i.WriteU64(m_timestampNs);
+    }
+
+    void Deserialize(TagBuffer i) override {
+        m_timestampNs = i.ReadU64();
+    }
+
+    void Print(std::ostream& os) const override {
+        os << "GSCCAckTag timestampNs=" << m_timestampNs;
+    }
+
+    void SetTimestampNs(uint64_t timestampNs) {
+        m_timestampNs = timestampNs;
+    }
+
+    uint64_t GetTimestampNs() const {
+        return m_timestampNs;
+    }
+
+private:
+    uint64_t m_timestampNs = 0;
+};
 
 bool IsEnabledRawParam(const std::string& value) {
     return value == "TRUE" || value == "true" || value == "1" || value == "YES" ||
@@ -71,7 +114,9 @@ void WanRouting::DstDCHandler::Init(WanRouting* wan_routing, int64_t max_rate) {
 
     rtt_sum = Seconds(0);
     rtt_num = 0;
+    min_one_way_delay = Seconds(0);
     rtt_miss_counter = 0;
+    m_ackTsMode = wan_routing->m_ackTsMode;
     send_bytes_history.clear();
     rtt_history.clear();
 
@@ -103,6 +148,22 @@ void WanRouting::DstDCHandler::record_rtt(Time rtt) {
     last_update_time = Simulator::Now();
     double weight1 = std::min(delta_t.GetSeconds() / rtt_tau.GetSeconds(), 1.0);
     sensitive_rtt = Seconds((1 - weight1) * sensitive_rtt.GetSeconds() + weight1 * rtt.GetSeconds());
+}
+
+Time WanRouting::DstDCHandler::record_one_way_delay(Time one_way_delay) {
+    // rtt_sum/rtt_num: per-epoch one-way delay accumulator (ACK_TS mode).
+    // min_one_way_delay is derived from per-epoch averages in update_ref_rate, not here.
+    rtt_sum += one_way_delay;
+    rtt_num++;
+
+    // Use 2x current sample as a synthetic RTT proxy for the sensitive_rtt EWMA.
+    Time synthetic_rtt = one_way_delay + one_way_delay;
+    Time delta_t = Simulator::Now() - last_update_time;
+    last_update_time = Simulator::Now();
+    double weight1 = std::min(delta_t.GetSeconds() / rtt_tau.GetSeconds(), 1.0);
+    sensitive_rtt = Seconds((1 - weight1) * sensitive_rtt.GetSeconds() +
+                            weight1 * synthetic_rtt.GetSeconds());
+    return synthetic_rtt;
 }
 
 int64_t WanRouting::DstDCHandler::get_std_bytes() const {
@@ -153,6 +214,7 @@ void WanRouting::init() {
     if (m_gsccFair) {
         printf("[Info] WanRouting on switch %u enables GSCC_FAIR mode\n", m_switch_id);
     }
+    m_ackTsMode = IsEnabledRawParam(Settings::GetRawParam("GSCC_ACK_TS", kGsccAckTsDefault));
 
     for (const auto& [dst_as, next_hops] : Settings::wan_routing[m_switch_id]) {
         if (next_hops.empty()) {
@@ -276,6 +338,12 @@ void WanRouting::HandleAckReceived(Ptr<Packet> p, CustomHeader& ch) {
     uint32_t src_as = Settings::nodeInfos[Settings::hostIp2IdMap[ch.sip]].as_id;
     uint32_t cur_as = Settings::nodeInfos[m_switch_id].as_id;
     if (src_as == cur_as) {
+        if (m_ackTsMode) {
+            GSCCAckTag tag;
+            p->RemovePacketTag(tag);
+            tag.SetTimestampNs(Simulator::Now().GetNanoSeconds());
+            p->AddPacketTag(tag);
+        }
         m_switchSendToDevCallback(p, ch);
         return;
     }
@@ -291,6 +359,12 @@ void WanRouting::HandleAckReceived(Ptr<Packet> p, CustomHeader& ch) {
         return;
     }
     auto& dcHandler = dcIt->second;
+    // Only the DCI adjacent to the data source's DC (terminal DCI) should strip and
+    // consume the GSCC ACK timestamp tag. Relay DCIs must leave it intact for the terminal.
+    const bool is_terminal_dci = (cur_as == Settings::nodeInfos[Settings::hostIp2IdMap[ch.dip]].as_id);
+    GSCCAckTag ackTag;
+    const bool hasAckTag = (m_ackTsMode && is_terminal_dci) && p->RemovePacketTag(ackTag);
+
     uint32_t hashed_seq = Hash5tupleSeq(ch.dip, ch.sip, ch.ack.dport, ch.ack.sport, ch.ack.pg, ch.ack.seq);
     uint32_t index;
     if (Settings::GetRawParam("ENABLE_2LAYER_HASH", kEnable2LayerHashDefault) == "TRUE") {
@@ -303,6 +377,27 @@ void WanRouting::HandleAckReceived(Ptr<Packet> p, CustomHeader& ch) {
     //    Simulator::Now().GetNanoSeconds(), cur_as, src_as, index, hashed_seq);
     if (rtt_table[index].hashed_seq == hashed_seq) {
         Time rtt = Simulator::Now() - rtt_table[index].timestamp;
+        bool valid_rtt_sample = true;
+        if (m_ackTsMode && is_terminal_dci) {
+            assert(hasAckTag && ackTag.GetTimestampNs() > 0);
+            Time remote_ack_timestamp = NanoSeconds(ackTag.GetTimestampNs());
+            if (remote_ack_timestamp >= rtt_table[index].timestamp) {
+                Time one_way_delay = remote_ack_timestamp - rtt_table[index].timestamp;
+                rtt = dcHandler.record_one_way_delay(one_way_delay);
+                valid_rtt_sample = false;
+            } else {
+                printf("[Warn][%ld] GSCCAckTag timestamp is older than source timestamp: switch %u, %u->%u, pkt[%u, %u], tag %lu, entry %ld\n",
+                    Simulator::Now().GetNanoSeconds(),
+                    m_switch_id,
+                    src_as,
+                    cur_as,
+                    Settings::get_flowid(p),
+                    ch.ack.seq,
+                    ackTag.GetTimestampNs(),
+                    rtt_table[index].timestamp.GetNanoSeconds());
+                valid_rtt_sample = false;
+            }
+        }
         if (rtt < MicroSeconds(100)) {
             printf("[Warn][%ld] RTT too small: %lf us, switch %u, %u->%u, pkt[%u, %u], index %u, hashed_seq %x, entry[%x, %ld]\n",
                 Simulator::Now().GetNanoSeconds(),
@@ -317,7 +412,9 @@ void WanRouting::HandleAckReceived(Ptr<Packet> p, CustomHeader& ch) {
                 rtt_table[index].hashed_seq,
                 rtt_table[index].timestamp.GetNanoSeconds());
         }
-        dcHandler.record_rtt(rtt);
+        if (valid_rtt_sample) {
+            dcHandler.record_rtt(rtt);
+        }
         rtt_table[index].timestamp = Seconds(0);
         rtt_table[index].hashed_seq = 0;
     }
@@ -347,8 +444,11 @@ void WanRouting::controlplane_logic() {
 
         //logging
         const double measured_rtt_ms = (dc_handler.rtt_num > 0)
-                                           ? (dc_handler.rtt_sum.GetSeconds() / dc_handler.rtt_num) * 1000.0
-                                           : std::numeric_limits<double>::quiet_NaN();
+            ? (m_ackTsMode
+                ? (dc_handler.min_one_way_delay.GetSeconds() +
+                   dc_handler.rtt_sum.GetSeconds() / dc_handler.rtt_num) * 1000.0
+                : dc_handler.rtt_sum.GetSeconds() / dc_handler.rtt_num * 1000.0)
+            : std::numeric_limits<double>::quiet_NaN();
         fprintf(logfile::rtt_log,
             "%" PRIu64 ",%" PRIu32 ",%" PRIu32 ",%" PRIu32 ",%.3f,%.3f,%" PRIu32 "\n",
             static_cast<uint64_t>(Simulator::Now().GetNanoSeconds()), m_switch_id, dst_as,
@@ -405,6 +505,7 @@ void WanRouting::controlplane_logic() {
             
             dc_handler.rtt_sum = Seconds(0);
             dc_handler.rtt_num = 0;
+            // min_one_way_delay is a running minimum; not reset per epoch.
         }
         dc_handler.total_send_bytes = 0;
 
@@ -478,9 +579,21 @@ void WanRouting::DstDCHandler::update_ref_rate() {
             rtt_miss_counter, pre_ref_rate / 1e9, ref_rate / 1e9);
         return;
     }
-    Time cur_rtt = Seconds(rtt_sum.GetSeconds() / rtt_num);
-    rtt_history.push_back(cur_rtt);
-    Time min_rtt = *std::min_element(rtt_history.begin(), rtt_history.end());
+    Time cur_rtt;
+    Time min_rtt;
+    if (m_ackTsMode) {
+        // rtt_history stores per-epoch average one-way delays in ACK_TS mode (same structure as legacy).
+        // min_one_way_delay = min of those epoch averages, not a per-packet minimum.
+        Time cur_one_way_delay = Seconds(rtt_sum.GetSeconds() / rtt_num);
+        rtt_history.push_back(cur_one_way_delay);
+        min_one_way_delay = *std::min_element(rtt_history.begin(), rtt_history.end());
+        min_rtt = NanoSeconds(min_one_way_delay.GetNanoSeconds() * 2);  // assumes symmetric path
+        cur_rtt = min_one_way_delay + cur_one_way_delay;
+    } else {
+        cur_rtt = Seconds(rtt_sum.GetSeconds() / rtt_num);
+        rtt_history.push_back(cur_rtt);
+        min_rtt = *std::min_element(rtt_history.begin(), rtt_history.end());
+    }
     rtt_miss_counter = 0;
     double epochs_per_rtt = min_rtt.GetSeconds() / WanRouting::epoch_duration.GetSeconds();
     if (epochs_per_rtt <= 0 || min_rtt.GetSeconds() <= 0) {

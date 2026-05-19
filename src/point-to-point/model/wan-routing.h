@@ -57,6 +57,7 @@ private:
     void HandleUdpReceived(Ptr<Packet> p, CustomHeader& ch);
     void HandleAckReceived(Ptr<Packet> p, CustomHeader& ch);
     bool m_gsccFair = false;
+    bool m_ackTsMode = false;
 
     /************数据平面延迟检测*********/
     static const inline int rtt_table_size = 64 * 16;
@@ -89,9 +90,13 @@ private:
         uint32_t entry_timeout_count = 0;
 
         //GSCC rtt监测
+        // In ACK_TS mode rtt_sum/rtt_num accumulate one-way delays; in legacy mode they accumulate RTTs.
         Time rtt_sum = Seconds(0);
         int rtt_num = 0;
         void record_rtt(Time rtt);
+        Time min_one_way_delay = Seconds(0);  // ACK_TS: min of per-epoch avg one-way delays; set in update_ref_rate
+        Time record_one_way_delay(Time one_way_delay);
+        bool m_ackTsMode = false;
 
         //速率计算        
         //controlplane para
