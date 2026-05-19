@@ -461,36 +461,39 @@ void WanRouting::controlplane_logic() {
             dc_handler.entry_timeout_count
         );
         dc_handler.entry_timeout_count = 0;
-        fprintf(logfile::rate_monitor, "%lu,%u,%u,%lu,%lu\n", 
-            Simulator::Now().GetNanoSeconds(), Settings::nodeInfos[m_switch_id].as_id, dst_as, 
-            dc_handler.get_normalize_cur_rate(), dc_handler.ref_rate);
 
-        // Per-epoch CNP trigger probability log
-        {
-            const uint64_t pkt_cnt = dc_handler.epoch_pkt_cnt;
-            const uint64_t cnp_cnt = dc_handler.epoch_cnp_cnt;
-            const double prob = (pkt_cnt == 0) ? 0.0 : (static_cast<double>(cnp_cnt) / static_cast<double>(pkt_cnt));
-            double w = 1.0;
-            if (Settings::GetRawParam("ENABLE_W", kEnableWDefault) == "TRUE") {
-                double w_max = std::stod(Settings::GetRawParam("W_MAX", kWMaxDefault));
-                double k = s_w_k;
-                w = std::pow(prob, 0.75) * dc_handler.ref_rate * k;
-                w = std::max(1.0, std::min(w, w_max));
-                double x = std::pow(prob, 0.75) * dc_handler.ref_rate;
-                if (x > 1e-9) {
-                    s_w_k_samples.push_back(x);
-                }
+        // Compute per-epoch CNP trigger probability and w/k for logging.
+        const uint64_t pkt_cnt = dc_handler.epoch_pkt_cnt;
+        const uint64_t cnp_cnt = dc_handler.epoch_cnp_cnt;
+        const double prob = (pkt_cnt == 0) ? 0.0 : (static_cast<double>(cnp_cnt) / static_cast<double>(pkt_cnt));
+        double w_var = 1.0;
+        double k_var = std::numeric_limits<double>::quiet_NaN();
+        if (Settings::GetRawParam("ENABLE_W", kEnableWDefault) == "TRUE") {
+            double w_max = std::stod(Settings::GetRawParam("W_MAX", kWMaxDefault));
+            k_var = s_w_k;
+            w_var = std::pow(prob, 0.75) * dc_handler.ref_rate * k_var;
+            w_var = std::max(1.0, std::min(w_var, w_max));
+            double x = std::pow(prob, 0.75) * dc_handler.ref_rate;
+            if (x > 1e-9) {
+                s_w_k_samples.push_back(x);
             }
-            fprintf(logfile::cnp_trigger_prob_log, "%lu,%u,%u,%u,%lu,%lu,%.6f,%.6f\n",
-                    Simulator::Now().GetNanoSeconds(),
-                    m_switch_id,
-                    Settings::nodeInfos[m_switch_id].as_id,
-                    dst_as,
-                    cnp_cnt,
-                    pkt_cnt,
-                    prob,
-                    w);
         }
+
+        // Append w and k to rate_monitor so decision data is collocated with rates.
+        fprintf(logfile::rate_monitor, "%lu,%u,%u,%lu,%lu,%.6f,%.9g\n",
+            Simulator::Now().GetNanoSeconds(), Settings::nodeInfos[m_switch_id].as_id, dst_as,
+            dc_handler.get_normalize_cur_rate(), dc_handler.ref_rate, w_var, k_var);
+
+        // Per-epoch CNP trigger probability log (uses the same prob and w_var)
+        fprintf(logfile::cnp_trigger_prob_log, "%lu,%u,%u,%u,%lu,%lu,%.6f,%.6f\n",
+                Simulator::Now().GetNanoSeconds(),
+                m_switch_id,
+                Settings::nodeInfos[m_switch_id].as_id,
+                dst_as,
+                cnp_cnt,
+                pkt_cnt,
+                prob,
+                w_var);
 
         if (Settings::wan_cc_mode == Settings::WanCCMode::WAN_OPT) {
             if (dc_handler.sensitive_rtt >= MicroSeconds(600)) {//rtt已经接收到第一个数据
