@@ -22,6 +22,8 @@ constexpr const char* kEnableWDefault = "FALSE";
 constexpr const char* kWMaxDefault = "4.0";
 constexpr const char* kWKModeDefault = "overlap";
 constexpr const char* kWKTargetDefault = "0";
+constexpr const char* kEnableWXSmoothDefault = "TRUE";
+constexpr const char* kWKSyncIntervalMsDefault = "30";
 constexpr double kInitialWBeforeK = 2.5;
 constexpr const char* kInvDeltaDefault = "20971520";  // 1/20MB
 constexpr const char* kBetaDefault = "0.3";
@@ -106,6 +108,12 @@ double GetWKTarget(double w_max) {
 double GetInitialWValue(double w_max) {
     return std::max(1.0, std::min(kInitialWBeforeK, w_max));
 }
+
+Time GetWKSyncInterval() {
+    const int64_t interval_ms =
+        std::stoll(Settings::GetRawParam("W_K_SYNC_INTERVAL_MS", kWKSyncIntervalMsDefault));
+    return MilliSeconds(std::max<int64_t>(1, interval_ms));
+}
 }  // namespace
 
 Time WanRouting::epoch_duration = MicroSeconds(1000); // 1ms
@@ -148,6 +156,8 @@ void WanRouting::DstDCHandler::Init(WanRouting* wan_routing, int64_t max_rate) {
 
     epoch_pkt_cnt = 0;
     epoch_cnp_cnt = 0;
+    w_x_history.clear();
+    latest_w_x = 0.0;
 
     rate_change_state = STABLE;
     consecutive_state_epochs = 0;
@@ -155,6 +165,27 @@ void WanRouting::DstDCHandler::Init(WanRouting* wan_routing, int64_t max_rate) {
     start_bytes = 0;
     end_bytes = static_cast<int64_t>(ref_rate * WanRouting::epoch_duration.GetSeconds());
     cur_bytes = 0;
+}
+
+double WanRouting::DstDCHandler::record_w_x(double raw_x, bool enable_smoothing) {
+    raw_x = std::max(0.0, raw_x);
+    if (!enable_smoothing) {
+        w_x_history.clear();
+        latest_w_x = raw_x;
+        return latest_w_x;
+    }
+
+    w_x_history.push_back(raw_x);
+    if (w_x_history.size() > 3) {
+        w_x_history.erase(w_x_history.begin());
+    }
+
+    double sum = 0.0;
+    for (double x : w_x_history) {
+        sum += x;
+    }
+    latest_w_x = sum / static_cast<double>(w_x_history.size());
+    return latest_w_x;
 }
 
 void WanRouting::DstDCHandler::record_rtt(Time rtt) {
@@ -258,7 +289,7 @@ void WanRouting::init() {
         s_w_k = 0.0;
         s_w_k_initialized = false;
         s_w_k_update_scheduled = true;
-        Simulator::Schedule(Seconds(2) + MilliSeconds(20), &WanRouting::update_w_k);
+        Simulator::Schedule(Seconds(2) + GetWKSyncInterval(), &WanRouting::update_w_k);
     }
 }
 
@@ -487,14 +518,17 @@ void WanRouting::controlplane_logic() {
         double k_var = std::numeric_limits<double>::quiet_NaN();
         if (Settings::GetRawParam("ENABLE_W", kEnableWDefault) == "TRUE") {
             double w_max = std::stod(Settings::GetRawParam("W_MAX", kWMaxDefault));
+            const bool enable_x_smoothing = IsEnabledRawParam(
+                Settings::GetRawParam("ENABLE_W_X_SMOOTH", kEnableWXSmoothDefault));
+            double raw_x = std::pow(prob, 0.75) * dc_handler.ref_rate;
+            double x = dc_handler.record_w_x(raw_x, enable_x_smoothing);
             if (s_w_k_initialized) {
                 k_var = s_w_k;
-                w_var = std::pow(prob, 0.75) * dc_handler.ref_rate * k_var;
+                w_var = x * k_var;
                 w_var = std::max(1.0, std::min(w_var, w_max));
             } else {
                 w_var = GetInitialWValue(w_max);
             }
-            double x = std::pow(prob, 0.75) * dc_handler.ref_rate;
             if (x > 1e-9) {
                 s_w_k_samples.push_back(x);
             }
@@ -544,7 +578,7 @@ void WanRouting::controlplane_logic() {
 }
 
 void WanRouting::update_w_k() {
-    Simulator::Schedule(MilliSeconds(20), &WanRouting::update_w_k);
+    Simulator::Schedule(GetWKSyncInterval(), &WanRouting::update_w_k);
     if (s_w_k_samples.empty()) {
         return;
     }
@@ -722,9 +756,9 @@ void WanRouting::DstDCHandler::update_ref_rate() {
         double w_max = std::stod(Settings::GetRawParam("W_MAX", kWMaxDefault));
         if (WanRouting::s_w_k_initialized) {
             k_used = WanRouting::s_w_k;
-            double p = epoch_pkt_cnt ? static_cast<double>(epoch_cnp_cnt) / static_cast<double>(epoch_pkt_cnt) : 0.0;
-            // w = clip(p^0.75 * pre_ref_rate * k, 1, w_max)
-            w = std::pow(p, 0.75) * pre_ref_rate * k_used;
+            // latest_w_x is recorded once per epoch in controlplane_logic, optionally as
+            // a trailing 3-epoch average of p^0.75 * ref_rate.
+            w = latest_w_x * k_used;
             w = std::max(1.0, std::min(w, w_max));
         } else {
             w = GetInitialWValue(w_max);

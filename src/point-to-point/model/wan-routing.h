@@ -118,6 +118,9 @@ private:
         // CNP trigger statistics per epoch
         uint64_t epoch_pkt_cnt = 0;
         uint64_t epoch_cnp_cnt = 0;
+        std::vector<double> w_x_history;
+        double latest_w_x = 0.0;
+        double record_w_x(double raw_x, bool enable_smoothing);
 
         enum RateChangeState { STABLE, INCREASE, DECREASE };
         RateChangeState rate_change_state = STABLE;
