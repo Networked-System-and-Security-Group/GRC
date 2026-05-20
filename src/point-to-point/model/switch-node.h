@@ -41,6 +41,7 @@ class SwitchNode : public Node {
     void SendToDev(Ptr<Packet> p, CustomHeader &ch);
     void SendToDevContinue(Ptr<Packet> p, CustomHeader &ch);
     void SendHulaProbe(uint32_t dev, uint32_t torID, uint8_t minUtil);
+    bool IsWanSideLink(uint32_t outDev);
     static uint32_t EcmpHash(const uint8_t *key, size_t len, uint32_t seed);
     void CheckAndSendPfc(uint32_t inDev, uint32_t qIndex);
     void CheckAndSendResume(uint32_t inDev, uint32_t qIndex);

@@ -148,6 +148,7 @@ private:
     static Time epoch_duration;
     void controlplane_logic();
     static bool s_w_k_update_scheduled;
+    static bool s_w_k_initialized;
     static double s_w_k;
     static std::vector<double> s_w_k_samples;
     static void update_w_k();
