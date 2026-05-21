@@ -68,6 +68,7 @@ SAMPLE_FEEDBACK 0
 ENABLE_QCN 1
 USE_DYNAMIC_PFC_THRESHOLD 1
 PACKET_PAYLOAD_SIZE 1000
+PRINT_LOG {print_log}
 
 
 KMAX_MAP {kmax_map}
@@ -173,6 +174,7 @@ def main():
     # Use 0/1 integers for stable CLI behavior.
     parser.add_argument('--debug', type=int, default=0, help="debug (0/1)")
     parser.add_argument('--stdout', type=int, default=0, help="stdout (0/1)")
+    parser.add_argument('--print_log', type=int, default=0, help="enable verbose runtime prints in selected modules (0/1)")
     parser.add_argument('--inter_load_all', type=int, default=60, help="不同DC之间之间通信的负载，单位Gbps")
     parser.add_argument('--intra_load', type=int, default=30, help="单个host在DC内之间通信的负载")
     parser.add_argument('--wan_cc_mode', type=int, default=1, help="DC间拥塞控制方案")#
@@ -256,6 +258,7 @@ def main():
     tcp_flow = args.tcp_flow.strip()
     debug = bool(args.debug)
     stdout = bool(args.stdout)
+    print_log = int(args.print_log)
     intra_load = args.intra_load
     inter_load_all = args.inter_load_all
     wan_cc_mode = args.wan_cc_mode
@@ -275,9 +278,9 @@ def main():
 
 
     # Sanity checks
-    if enabled_irn == 1 and enabled_pfc == 1:
-        raise Exception(
-            "CONFIG ERROR : If IRN is turn-on, then you should turn off PFC (for better perforamnce).")
+    # if enabled_irn == 1 and enabled_pfc == 1:
+    #     raise Exception(
+    #         "CONFIG ERROR : If IRN is turn-on, then you should turn off PFC (for better perforamnce).")
     if enabled_irn == 0 and enabled_pfc == 0:
         raise Exception(
             "CONFIG ERROR : Either IRN or PFC should be true (at least one).")
@@ -382,7 +385,7 @@ def main():
                                         has_win=has_win, var_win=var_win,
                                         fast_react=fast_react, mi=mi, int_multi=int_multi, ewma_gain=ewma_gain,
                                         kmax_map=kmax_map, kmin_map=kmin_map, pmax_map=pmax_map, random_seed=1, time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                                        ack_interval=ack_interval, wan_cc_mode=wan_cc_mode, msg=msg)
+                                        ack_interval=ack_interval, wan_cc_mode=wan_cc_mode, msg=msg, print_log=print_log)
     elif cc_mode == 7:
         ai = 10 * bw / 10
         hai = 50 * bw / 10
@@ -402,7 +405,7 @@ def main():
                                         has_win=has_win, var_win=var_win,
                                         fast_react=fast_react, mi=mi, int_multi=int_multi, ewma_gain=ewma_gain,
                                         kmax_map=kmax_map, kmin_map=kmin_map, pmax_map=pmax_map, random_seed=1, time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                                        ack_interval=ack_interval, wan_cc_mode=wan_cc_mode, msg=msg)
+                                        ack_interval=ack_interval, wan_cc_mode=wan_cc_mode, msg=msg, print_log=print_log)
     elif cc_mode == 9:
         ai = 10 * bw / 10
         hai = 50 * bw / 10
@@ -429,7 +432,7 @@ def main():
                                         has_win=has_win, var_win=var_win,
                                         fast_react=fast_react, mi=mi, int_multi=int_multi, ewma_gain=ewma_gain,
                                         kmax_map=kmax_map, kmin_map=kmin_map, pmax_map=pmax_map, random_seed=1, time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                                        ack_interval=ack_interval, wan_cc_mode=wan_cc_mode, msg=msg)
+                                        ack_interval=ack_interval, wan_cc_mode=wan_cc_mode, msg=msg, print_log=print_log)
     elif cc_mode == 10:
         ai = 10 * bw / 25
         hai = 25 * bw / 25
@@ -449,7 +452,7 @@ def main():
                                         has_win=has_win, var_win=var_win,
                                         fast_react=fast_react, mi=mi, int_multi=int_multi, ewma_gain=ewma_gain,
                                         kmax_map=kmax_map, kmin_map=kmin_map, pmax_map=pmax_map, random_seed=1, time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                                        ack_interval=ack_interval, wan_cc_mode=wan_cc_mode, msg=msg)
+                                        ack_interval=ack_interval, wan_cc_mode=wan_cc_mode, msg=msg, print_log=print_log)
         config += (
             f"UNO_AI_FACTOR {args.uno_ai_factor}\n"
             f"UNO_BETA {args.uno_beta}\n"
@@ -501,6 +504,7 @@ def main():
 
             existing_config = _upsert_line(existing_config, 'DCI_BUFFER_SIZE', str(dci_buffer))
             existing_config = _upsert_line(existing_config, 'WAN_BUFFER_SIZE', str(wan_buffer))
+            existing_config = _upsert_line(existing_config, 'PRINT_LOG', str(print_log))
             if cc_mode == 10:
                 existing_config = _upsert_line(existing_config, 'L2_ACK_INTERVAL', str(ack_interval))
 

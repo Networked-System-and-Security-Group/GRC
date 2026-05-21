@@ -199,6 +199,8 @@ TypeId RdmaHw::GetTypeId(void) {
                           MakeUintegerChecker<uint64_t>())
             .AddAttribute("IrnEnable", "Enable IRN", BooleanValue(false),
                           MakeBooleanAccessor(&RdmaHw::m_irn), MakeBooleanChecker())
+            .AddAttribute("PrintLog", "Enable verbose runtime prints", BooleanValue(false),
+                          MakeBooleanAccessor(&RdmaHw::m_printLog), MakeBooleanChecker())
             .AddAttribute("IrnRtoLow", "Low RTO for IRN", TimeValue(MicroSeconds(454)),
                           MakeTimeAccessor(&RdmaHw::m_irn_rtoLow), MakeTimeChecker())
             .AddAttribute("IrnRtoHigh", "High RTO for IRN", TimeValue(MicroSeconds(1350)),
@@ -215,6 +217,7 @@ RdmaHw::RdmaHw() {
     cnp_total = 0;
     cnp_by_ecn = 0;
     cnp_by_ooo = 0;
+    m_printLog = false;
 }
 
 void RdmaHw::SetNode(Ptr<Node> node) { m_node = node; }
@@ -491,7 +494,7 @@ int RdmaHw::ReceiveUdp(Ptr<Packet> p, CustomHeader &ch) {
         head.SetDestination(Ipv4Address(ch.sip));
         head.SetSource(Ipv4Address(ch.dip));
         head.SetProtocol(x == 1 ? 0xFC : 0xFD);  // ack=0xFC nack=0xFD
-        if (x != 1) {
+        if (m_printLog && x != 1) {
             printf("[%ld]Send NACK, FlowId:%u, Expect:%u, PacketSeq:%u\n",
                    Simulator::Now().GetNanoSeconds(), flow_id, rxQp->ReceiverNextExpectedSeq, ch.udp.seq);
         }
@@ -1002,9 +1005,11 @@ void RdmaHw::HandleTimeout(Ptr<RdmaQueuePair> qp, Time rto) {
         qp->uno.m_cwnd = std::max<double>(m_mtu, qp->uno.m_cwnd - m_mtu);
         UnoApplyRateFromCwnd(qp);
     }
-    printf("[%ld]Retransmission Timeout! FlowId:%u, %lu->%lu, fsize:%lu, Rate:%lu, Alpha:%lf\n", 
-        Simulator::Now().GetNanoSeconds(), qp->m_flow_id, qp->snd_nxt, qp->snd_una,
-        qp->m_size, qp->m_rate.GetBitRate(), qp->mlx.m_alpha);
+    if (m_printLog) {
+        printf("[%ld]Retransmission Timeout! FlowId:%u, %lu->%lu, fsize:%lu, Rate:%lu, Alpha:%lf\n",
+               Simulator::Now().GetNanoSeconds(), qp->m_flow_id, qp->snd_nxt, qp->snd_una,
+               qp->m_size, qp->m_rate.GetBitRate(), qp->mlx.m_alpha);
+    }
     RecoverQueue(qp);
     //Settings::flowInfos[qp->m_flow_id].print();
     //printf("\n");

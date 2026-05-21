@@ -121,6 +121,7 @@ uint32_t wan_buffer_size = 0;  // MB, 0 keeps default
 // Added from Here
 double load = 10.0;
 int enable_irn = 0;
+int print_log = 0;
 int random_seed = 1;  // change this randomly if you want random expt
 
 uint64_t maxRtt, maxBdp;
@@ -1336,6 +1337,11 @@ int main(int argc, char *argv[]) {
                 conf >> v;
                 enable_irn = v;
                 std::cerr << "ENABLE_IRN\t\t" << enable_irn << "\n";
+            } else if (key.compare("PRINT_LOG") == 0) {
+                int v;
+                conf >> v;
+                print_log = v;
+                std::cerr << "PRINT_LOG\t\t\t" << print_log << "\n";
             } else if (key.compare("RANDOM_SEED") == 0) {
                 int v;
                 conf >> v;
@@ -1724,6 +1730,7 @@ int main(int argc, char *argv[]) {
                 rdmaHw->SetAttribute("UnoIntraRttNs", UintegerValue(uno_intra_rtt_ns));
             }
             rdmaHw->SetAttribute("IrnEnable", BooleanValue(enable_irn));
+            rdmaHw->SetAttribute("PrintLog", BooleanValue(print_log != 0));
             // topo2bdpMap (e.g., longest BDP 25000: 8us * 25Gbps)
             rdmaHw->SetAttribute("IrnRtoHigh", TimeValue(MicroSeconds(320)));  // 1930
             rdmaHw->SetAttribute("IrnRtoLow", TimeValue(MicroSeconds(100)));   // 454

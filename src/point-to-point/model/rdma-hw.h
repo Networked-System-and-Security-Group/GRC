@@ -215,6 +215,7 @@ class RdmaHw : public Object {
      * IRN
      *********************/
     bool m_irn;
+    bool m_printLog;
     Time m_irn_rtoLow;
     Time m_irn_rtoHigh;
     uint32_t m_irn_bdp;
