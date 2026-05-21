@@ -91,7 +91,7 @@ class Analyser:
         self.link_info: pd.DataFrame = None #timestamp_ns,src_id,dst_id,flow_id,bytes
         self.buffer_info: pd.DataFrame = None #timestamp_ns,switch_id,next_hop,ingress_bytes,egress_bytes
         self.qp_rate_info: pd.DataFrame = None #timestamp_ns,flow_id,rate,alpha,target_rate
-        self.as_rate_info: pd.DataFrame = None #timestamp_ns,src_as,dst_as,real_rate,ref_rate
+        self.as_rate_info: pd.DataFrame = None #timestamp_ns,src_as,dst_as,real_rate,ref_rate,w,k
         self.cnp_info: pd.DataFrame = None #timestamp_ns,switch_id,flow_id
         self.cnp_trigger_prob_info: pd.DataFrame = None #timestamp_ns,switch_id,src_as,dst_as,cnp_cnt,pkt_cnt,prob
         self.accumulated_bytes_info: pd.DataFrame = None #timestamp_ns,switch_id,dst_as,accumulated_bytes
@@ -527,11 +527,7 @@ class Analyser:
     @auto_save_plot
     def plot_as_rate(self, src_as, dst_as):
         """绘制AS间的real_rate和ref_rate对比图"""
-        self.__read_as_rate_info()
-        df = self.as_rate_info[
-            (self.as_rate_info['src_as'] == src_as) & 
-            (self.as_rate_info['dst_as'] == dst_as)
-        ]
+        df = self.__get_as_rate_df(src_as, dst_as, required_columns=['real_rate', 'ref_rate'])
         if df.empty:
             print(f'No rate info for AS {src_as}->{dst_as}')
             return
@@ -542,6 +538,36 @@ class Analyser:
         plt.xlabel('Time (s)', fontsize=14)
         plt.ylabel('Rate (GB/s)', fontsize=14)
         #plt.title(f'DC Rate Monitor: {src_as}->{dst_as}', fontsize=14)
+        plt.grid(True, linestyle='--', alpha=0.7)
+        plt.legend(fontsize=10)
+
+    @auto_save_plot
+    def plot_as_w(self, src_as, dst_as):
+        """绘制AS间的w变化曲线"""
+        df = self.__get_as_rate_df(src_as, dst_as, required_columns=['w'])
+        if df.empty:
+            print(f'No w info for AS {src_as}->{dst_as}')
+            return
+
+        plt.figure(figsize=(5, 4), dpi=300)
+        plt.plot(df['timestamp_ns'] / 1e9, df['w'], label='w', color='purple')
+        plt.xlabel('Time (s)', fontsize=14)
+        plt.ylabel('w', fontsize=14)
+        plt.grid(True, linestyle='--', alpha=0.7)
+        plt.legend(fontsize=10)
+
+    @auto_save_plot
+    def plot_as_k(self, src_as, dst_as):
+        """绘制AS间的k变化曲线"""
+        df = self.__get_as_rate_df(src_as, dst_as, required_columns=['k'])
+        if df.empty:
+            print(f'No k info for AS {src_as}->{dst_as}')
+            return
+
+        plt.figure(figsize=(5, 4), dpi=300)
+        plt.plot(df['timestamp_ns'] / 1e9, df['k'], label='k', color='green')
+        plt.xlabel('Time (s)', fontsize=14)
+        plt.ylabel('k', fontsize=14)
         plt.grid(True, linestyle='--', alpha=0.7)
         plt.legend(fontsize=10)
 
@@ -1242,6 +1268,19 @@ class Analyser:
     def __read_as_rate_info(self):
         if self.as_rate_info is None:
             self.as_rate_info = pd.read_csv(op.join(self.dir, 'rate_monitor'))
+
+    def __get_as_rate_df(self, src_as, dst_as, required_columns=None):
+        self.__read_as_rate_info()
+        df = self.as_rate_info
+        required_columns = required_columns or []
+        missing = [col for col in ['timestamp_ns', 'src_as', 'dst_as', *required_columns] if col not in df.columns]
+        if missing:
+            print(f'rate_monitor missing columns: {missing}')
+            return pd.DataFrame()
+        return df[
+            (df['src_as'] == src_as) &
+            (df['dst_as'] == dst_as)
+        ]
 
     def read_config(self):
         with open(op.join(self.dir, 'config.txt')) as f:

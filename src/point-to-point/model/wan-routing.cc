@@ -20,10 +20,14 @@ namespace {
 // Keep them here so tuning doesn't require hunting through the logic below.
 constexpr const char* kEnableWDefault = "FALSE";
 constexpr const char* kWMaxDefault = "4.0";
-constexpr const char* kWKDefault = "0.0000001";
+constexpr const char* kWKModeDefault = "overlap";
+constexpr const char* kWKTargetDefault = "0";
+constexpr const char* kEnableWXSmoothDefault = "TRUE";
+constexpr const char* kWKSyncIntervalMsDefault = "30";
+constexpr double kInitialWBeforeK = 2.5;
 constexpr const char* kInvDeltaDefault = "20971520";  // 1/20MB
 constexpr const char* kBetaDefault = "0.3";
-constexpr const char* kGuaranteedRateFactorDefault = "0.3";
+constexpr const char* kGuaranteedRateFactorDefault = "0.25";
 constexpr const char* kEnableVDefault = "TRUE";
 constexpr const char* kWanEpochUsDefault = "1000";  // 1ms
 constexpr const char* kEnable2LayerHashDefault = "TRUE";
@@ -91,10 +95,30 @@ void ClearIpv4EcnMark(Ptr<Packet> p, CustomHeader& ch) {
     p->AddHeader(ipv4);
     p->AddHeader(ppp);
 }
+
+double GetWKTarget(double w_max) {
+    const std::string raw = Settings::GetRawParam("W_K_TARGET", kWKTargetDefault);
+    const double parsed = std::stod(raw);
+    if (parsed > 0.0) {
+        return parsed;
+    }
+    return (1.0 + w_max) / 2.0;
+}
+
+double GetInitialWValue(double w_max) {
+    return std::max(1.0, std::min(kInitialWBeforeK, w_max));
+}
+
+Time GetWKSyncInterval() {
+    const int64_t interval_ms =
+        std::stoll(Settings::GetRawParam("W_K_SYNC_INTERVAL_MS", kWKSyncIntervalMsDefault));
+    return MilliSeconds(std::max<int64_t>(1, interval_ms));
+}
 }  // namespace
 
 Time WanRouting::epoch_duration = MicroSeconds(1000); // 1ms
 bool WanRouting::s_w_k_update_scheduled = false;
+bool WanRouting::s_w_k_initialized = false;
 double WanRouting::s_w_k = 0;
 std::vector<double> WanRouting::s_w_k_samples;
 
@@ -132,6 +156,8 @@ void WanRouting::DstDCHandler::Init(WanRouting* wan_routing, int64_t max_rate) {
 
     epoch_pkt_cnt = 0;
     epoch_cnp_cnt = 0;
+    w_x_history.clear();
+    latest_w_x = 0.0;
 
     rate_change_state = STABLE;
     consecutive_state_epochs = 0;
@@ -139,6 +165,27 @@ void WanRouting::DstDCHandler::Init(WanRouting* wan_routing, int64_t max_rate) {
     start_bytes = 0;
     end_bytes = static_cast<int64_t>(ref_rate * WanRouting::epoch_duration.GetSeconds());
     cur_bytes = 0;
+}
+
+double WanRouting::DstDCHandler::record_w_x(double raw_x, bool enable_smoothing) {
+    raw_x = std::max(0.0, raw_x);
+    if (!enable_smoothing) {
+        w_x_history.clear();
+        latest_w_x = raw_x;
+        return latest_w_x;
+    }
+
+    w_x_history.push_back(raw_x);
+    if (w_x_history.size() > 3) {
+        w_x_history.erase(w_x_history.begin());
+    }
+
+    double sum = 0.0;
+    for (double x : w_x_history) {
+        sum += x;
+    }
+    latest_w_x = sum / static_cast<double>(w_x_history.size());
+    return latest_w_x;
 }
 
 void WanRouting::DstDCHandler::record_rtt(Time rtt) {
@@ -239,9 +286,10 @@ void WanRouting::init() {
     Simulator::Schedule(Seconds(2), &WanRouting::controlplane_logic, this);
     Simulator::Schedule(Seconds(2), &WanRouting::periodic_decrease_bytes, this);
     if (Settings::GetRawParam("ENABLE_W", kEnableWDefault) == "TRUE" && !s_w_k_update_scheduled) {
-        s_w_k = std::stod(Settings::GetRawParam("W_K", kWKDefault));
+        s_w_k = 0.0;
+        s_w_k_initialized = false;
         s_w_k_update_scheduled = true;
-        Simulator::Schedule(Seconds(2) + MilliSeconds(20), &WanRouting::update_w_k);
+        Simulator::Schedule(Seconds(2) + GetWKSyncInterval(), &WanRouting::update_w_k);
     }
 }
 
@@ -470,10 +518,17 @@ void WanRouting::controlplane_logic() {
         double k_var = std::numeric_limits<double>::quiet_NaN();
         if (Settings::GetRawParam("ENABLE_W", kEnableWDefault) == "TRUE") {
             double w_max = std::stod(Settings::GetRawParam("W_MAX", kWMaxDefault));
-            k_var = s_w_k;
-            w_var = std::pow(prob, 0.75) * dc_handler.ref_rate * k_var;
-            w_var = std::max(1.0, std::min(w_var, w_max));
-            double x = std::pow(prob, 0.75) * dc_handler.ref_rate;
+            const bool enable_x_smoothing = IsEnabledRawParam(
+                Settings::GetRawParam("ENABLE_W_X_SMOOTH", kEnableWXSmoothDefault));
+            double raw_x = std::pow(prob, 0.75) * dc_handler.ref_rate;
+            double x = dc_handler.record_w_x(raw_x, enable_x_smoothing);
+            if (s_w_k_initialized) {
+                k_var = s_w_k;
+                w_var = x * k_var;
+                w_var = std::max(1.0, std::min(w_var, w_max));
+            } else {
+                w_var = GetInitialWValue(w_max);
+            }
             if (x > 1e-9) {
                 s_w_k_samples.push_back(x);
             }
@@ -523,11 +578,50 @@ void WanRouting::controlplane_logic() {
 }
 
 void WanRouting::update_w_k() {
-    Simulator::Schedule(MilliSeconds(20), &WanRouting::update_w_k);
+    Simulator::Schedule(GetWKSyncInterval(), &WanRouting::update_w_k);
     if (s_w_k_samples.empty()) {
         return;
     }
     double w_max = std::stod(Settings::GetRawParam("W_MAX", kWMaxDefault));
+    const std::string mode = Settings::GetRawParam("W_K_MODE", kWKModeDefault);
+
+    if (mode == "trimmed_mean" || mode == "mean") {
+        std::vector<double> samples = s_w_k_samples;
+        s_w_k_samples.clear();
+        std::sort(samples.begin(), samples.end());
+        if (samples.empty()) {
+            return;
+        }
+
+        double target = GetWKTarget(w_max);
+        const size_t n = samples.size();
+        size_t begin = 0;
+        size_t end = n;
+        if (mode == "trimmed_mean") {
+            begin = n / 4;
+            end = (n * 3 + 3) / 4;  // ceil(0.75 * n)
+            if (begin >= end) {
+                begin = 0;
+                end = n;
+            }
+        }
+
+        double sum = 0.0;
+        for (size_t i = begin; i < end; ++i) {
+            sum += samples[i];
+        }
+        const size_t cnt = end - begin;
+        if (cnt == 0) {
+            return;
+        }
+        const double mean_x = sum / static_cast<double>(cnt);
+        if (mean_x > 0.0) {
+            s_w_k = target / mean_x;
+            s_w_k_initialized = true;
+        }
+        return;
+    }
+
     std::vector<std::pair<double, int> > events;
     events.reserve(s_w_k_samples.size() * 2);
     for (double x : s_w_k_samples) {
@@ -545,15 +639,63 @@ void WanRouting::update_w_k() {
 
     int max_overlap = 0;
     int current_overlap = 0;
-    double best_k = s_w_k;
-    for (const auto& event : events) {
-        current_overlap += event.second;
-        if (current_overlap > max_overlap) {
+    for (size_t i = 0; i + 1 < events.size(); ++i) {
+        current_overlap += events[i].second;
+        if (events[i + 1].first > events[i].first && current_overlap > max_overlap) {
             max_overlap = current_overlap;
-            best_k = event.first;
+        }
+    }
+
+    current_overlap = 0;
+    bool has_platform = false;
+    double platform_left = 0.0;
+    double platform_right = 0.0;
+    double best_left = 0.0;
+    double best_right = 0.0;
+    double best_k = s_w_k;
+    for (size_t i = 0; i + 1 < events.size(); ++i) {
+        current_overlap += events[i].second;
+        const double left = events[i].first;
+        const double right = events[i + 1].first;
+        if (right <= left || current_overlap != max_overlap) {
+            continue;
+        }
+        if (!has_platform) {
+            platform_left = left;
+            platform_right = right;
+            has_platform = true;
+            continue;
+        }
+        if (left <= platform_right) {
+            platform_right = right;
+            continue;
+        }
+        if (platform_right - platform_left > best_right - best_left) {
+            best_left = platform_left;
+            best_right = platform_right;
+        }
+        platform_left = left;
+        platform_right = right;
+    }
+
+    if (has_platform && platform_right - platform_left > best_right - best_left) {
+        best_left = platform_left;
+        best_right = platform_right;
+    }
+    if (best_right > best_left) {
+        best_k = (best_left + best_right) / 2.0;
+    } else {
+        current_overlap = 0;
+        for (const auto& event : events) {
+            current_overlap += event.second;
+            if (current_overlap == max_overlap) {
+                best_k = event.first;
+                break;
+            }
         }
     }
     s_w_k = best_k;
+    s_w_k_initialized = true;
 }
 
 void WanRouting::DstDCHandler::update_ref_rate() {
@@ -612,11 +754,15 @@ void WanRouting::DstDCHandler::update_ref_rate() {
     double k_used = std::numeric_limits<double>::quiet_NaN();
     if (Settings::GetRawParam("ENABLE_W", kEnableWDefault) == "TRUE") {
         double w_max = std::stod(Settings::GetRawParam("W_MAX", kWMaxDefault));
-        k_used = WanRouting::s_w_k;
-        double p = epoch_pkt_cnt ? static_cast<double>(epoch_cnp_cnt) / static_cast<double>(epoch_pkt_cnt) : 0.0;
-        // w = clip(p^0.75 * pre_ref_rate * k, 1, w_max)
-        w = std::pow(p, 0.75) * pre_ref_rate * k_used;
-        w = std::max(1.0, std::min(w, w_max));
+        if (WanRouting::s_w_k_initialized) {
+            k_used = WanRouting::s_w_k;
+            // latest_w_x is recorded once per epoch in controlplane_logic, optionally as
+            // a trailing 3-epoch average of p^0.75 * ref_rate.
+            w = latest_w_x * k_used;
+            w = std::max(1.0, std::min(w, w_max));
+        } else {
+            w = GetInitialWValue(w_max);
+        }
     }
 
     // Get target_rate and target_state
@@ -643,9 +789,9 @@ void WanRouting::DstDCHandler::update_ref_rate() {
     //Get v
     int v = 1;    
     if (Settings::GetRawParam("ENABLE_V", kEnableVDefault) == "TRUE") {
-        if (consecutive_state_epochs >= 6 * epochs_per_rtt) {
+        if (consecutive_state_epochs >= 10 * epochs_per_rtt) {
             v = 4;
-        } else if (consecutive_state_epochs >= 3 * epochs_per_rtt) {
+        } else if (consecutive_state_epochs >= 5 * epochs_per_rtt) {
             v = 2;
         }
     }
