@@ -1,8 +1,9 @@
 from collections import OrderedDict
+import argparse
 import math
 from matplotlib.lines import Line2D
 
-from deep_analyse import *
+from deep_analyse import analyser_iter
 import os.path as op
 import numpy as np
 import matplotlib.pyplot as plt
@@ -19,9 +20,17 @@ GRID_ALPHA = 0.25
 GRID_LINEWIDTH = 0.8
 GRID_LINESTYLE = "--"
 
+RATE_GBPS = [50, 75, 100]
+DEFAULT_EXPR = "493,494,495"
+GRC_EXPR = "339"
+DEFAULT_AVG_OUTPUT = "rate_cal_avg.pdf"
+DEFAULT_P99_OUTPUT = "rate_cal_p99.pdf"
+Y_FIXED_MAX = 15
+
 SERIES_STYLES = {
     "Avg.": {"color": "#F28E2B", "marker": "o"},
     "P99": {"color": "#8F63B8", "marker": "v"},
+    "GRC": {"color": "#4E79A7", "marker": None},
 }
 
 
@@ -51,10 +60,21 @@ def get_integer_ticks(y_values, target_tick_count=6, fixed_max=None):
     return tick_min, tick_max, ticks
 
 
-def plot_auto_lines(data, xlabel, ylabel, filename, xticks=None, xlim=None):
+def plot_auto_lines(
+    data,
+    xlabel,
+    ylabel,
+    filename,
+    xticks=None,
+    xlim=None,
+    hlines=None,
+    fixed_y_max=Y_FIXED_MAX,
+    y_top_padding=0.0,
+):
     plt.figure(figsize=MAIN_FIGSIZE, dpi=300)
     y_values = []
     series = []
+    hlines = hlines or OrderedDict()
 
     for label, (x, y) in data.items():
         filtered_x = []
@@ -67,7 +87,17 @@ def plot_auto_lines(data, xlabel, ylabel, filename, xticks=None, xlim=None):
 
         series.append((label, filtered_x, filtered_y))
 
-    y_min, y_max, all_ticks = get_integer_ticks(y_values, fixed_max=15)
+    for value in hlines.values():
+        if value is not None:
+            y_values.append(value)
+
+    if y_values and fixed_y_max is None and y_top_padding > 0:
+        data_min = min(y_values)
+        data_max = max(y_values)
+        span = max(data_max - data_min, data_max, 1.0)
+        y_values.append(data_max + span * y_top_padding)
+
+    y_min, y_max, all_ticks = get_integer_ticks(y_values, fixed_max=fixed_y_max)
 
     for label, filtered_x, filtered_y in series:
         style = SERIES_STYLES[label]
@@ -89,6 +119,18 @@ def plot_auto_lines(data, xlabel, ylabel, filename, xticks=None, xlim=None):
             markerfacecolor="none",
             markeredgecolor=style["color"],
             markeredgewidth=1.6,
+            clip_on=True,
+        )
+
+    for label, value in hlines.items():
+        if value is None:
+            continue
+        style = SERIES_STYLES[label]
+        plt.axhline(
+            value,
+            color=style["color"],
+            linestyle="--",
+            linewidth=2.2,
             clip_on=True,
         )
 
@@ -116,15 +158,19 @@ def plot_auto_lines(data, xlabel, ylabel, filename, xticks=None, xlim=None):
         )
 
     handles = []
-    for label, style in SERIES_STYLES.items():
+    visible_labels = list(data.keys()) + list(hlines.keys())
+    for label in visible_labels:
+        style = SERIES_STYLES[label]
+        marker = style["marker"]
+        linestyle = "--" if label in hlines else "-"
         handles.append(
             Line2D(
                 [0],
                 [0],
                 color=style["color"],
-                linestyle="-",
-                linewidth=2.8,
-                marker=style["marker"],
+                linestyle=linestyle,
+                linewidth=2.2 if label in hlines else 2.8,
+                marker=marker,
                 markersize=MARKER_SIZE,
                 markerfacecolor="none",
                 markeredgecolor=style["color"],
@@ -158,43 +204,92 @@ def plot_auto_lines(data, xlabel, ylabel, filename, xticks=None, xlim=None):
     print(f"Saved figure to {filepath}")
 
 
-def get_avg_fct(expr):
-    inter = []
-    intra = []
-    p99 = []
+def get_inter_fct(expr):
+    inter_avg = []
+    inter_p99 = []
     for ana in analyser_iter(expr):
         try:
-            avg, avg_intra, avg_inter = ana.get_avg_fct()
-            inter.append(avg_inter)
-            intra.append(avg_intra)
-            p99.append(ana.get_p99_fct()[2])
-        except Exception:
-            inter.append(None)
-            intra.append(None)
-            p99.append(None)
-    return inter, intra, p99
+            inter_avg.append(ana.get_avg_fct()[2])
+            inter_p99.append(ana.get_p99_fct()[2])
+        except Exception as exc:
+            print(f"Skip run {getattr(ana, 'id', '?')}: {exc}")
+            inter_avg.append(None)
+            inter_p99.append(None)
+    return inter_avg, inter_p99
+
+
+def get_grc_fct(expr):
+    inter_avg, inter_p99 = get_inter_fct(expr)
+    avg = inter_avg[0] if inter_avg else None
+    p99 = inter_p99[0] if inter_p99 else None
+    return avg, p99
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Plot inter-DC normalized FCT against dynamic traffic rate."
+    )
+    parser.add_argument(
+        "expr",
+        nargs="?",
+        default=DEFAULT_EXPR,
+        help='experiment id list, for example "101-105" or "101,103,105"',
+    )
+    parser.add_argument(
+        "--grc-expr",
+        default=GRC_EXPR,
+        help="experiment id list for the GRC baseline line",
+    )
+    parser.add_argument(
+        "--avg-output",
+        default=DEFAULT_AVG_OUTPUT,
+        help="Avg. output PDF path, relative paths are resolved under analysis/",
+    )
+    parser.add_argument(
+        "--p99-output",
+        default=DEFAULT_P99_OUTPUT,
+        help="P99 output PDF path, relative paths are resolved under analysis/",
+    )
+    return parser.parse_args()
 
 
 def main():
-    expr = "364-368"
-    x_data = [1, 2, 3, 4, 5]
-    x_label = "Epoch duration (ms)"
+    args = parse_args()
+    expr = args.expr.strip()
+    if not expr:
+        raise SystemExit(
+            'No experiment IDs configured. Fill DEFAULT_EXPR or run: '
+            'python3 analysis/rate_cal.py "ID1-ID5"'
+        )
 
-    inter_res, intra_res, inter_p99 = get_avg_fct(expr)
-    data_to_plot = OrderedDict(
-        [
-            ("Avg.", (x_data, inter_res)),
-            ("P99", (x_data, inter_p99)),
-        ]
+    inter_avg, inter_p99 = get_inter_fct(expr)
+    grc_avg, grc_p99 = get_grc_fct(args.grc_expr)
+    if len(inter_avg) != len(RATE_GBPS):
+        print(
+            f"Warning: got {len(inter_avg)} runs for {len(RATE_GBPS)} rate points; "
+            "values are paired by order."
+        )
+
+    plot_auto_lines(
+        OrderedDict([("Avg.", (RATE_GBPS, inter_avg))]),
+        xlabel="Dynamic traffic throughput (Gbps)",
+        ylabel="Avg. Inter Normalized FCT",
+        filename=args.avg_output,
+        xticks=RATE_GBPS,
+        xlim=(RATE_GBPS[0], RATE_GBPS[-1]),
+        hlines=OrderedDict([("GRC", grc_avg)]),
     )
 
     plot_auto_lines(
-        data_to_plot,
-        xlabel=x_label,
-        ylabel="Normalized FCT",
-        filename="epoch_duration.pdf",
-        xticks=x_data,
-        xlim=(x_data[0], x_data[-1]),
+        OrderedDict([("P99", (RATE_GBPS, inter_p99))]),
+        xlabel="Dynamic traffic throughput (Gbps)",
+        ylabel="P99 Inter Normalized FCT",
+        filename=args.p99_output,
+        xticks=RATE_GBPS,
+        xlim=(RATE_GBPS[0], RATE_GBPS[-1]),
+        hlines=OrderedDict([("GRC", grc_p99)]),
+        fixed_y_max=None,
+        y_top_padding=0.08,
     )
 
 

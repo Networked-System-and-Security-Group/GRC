@@ -2,7 +2,6 @@ from collections import OrderedDict
 import math
 from matplotlib.lines import Line2D
 
-from deep_analyse import *
 import os.path as op
 import numpy as np
 import matplotlib.pyplot as plt
@@ -25,14 +24,12 @@ SERIES_STYLES = {
 }
 
 
-def get_integer_ticks(y_values, target_tick_count=6, fixed_max=None):
+def get_integer_ticks(y_values, target_tick_count=6):
     if not y_values:
-        if fixed_max is None:
-            return 0, 1, np.array([0, 1], dtype=int)
-        return 0, fixed_max, np.array([0, fixed_max], dtype=int)
+        return 0, 1, np.array([0, 1], dtype=int)
 
     y_min = int(np.floor(min(y_values)))
-    y_max = int(fixed_max) if fixed_max is not None else int(np.ceil(max(y_values)))
+    y_max = int(np.ceil(max(y_values)))
     if y_max <= y_min:
         y_max = y_min + 1
 
@@ -67,7 +64,7 @@ def plot_auto_lines(data, xlabel, ylabel, filename, xticks=None, xlim=None):
 
         series.append((label, filtered_x, filtered_y))
 
-    y_min, y_max, all_ticks = get_integer_ticks(y_values, fixed_max=15)
+    y_min, y_max, all_ticks = get_integer_ticks(y_values)
 
     for label, filtered_x, filtered_y in series:
         style = SERIES_STYLES[label]
@@ -93,7 +90,8 @@ def plot_auto_lines(data, xlabel, ylabel, filename, xticks=None, xlim=None):
         )
 
     if xticks is None:
-        tick_x = sorted({xi for xs, _ in data.values() for xi in xs})
+        all_x = sorted({xi for xs, _ in data.values() for xi in xs})
+        tick_x = all_x
         plt.xticks(tick_x, fontsize=TICK_FONTSIZE)
     else:
         tick_x = list(xticks)
@@ -114,7 +112,6 @@ def plot_auto_lines(data, xlabel, ylabel, filename, xticks=None, xlim=None):
             linestyle=GRID_LINESTYLE,
             zorder=0,
         )
-
     handles = []
     for label, style in SERIES_STYLES.items():
         handles.append(
@@ -158,33 +155,17 @@ def plot_auto_lines(data, xlabel, ylabel, filename, xticks=None, xlim=None):
     print(f"Saved figure to {filepath}")
 
 
-def get_avg_fct(expr):
-    inter = []
-    intra = []
-    p99 = []
-    for ana in analyser_iter(expr):
-        try:
-            avg, avg_intra, avg_inter = ana.get_avg_fct()
-            inter.append(avg_inter)
-            intra.append(avg_intra)
-            p99.append(ana.get_p99_fct()[2])
-        except Exception:
-            inter.append(None)
-            intra.append(None)
-            p99.append(None)
-    return inter, intra, p99
-
-
 def main():
-    expr = "364-368"
-    x_data = [1, 2, 3, 4, 5]
-    x_label = "Epoch duration (ms)"
+    x_data = [0, 50, 100, 150, 200, 250, 300]
+    x_label = "TCP bandwidth (Gbps)"
 
-    inter_res, intra_res, inter_p99 = get_avg_fct(expr)
+    avg_fct_res = [1.237223, 1.246314, 1.258379, 1.262803, 1.255072, 1.292444, 1.295723]
+    p99_fct_res = [5.153504, 5.663613, 5.867938, 5.981502, 5.899007, 6.863526, 6.351086]
+
     data_to_plot = OrderedDict(
         [
-            ("Avg.", (x_data, inter_res)),
-            ("P99", (x_data, inter_p99)),
+            ("Avg.", (x_data, avg_fct_res)),
+            ("P99", (x_data, p99_fct_res)),
         ]
     )
 
@@ -192,7 +173,7 @@ def main():
         data_to_plot,
         xlabel=x_label,
         ylabel="Normalized FCT",
-        filename="epoch_duration.pdf",
+        filename="tcp_fct.pdf",
         xticks=x_data,
         xlim=(x_data[0], x_data[-1]),
     )

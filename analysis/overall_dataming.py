@@ -16,8 +16,8 @@ LEGEND_FIGSIZE = (8.8, 1.5)
 TICK_FONTSIZE = 16
 LABEL_FONTSIZE = 18.4
 LEGEND_FONTSIZE = 13.6
-AVG_Y_MAX = 12
-P99_Y_MAX = 120
+AVG_Y_MAX = 3
+P99_Y_MAX = 30
 GRID_ALPHA = 0.25
 GRID_LINEWIDTH = 0.8
 GRID_LINESTYLE = "--"
@@ -33,27 +33,27 @@ SCHEME_STYLES = {
     "DCQCN": {"color": "#F28E2B", "marker": "o"},
     "DCQCN-SR": {"color": "#4E79A7", "marker": "s"},
     "GEMINI": {"color": "#2A9D8F", "marker": "D"},
-    "UnoCC": {"color": "#E15759", "marker": "^"},
+    "UNO": {"color": "#E15759", "marker": "^"},
     "GRC": {"color": "#8F63B8", "marker": "v"},
 }
 
 DEFAULT_EXPRS = OrderedDict(
     [
-        ("DCQCN", "392-395"),
-        ("DCQCN-SR", "414-417"),
-        ("GEMINI", "477-480"),
-        ("UnoCC", "437-440"),
-        ("GRC", "336-339"),
+        ("DCQCN", "452-455"),
+        ("DCQCN-SR", "464-467"),
+        ("GEMINI", "481-484"),
+        ("UNO", "441-444"),
+        ("GRC", "460-463"),
     ]
 )
 
 FLOW_SET_CONFIGS = {
     "w": {
-        "file_name": "websearch",
+        "file_name": "datamining",
         "exprs": DEFAULT_EXPRS,
     },
-    "a": {
-        "file_name": "alistorage",
+    "m": {
+        "file_name": "datamining",
         "exprs": DEFAULT_EXPRS,
     },
 }

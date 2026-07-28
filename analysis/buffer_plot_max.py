@@ -17,6 +17,9 @@ TICK_FONTSIZE = 16
 LABEL_FONTSIZE = 18.4
 LEGEND_FONTSIZE = 13.6
 MARKER_SIZE = 6.5
+GRID_ALPHA = 0.25
+GRID_LINEWIDTH = 0.8
+GRID_LINESTYLE = "--"
 
 SCHEME_STYLES = {
     "DCQCN": {"color": "#F28E2B", "marker": "o"},
@@ -30,11 +33,20 @@ DEFAULT_EXPRS = OrderedDict(
     [
         ("DCQCN", "392-395"),
         ("DCQCN-SR", "414-417"),
-        ("GEMINI", "328-331"),
+        ("GEMINI", "477-480"),
         ("UNO", "437-440"),
         ("GRC", "336-339"),
     ]
 )
+# DEFAULT_EXPRS = OrderedDict(
+#     [
+#         ("DCQCN", "473-476"),
+#         ("DCQCN-SR", "477-480"),
+#         ("GEMINI", "328-331"),
+#         ("UNO", "485-488"),
+#         ("GRC", "336-339"),
+#     ]
+# )
 
 FLOW_SET_CONFIGS = {
     "w": {
@@ -145,18 +157,28 @@ def plot_auto_lines(data, xlabel, ylabel, filename, xticks=None, xlim=None):
             for xi, yi in zip(spec["x"], spec["y"]):
                 if yi is not None:
                     all_x.append(xi)
-        all_x = sorted(set(all_x))
-        plt.xticks(all_x, fontsize=TICK_FONTSIZE)
+        tick_x = sorted(set(all_x))
+        plt.xticks(tick_x, fontsize=TICK_FONTSIZE)
     else:
-        plt.xticks(xticks, fontsize=TICK_FONTSIZE)
+        tick_x = list(xticks)
+        plt.xticks(tick_x, fontsize=TICK_FONTSIZE)
 
     plt.yticks(all_ticks, [str(int(t)) for t in all_ticks], fontsize=TICK_FONTSIZE)
 
+    ax = plt.gca()
     plt.xlabel(xlabel, fontsize=LABEL_FONTSIZE)
     plt.ylabel(ylabel, fontsize=LABEL_FONTSIZE)
-    plt.grid(axis="y", alpha=0.25, linewidth=0.8)
+    ax.grid(axis="y", alpha=GRID_ALPHA, linewidth=GRID_LINEWIDTH, linestyle=GRID_LINESTYLE)
+    for xpos in tick_x[1:-1]:
+        ax.axvline(
+            xpos,
+            color="#b0b0b0",
+            alpha=GRID_ALPHA,
+            linewidth=GRID_LINEWIDTH,
+            linestyle=GRID_LINESTYLE,
+            zorder=0,
+        )
 
-    ax = plt.gca()
     for spine in ("left", "bottom", "top", "right"):
         ax.spines[spine].set_visible(True)
         ax.spines[spine].set_linewidth(1.0)
@@ -179,8 +201,8 @@ def get_buffer(expr):
     res = []
     for ana in analyser_iter(expr):
         try:
-            _, p99_buffer = ana.get_wan_buffer_stats()
-            res.append(p99_buffer)
+            _, _, peak_buffer = ana.get_wan_buffer_stats_50_150()
+            res.append(peak_buffer)
         except Exception:
             res.append(None)
     return res
@@ -218,7 +240,7 @@ def main():
     x_data = [0, 60, 120, 180]
     x_label = "Dynamic traffic throughput (Gbps)"
 
-    save_legend_figure(f"{file_name}-P99-Buffer-Legend.pdf")
+    save_legend_figure(f"{file_name}-Max-Buffer-Legend.pdf")
 
     values_by_scheme = OrderedDict()
     for scheme, expr in exprs.items():
@@ -227,8 +249,8 @@ def main():
     plot_auto_lines(
         build_plot_data(x_data, values_by_scheme),
         xlabel=x_label,
-        ylabel="P99 Buffer Util. (MB)",
-        filename=f"{file_name}-P99-Buffer-Util.pdf",
+        ylabel="Max Buf. Util. (MB)",
+        filename=f"{file_name}-Max-Buffer-Util.pdf",
         xticks=x_data,
         xlim=(x_data[0], x_data[-1]),
     )

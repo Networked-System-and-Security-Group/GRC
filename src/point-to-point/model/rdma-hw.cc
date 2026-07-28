@@ -163,7 +163,7 @@ TypeId RdmaHw::GetTypeId(void) {
                           DoubleValue(0.2), MakeDoubleAccessor(&RdmaHw::m_gemini_beta),
                           MakeDoubleChecker<double>())
             .AddAttribute("GeminiT", "GEMINI's WAN delay threshold in ns",
-                          UintegerValue(1000000), MakeUintegerAccessor(&RdmaHw::m_gemini_t),
+                          UintegerValue(4000000), MakeUintegerAccessor(&RdmaHw::m_gemini_t),
                           MakeUintegerChecker<uint64_t>())
             .AddAttribute("GeminiK", "GEMINI's ECN threshold surrogate in bytes",
                           UintegerValue(409600), MakeUintegerAccessor(&RdmaHw::m_gemini_k),
@@ -905,8 +905,8 @@ Ptr<Packet> RdmaHw::GetNxtPacket(Ptr<RdmaQueuePair> qp) {
     //    printf("Generate a packet, FlowId:%u, Seq:%u\n", qp->m_flow_id, seq);
     //}
 
-    bool ack_req = (seq + payload_size >= qp->m_size) ||
-                   (m_ack_interval > 0 && seq % m_ack_interval == 0 && seq != 0);
+    bool ack_req = (seq + payload_size >= qp->m_size) ||(m_ack_interval == 1) ||
+                   (m_ack_interval > 1 && seq % m_ack_interval == 0 && seq != 0);
     if (m_cc_mode == CC_MODE_GEMINI && ShouldDebugFlow(qp->m_flow_id)) {
         LogFlowDebugf(qp->m_flow_id, "Send data seq=%u size=%u snd_una=%lu cwnd=%lu",
                     seq, payload_size, qp->snd_una, qp->m_ccWin);
@@ -985,9 +985,6 @@ void RdmaHw::HandleTimeout(Ptr<RdmaQueuePair> qp, Time rto) {
 
     uint32_t nic_idx = GetNicIdxOfQp(qp);
     Ptr<QbbNetDevice> dev = m_nic[nic_idx].dev;
-
-    // IRN: disable timeouts when PFC is enabled to prevent spurious retransmissions
-    if (qp->irn.m_enabled && dev->IsQbbEnabled()) return;
 
     if (acc_timeout_count.find(qp->m_flow_id) == acc_timeout_count.end())
         acc_timeout_count[qp->m_flow_id] = 0;

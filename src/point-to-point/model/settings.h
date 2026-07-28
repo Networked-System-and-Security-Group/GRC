@@ -291,6 +291,7 @@ namespace logfile {
     extern FILE* downlink_rx_output;
     extern FILE* flow_rx_output;
     extern FILE* qp_rate_log;
+    extern FILE* uno_cwnd_log;
     extern FILE* conn_output;
     extern FILE* global_CE_map_output;
     extern FILE* all_links_output;

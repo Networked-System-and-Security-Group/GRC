@@ -807,6 +807,24 @@ class Analyser:
             self.get_intra_df()['fct_slowdown'].quantile(.99),
             self.get_inter_df()['fct_slowdown'].quantile(.99)
         )
+
+    def get_fct_until_finish_time(self, max_finish_time_s=3.0):
+        """Return avg/p99 FCT after excluding flows that finish after the cutoff."""
+        self.__read_flow_info()
+        df = self.flow_df[self.flow_df['finish_time'] <= max_finish_time_s]
+        intra_df = df[df['src_as'] == df['dst_as']]
+        inter_df = df[df['src_as'] != df['dst_as']]
+        avg_fct = (
+            df['fct_slowdown'].mean(),
+            intra_df['fct_slowdown'].mean(),
+            inter_df['fct_slowdown'].mean(),
+        )
+        p99_fct = (
+            df['fct_slowdown'].quantile(.99),
+            intra_df['fct_slowdown'].quantile(.99),
+            inter_df['fct_slowdown'].quantile(.99),
+        )
+        return avg_fct, p99_fct
     
     def get_large_flow_fct(self):
         self.__read_flow_info()
@@ -849,6 +867,34 @@ class Analyser:
         # We calculate statistics across all samples (all queues, all times).
         # Convert to MB
         return df['egress_bytes'].mean() / 1e6, df['egress_bytes'].quantile(0.99) / 1e6
+
+    def get_wan_buffer_stats_50_150(self):
+        """
+        Returns (mean, p99, peak) of buffer occupancy (egress_bytes) for WAN
+        switches during the 50ms-150ms window after traffic starts, i.e.
+        [2.05s, 2.15s].
+        """
+        self.__read_buffer_info()
+        wan_set = set(map(int, self.topo.get('wan_switches', [])))
+        if not wan_set:
+            return (0.0, 0.0, 0.0)
+
+        df = self.buffer_info[self.buffer_info['switch_id'].isin(wan_set)]
+        if df.empty:
+            return (0.0, 0.0, 0.0)
+
+        df = df[
+            (df['timestamp_ns'] >= 2050000000) &
+            (df['timestamp_ns'] <= 2150000000)
+        ]
+        if df.empty:
+            return (0.0, 0.0, 0.0)
+
+        return (
+            df['egress_bytes'].mean() / 1e6,
+            df['egress_bytes'].quantile(0.99) / 1e6,
+            df['egress_bytes'].max() / 1e6,
+        )
 
 
     def get_fct(self):

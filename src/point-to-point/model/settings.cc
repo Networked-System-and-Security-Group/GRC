@@ -190,6 +190,7 @@ namespace logfile {
     FILE* downlink_rx_output = nullptr;
     FILE* flow_rx_output = nullptr;
     FILE* qp_rate_log = nullptr;
+    FILE* uno_cwnd_log = nullptr;
     FILE* conn_output = nullptr;
     FILE* global_CE_map_output = nullptr;
     FILE* all_links_output = nullptr;
@@ -241,6 +242,9 @@ namespace logfile {
         fprintf(rate_monitor, "timestamp_ns,src_as,dst_as,real_rate,ref_rate,w,k\n");
         OPEN_EMPTY_FILE(qp_rate_log);
         fprintf(qp_rate_log, "timestamp_ns,flow_id,rate,alpha,target_rate\n");
+        OPEN_FILE(uno_cwnd_log);
+        fprintf(uno_cwnd_log,
+                "timestamp_ns,flow_id,src,dst,src_as,dst_as,rate_Bps,ecn_fraction_ewma,cwnd_bytes\n");
         OPEN_FILE(cnp_log);
         fprintf(cnp_log, "timestamp_ns,switch_id,flow_id\n");
         OPEN_FILE(cnp_trigger_prob_log);

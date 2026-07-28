@@ -5,14 +5,20 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 
+MAIN_FIGSIZE = (5.6, 3.1)
+TICK_FONTSIZE = 16
+LABEL_FONTSIZE = 18.4
+LEGEND_FONTSIZE = 13.6
+
+
 def plot_bar(enable_vals, disable_vals, *, ylabel: str, filename: str):
-    # Styling consistent with plot_epoch_duration.py
-    plt.figure(figsize=(5, 4), dpi=300)
+    # Styling consistent with buffer_plot_max.py
+    plt.figure(figsize=MAIN_FIGSIZE, dpi=300)
     plt.rcParams['pdf.fonttype'] = 42
 
     categories = ["Avg", "P99"]
     x = np.arange(len(categories))
-    width = 0.35
+    width = 0.25
 
     # Colors: use same purple for enable; gray for disable
     enable_c = (130 / 255, 0, 180 / 255)
@@ -21,18 +27,16 @@ def plot_bar(enable_vals, disable_vals, *, ylabel: str, filename: str):
     plt.bar(x - width / 2, enable_vals, width, label="2-level hashing", color=enable_c)
     plt.bar(x + width / 2, disable_vals, width, label="Naive hashing", color=disable_c)
 
-    plt.xticks(x, categories, fontsize=18)
-    plt.yticks(fontsize=18)
-    plt.xlabel("", fontsize=22)
-    plt.ylabel(ylabel, fontsize=22)
+    plt.xticks(x, categories, fontsize=TICK_FONTSIZE)
+    plt.yticks(fontsize=TICK_FONTSIZE)
+    plt.xlabel(" ", fontsize=LABEL_FONTSIZE)
+    plt.ylabel(ylabel, fontsize=LABEL_FONTSIZE)
 
-    plt.ylim(1, 2.2)
+    plt.ylim(0.0, 2.2)
 
-    plt.legend(frameon=False, fontsize=16, loc='upper left', bbox_to_anchor=(0, 1.1))
-    plt.grid(axis='y', alpha=0.3)
+    plt.legend(frameon=False, fontsize=LEGEND_FONTSIZE)
+    plt.grid(alpha=0.35)
     ax = plt.gca()
-    ax.spines['top'].set_visible(False)
-    ax.spines['right'].set_visible(False)
 
     filepath = filename if op.isabs(filename) else op.join(op.dirname(__file__), filename)
     plt.savefig(filepath, bbox_inches='tight')

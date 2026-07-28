@@ -208,22 +208,13 @@ class RdmaQueuePair : public Object {
     }
 
     Time GetRto(uint32_t mtu) {
-        if (irn.m_enabled) {
-            if (GetIrnBytesInFlight() > 3 * mtu) {
-                return irn.m_rtoHigh;
-            }
-            return irn.m_rtoLow;
-        } else {
-            return m_timeout;
-        }
+        return m_timeout;
     }
 
     inline bool CanIrnTransmit(uint32_t mtu) const {
-        uint64_t len_left = m_size >= snd_nxt ? m_size - snd_nxt : 0;
-
-        return !irn.m_enabled ||
-               (GetIrnBytesInFlight() + ((len_left > mtu) ? mtu : len_left)) < irn.m_bdp ||
-               (irn.m_highest_ack + irn.m_bdp > snd_nxt);
+        // Disable IRN's BDP-based flight cap so the sender is not throttled by pairBdp.
+        // Keep the hook in place to preserve the rest of IRN's loss-recovery behavior.
+        return true;
     }
 };
 

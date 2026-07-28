@@ -26,12 +26,21 @@ SCHEME_STYLES = {
     "GRC": {"color": "#8F63B8", "marker": "v"},
 }
 
+# DEFAULT_EXPRS = OrderedDict(
+#     [
+#         ("DCQCN", "392-395"),
+#         ("DCQCN-SR", "414-417"),
+#         ("GEMINI", "328-331"),
+#         ("UNO", "437-440"),
+#         ("GRC", "336-339"),
+#     ]
+# )
 DEFAULT_EXPRS = OrderedDict(
     [
-        ("DCQCN", "392-395"),
-        ("DCQCN-SR", "414-417"),
+        ("DCQCN", "473-476"),
+        ("DCQCN-SR", "477-480"),
         ("GEMINI", "328-331"),
-        ("UNO", "437-440"),
+        ("UNO", "485-488"),
         ("GRC", "336-339"),
     ]
 )
@@ -179,7 +188,7 @@ def get_buffer(expr):
     res = []
     for ana in analyser_iter(expr):
         try:
-            _, p99_buffer = ana.get_wan_buffer_stats()
+            _, p99_buffer, _ = ana.get_wan_buffer_stats_50_150()
             res.append(p99_buffer)
         except Exception:
             res.append(None)
@@ -218,7 +227,7 @@ def main():
     x_data = [0, 60, 120, 180]
     x_label = "Dynamic traffic throughput (Gbps)"
 
-    save_legend_figure(f"{file_name}-P99-Buffer-Legend.pdf")
+    save_legend_figure(f"{file_name}-P99-Buffer-50-150ms-Legend.pdf")
 
     values_by_scheme = OrderedDict()
     for scheme, expr in exprs.items():
@@ -228,7 +237,7 @@ def main():
         build_plot_data(x_data, values_by_scheme),
         xlabel=x_label,
         ylabel="P99 Buffer Util. (MB)",
-        filename=f"{file_name}-P99-Buffer-Util.pdf",
+        filename=f"{file_name}-P99-Buffer-50-150ms.pdf",
         xticks=x_data,
         xlim=(x_data[0], x_data[-1]),
     )

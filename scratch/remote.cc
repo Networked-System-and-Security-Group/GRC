@@ -63,7 +63,7 @@ uint32_t cc_mode = 1;           // mode for congestion control, 1: DCQCN
 bool enable_qcn = true, enable_pfc = true, use_dynamic_pfc_threshold = true;
 uint32_t packet_payload_size = 1000, l2_chunk_size = 0, l2_ack_interval = 0;
 double pause_time = 5;  // PFC pause, microseconds
-double flowgen_start_time = 2.0, flowgen_stop_time = 2.5, simulator_extra_time = 3.0;//0.15;
+double flowgen_start_time = 2.0, flowgen_stop_time = 2.5, simulator_extra_time = 0.5;//0.15;
 // queue length monitoring time is not used in this simulator
 // uint32_t qlen_dump_interval = 100000000, qlen_mon_interval = 1000;  // ns
 uint32_t switch_mon_interval = 10000;  // ns
@@ -369,6 +369,12 @@ void m_QP_rate_monitoring()
                     if (cc_mode == 10) {
                         fprintf(qp_rate_log, "%lu,%u,%lu,%lf,%lu\n", now, flowid, m_bps / 8,
                                 qp.second->uno.m_ecnFractionEwma, (uint64_t)qp.second->uno.m_cwnd);
+                        fprintf(logfile::uno_cwnd_log, "%lu,%u,%u,%u,%u,%u,%lu,%lf,%lu\n", now,
+                                flowid, flowInfo.src, flowInfo.dst,
+                                Settings::nodeInfos[flowInfo.src].as_id,
+                                Settings::nodeInfos[flowInfo.dst].as_id, m_bps / 8,
+                                qp.second->uno.m_ecnFractionEwma,
+                                (uint64_t)qp.second->uno.m_cwnd);
                     } else {
                         fprintf(qp_rate_log, "%lu,%u,%lu,%lf,%lu\n", now, flowid, m_bps / 8,
                                 qp.second->mlx.m_alpha, qp.second->mlx.m_targetRate.GetBitRate() / 8);
@@ -378,6 +384,7 @@ void m_QP_rate_monitoring()
             }
         }
     }
+    fflush(logfile::uno_cwnd_log);
     Simulator::Schedule(MicroSeconds(50), &m_QP_rate_monitoring);  // every 10us
     return;
 }

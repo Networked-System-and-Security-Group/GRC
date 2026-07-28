@@ -126,8 +126,8 @@ def main() -> None:
                 if args.sleep and run_id <= total:
                     time.sleep(args.sleep)
 
-    if args.experiment in ("hash", "all"):
-        _hash_sweep()
+    # if args.experiment in ("hash", "all"):
+        # _hash_sweep()
     if args.experiment in ("epoch", "all"):
         _epoch_sweep()
 

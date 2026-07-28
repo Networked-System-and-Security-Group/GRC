@@ -18,21 +18,22 @@ namespace ns3 {
 namespace {
 // Centralized defaults for Settings::GetRawParam() used in this file.
 // Keep them here so tuning doesn't require hunting through the logic below.
-constexpr const char* kEnableWDefault = "FALSE";
+constexpr const char* kEnableWDefault = "TRUE";
 constexpr const char* kWMaxDefault = "4.0";
 constexpr const char* kWKModeDefault = "overlap";
 constexpr const char* kWKTargetDefault = "0";
 constexpr const char* kEnableWXSmoothDefault = "TRUE";
 constexpr const char* kWKSyncIntervalMsDefault = "30";
 constexpr double kInitialWBeforeK = 2.5;
-constexpr const char* kInvDeltaDefault = "20971520";  // 1/20MB
+constexpr const char* kInvDeltaDefault = "6291456";  // 1/6MB
 constexpr const char* kBetaDefault = "0.3";
 constexpr const char* kGuaranteedRateFactorDefault = "0.25";
 constexpr const char* kEnableVDefault = "TRUE";
 constexpr const char* kWanEpochUsDefault = "1000";  // 1ms
 constexpr const char* kEnable2LayerHashDefault = "TRUE";
-constexpr const char* kGsccFairDefault = "FALSE";
+constexpr const char* kGsccFairDefault = "TRUE";
 constexpr const char* kGsccAckTsDefault = "TRUE";
+constexpr const char* kFixedRefRateGbpsDefault = "";
 
 class GSCCAckTag : public Tag {
 public:
@@ -114,6 +115,19 @@ Time GetWKSyncInterval() {
         std::stoll(Settings::GetRawParam("W_K_SYNC_INTERVAL_MS", kWKSyncIntervalMsDefault));
     return MilliSeconds(std::max<int64_t>(1, interval_ms));
 }
+
+int64_t GetFixedRefRateBytesPerSec() {
+    const std::string raw =
+        Settings::GetRawParam("GSCC_FIXED_REF_RATE_GBPS", kFixedRefRateGbpsDefault);
+    if (raw.empty()) {
+        return 0;
+    }
+    const double gbps = std::stod(raw);
+    if (gbps <= 0.0) {
+        return 0;
+    }
+    return static_cast<int64_t>(gbps * 1000.0 * 1000.0 * 1000.0 / 8.0);
+}
 }  // namespace
 
 Time WanRouting::epoch_duration = MicroSeconds(1000); // 1ms
@@ -152,6 +166,10 @@ void WanRouting::DstDCHandler::Init(WanRouting* wan_routing, int64_t max_rate) {
 
     last_cnp_send_time = Seconds(0);
     ref_rate = guaranteed_rate;
+    int64_t fixed_ref_rate = GetFixedRefRateBytesPerSec();
+    if (fixed_ref_rate > 0) {
+        ref_rate = fixed_ref_rate;
+    }
     total_send_bytes = 0;
 
     epoch_pkt_cnt = 0;
@@ -699,6 +717,14 @@ void WanRouting::update_w_k() {
 }
 
 void WanRouting::DstDCHandler::update_ref_rate() {
+    int64_t fixed_ref_rate = GetFixedRefRateBytesPerSec();
+    if (fixed_ref_rate > 0) {
+        int64_t pre_ref_rate = ref_rate;
+        ref_rate = fixed_ref_rate;
+        printf("[Fixed RefRate] ref_rate %.3lf->%.3lf\n", pre_ref_rate / 1e9, ref_rate / 1e9);
+        return;
+    }
+
     // update ref_rate
     int hsize = send_bytes_history.size();
     if (hsize < 3) {

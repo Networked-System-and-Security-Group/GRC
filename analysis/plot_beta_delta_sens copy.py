@@ -25,7 +25,7 @@ plt.rcParams.update({
 })
 
 # Default IDs if not provided
-DEFAULT_IDS_STR = "241-265"
+DEFAULT_IDS_STR = "241-260,264,265"
 DEFAULT_METRICS = ['inter_avg_fct', 'wan_buffer_p99']
 
 def get_metric_label(metric_key):
@@ -106,7 +106,7 @@ def plot_group(df, group_name, metric_key):
     
     # Filename prefix (sanitize group name)
     safe_group_name = group_name.replace('=', '_').replace(' ', '_')
-    prefix = f"beta_delta_{metric_key}_{safe_group_name}"
+    prefix = f"new_beta_delta_{metric_key}_{safe_group_name}"
     
     # 2. Plot Heatmap
     try:
