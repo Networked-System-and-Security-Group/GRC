@@ -254,7 +254,7 @@ TypeId RdmaQueuePairGroup::GetTypeId(void) {
     return tid;
 }
 
-RdmaQueuePairGroup::RdmaQueuePairGroup(void) { memset(m_qp_finished, 0, sizeof(m_qp_finished)); }
+RdmaQueuePairGroup::RdmaQueuePairGroup(void) = default;
 
 uint32_t RdmaQueuePairGroup::GetN(void) { return m_qps.size(); }
 
@@ -262,11 +262,24 @@ Ptr<RdmaQueuePair> RdmaQueuePairGroup::Get(uint32_t idx) { return m_qps[idx]; }
 
 Ptr<RdmaQueuePair> RdmaQueuePairGroup::operator[](uint32_t idx) { return m_qps[idx]; }
 
-void RdmaQueuePairGroup::AddQp(Ptr<RdmaQueuePair> qp) { m_qps.push_back(qp); }
+void RdmaQueuePairGroup::AddQp(Ptr<RdmaQueuePair> qp) {
+    qp->m_egressQueueIndex = m_qps.size();
+    m_qps.push_back(qp);
+}
 
-// void RdmaQueuePairGroup::AddRxQp(Ptr<RdmaRxQueuePair> rxQp){
-// 	m_rxQps.push_back(rxQp);
-// }
+void RdmaQueuePairGroup::RemoveQp(Ptr<RdmaQueuePair> qp) {
+    const uint32_t index = qp->m_egressQueueIndex;
+    NS_ASSERT_MSG(index < m_qps.size() && m_qps[index] == qp,
+                  "QP is not in the expected egress queue slot");
+
+    const uint32_t last = m_qps.size() - 1;
+    if (index != last) {
+        Ptr<RdmaQueuePair> moved = m_qps[last];
+        m_qps[index] = moved;
+        moved->m_egressQueueIndex = index;
+    }
+    m_qps.pop_back();
+}
 
 void RdmaQueuePairGroup::Clear(void) { m_qps.clear(); }
 

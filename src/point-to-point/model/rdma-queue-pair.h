@@ -14,15 +14,6 @@
 #include <vector>
 #include <ns3/simulator.h>
 
-#define BITMASK(b) (1 << ((b) % CHAR_BIT))
-#define BITSLOT(b) ((b) / CHAR_BIT)
-#define BITSET(a, b) ((a)[BITSLOT(b)] |= BITMASK(b))
-#define BITCLEAR(a, b) ((a)[BITSLOT(b)] &= ~BITMASK(b))
-#define BITTEST(a, b) ((a)[BITSLOT(b)] & BITMASK(b))
-#define BITNSLOTS(nb) ((nb + CHAR_BIT - 1) / CHAR_BIT)
-
-#define ESTIMATED_MAX_FLOW_PER_HOST 9120
-
 namespace ns3 {
 
 enum CcMode {
@@ -74,6 +65,9 @@ class RdmaQueuePair : public Object {
     uint32_t wp;          // current window of packets
     uint32_t lastPktSize;
     int32_t m_flow_id;
+    // Position in the owning NIC's active-QP group.  Maintained by
+    // RdmaQueuePairGroup so completed QPs can be removed in O(1).
+    uint32_t m_egressQueueIndex;
     Time m_timeout;
 
     /******************************
@@ -251,8 +245,6 @@ class RdmaRxQueuePair : public Object {  // Rx side queue pair
 class RdmaQueuePairGroup : public Object {
    public:
     std::vector<Ptr<RdmaQueuePair>> m_qps;
-    // std::vector<Ptr<RdmaRxQueuePair> > m_rxQps;
-    char m_qp_finished[BITNSLOTS(ESTIMATED_MAX_FLOW_PER_HOST)];
 
     static TypeId GetTypeId(void);
     RdmaQueuePairGroup(void);
@@ -260,17 +252,8 @@ class RdmaQueuePairGroup : public Object {
     Ptr<RdmaQueuePair> Get(uint32_t idx);
     Ptr<RdmaQueuePair> operator[](uint32_t idx);
     void AddQp(Ptr<RdmaQueuePair> qp);
-    // void AddRxQp(Ptr<RdmaRxQueuePair> rxQp);
+    void RemoveQp(Ptr<RdmaQueuePair> qp);
     void Clear(void);
-    inline bool IsQpFinished(uint32_t idx) {
-        if (__glibc_unlikely(idx >= ESTIMATED_MAX_FLOW_PER_HOST)) return false;
-        return BITTEST(m_qp_finished, idx);
-    }
-
-    inline void SetQpFinished(uint32_t idx) {
-        if (__glibc_unlikely(idx >= ESTIMATED_MAX_FLOW_PER_HOST)) return;
-        BITSET(m_qp_finished, idx);
-    }
 };
 
 }  // namespace ns3

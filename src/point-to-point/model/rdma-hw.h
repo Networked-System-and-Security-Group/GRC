@@ -60,7 +60,9 @@ class RdmaHw : public Object {
                              uint16_t pg);          // get the lookup key for m_qpMap
     Ptr<RdmaQueuePair> GetQp(uint64_t key);         // get the qp
     uint32_t GetNicIdxOfQp(Ptr<RdmaQueuePair> qp);  // get the NIC index of the qp
-    std::vector<uint32_t> Hashlist;                 // hash list for ECMP
+    // First-seen ordinal for each QP hash.  The ordinal preserves the old
+    // round-robin selection semantics without a linear Hashlist scan.
+    std::unordered_map<uint32_t, uint32_t> m_hashOrdinal;
     void DeleteQueuePair(Ptr<RdmaQueuePair> qp);    // delete TxQP
 
     void AddQueuePair(uint64_t size, uint16_t pg, Ipv4Address _sip, Ipv4Address _dip,

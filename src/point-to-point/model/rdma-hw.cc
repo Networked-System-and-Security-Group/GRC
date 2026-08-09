@@ -243,14 +243,12 @@ uint32_t RdmaHw::GetNicIdxOfQp(Ptr<RdmaQueuePair> qp) {
     auto &v = m_rtTable[qp->dip.Get()];
     if (v.size() > 0) {
         uint32_t hash = qp->GetHash();
-        auto it = std::find(Hashlist.begin(), Hashlist.end(), hash);
-        if (it == Hashlist.end()) {
-            Hashlist.push_back(hash);
-            return v[(Hashlist.size() - 1) % v.size()];
-        }else{
-            return v[std::distance(Hashlist.begin(), it) % v.size()];
+        auto it = m_hashOrdinal.find(hash);
+        if (it == m_hashOrdinal.end()) {
+            const uint32_t ordinal = m_hashOrdinal.size();
+            it = m_hashOrdinal.emplace(hash, ordinal).first;
         }
-        // return v[qp->GetHash() % v.size()];
+        return v[it->second % v.size()];
     }
     NS_ASSERT_MSG(false, "We assume at least one NIC is alive");
     std::cout << "We assume at least one NIC is alive" << std::endl;
@@ -338,14 +336,9 @@ void RdmaHw::AddQueuePair(uint64_t size, uint16_t pg, Ipv4Address sip, Ipv4Addre
 }
 
 void RdmaHw::DeleteQueuePair(Ptr<RdmaQueuePair> qp) {
-    // remove qp from the m_qpMap
     uint64_t key = GetQpKey(qp->dip.Get(), qp->sport, qp->dport, qp->m_pg);
-
-    // record to Akashic record
-    //NS_ASSERT(akashic_Qp.find(key) == akashic_Qp.end());  // should not be already existing
-    //akashic_Qp.insert(key);
-
-    // delete
+    uint32_t nic_idx = GetNicIdxOfQp(qp);
+    m_nic[nic_idx].qpGrp->RemoveQp(qp);
     m_qpMap.erase(key);
 }
 

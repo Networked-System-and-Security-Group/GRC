@@ -1,6 +1,4 @@
 #include <ns3/assert.h>
-#include <ns3/rdma-client-helper.h>
-#include <ns3/rdma-client.h>
 #include <ns3/rdma-driver.h>
 #include <ns3/rdma.h>
 #include <ns3/sim-setting.h>
@@ -235,15 +233,15 @@ void ScheduleFlowInputs() {
             assert(false);
         }
 
-        RdmaClientHelper clientHelper(
-            pg, nodeInfos[src].ip, nodeInfos[dst].ip, sport, dport, fsize,
+        // Creating an Application for each input flow retains every completed application for
+        // the entire simulation.  The client application's StartApplication() only delegates
+        // to AddQueuePair(), so create the QP directly and keep the flow semantics unchanged.
+        Ptr<RdmaDriver> rdma = n.Get(src)->GetObject<RdmaDriver>();
+        NS_ASSERT_MSG(rdma != nullptr, "source host has no RdmaDriver");
+        rdma->AddQueuePair(
+            fsize, pg, nodeInfos[src].ip, nodeInfos[dst].ip, sport, dport,
             has_win ? (global_t == 1 ? maxBdp : pairBdp.at(n.Get(src)).at(n.Get(dst))) : 0,
-            global_t == 1 ? maxRtt : pairRtt.at(n.Get(src)).at(n.Get(dst)));
-        clientHelper.SetAttribute("StatFlowID", IntegerValue(flowInfo.idx));
-
-        ApplicationContainer appCon = clientHelper.Install(n.Get(src));  // SRC
-        appCon.Start(Seconds(Time(0)));
-        appCon.Stop(Seconds(100.0));
+            global_t == 1 ? maxRtt : pairRtt.at(n.Get(src)).at(n.Get(dst)), flowInfo.idx);
         
         if (!ReadFlowInput()) {
             flowf.close();
@@ -1908,6 +1906,7 @@ int main(int argc, char *argv[]) {
 
     flowf.open(flow_file.c_str());
     flowf >> flow_num;
+    Settings::flowInfos.reserve(flow_num);
     if (ReadFlowInput()) {
         Simulator::Schedule(Seconds(0), &ScheduleFlowInputs);
     }
