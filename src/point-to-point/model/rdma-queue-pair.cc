@@ -38,7 +38,10 @@ RdmaQueuePair::RdmaQueuePair(uint16_t pg, Ipv4Address _sip, Ipv4Address _dip, ui
     m_win = 0;
     m_baseRtt = 0;
     m_max_rate = 0;
+    m_ccMode = CC_MODE_UNDEFINED;
     m_var_win = false;
+    m_useExplicitWin = false;
+    m_ccWin = 0;
     m_rate = 0;
     m_nextAvail = Time(0);
     mlx.m_alpha = 1;
@@ -68,6 +71,36 @@ RdmaQueuePair::RdmaQueuePair(uint16_t pg, Ipv4Address _sip, Ipv4Address _dip, ui
     dctcp.m_ecnCnt = 0;
     dctcp.m_batchSizeOfAlpha = 0;
 
+    gemini.m_lastUpdateSeq = 0;
+    gemini.m_alpha = 0;
+    gemini.m_inSlowStart = true;
+    gemini.m_baseRttValid = false;
+    gemini.m_baseRtt = 0;
+    gemini.m_rttMinThisRtt = 0;
+    gemini.m_ecnBytes = 0;
+    gemini.m_ackedBytes = 0;
+
+    uno.m_cwnd = 0;
+    uno.m_aiBytes = 0;
+    uno.m_kBytes = 0;
+    uno.m_mdGainEcn = 0;
+    uno.m_ecnFractionEwma = 0;
+    uno.m_baseRtt = 0;
+    uno.m_lastRtt = 0;
+    uno.m_epochPeriodNs = 0;
+    uno.m_epochStartTs = 0;
+    uno.m_epochEndTs = 0;
+    uno.m_epochAckedBytes = 0;
+    uno.m_epochMarkedBytes = 0;
+    uno.m_qaPeriodNs = 0;
+    uno.m_qaEndTimeNs = 0;
+    uno.m_qaAckedBytes = 0;
+    uno.m_skipUntilNs = 0;
+    uno.m_lastAckSeq = 0;
+    uno.m_qaEnabled = false;
+    uno.m_epochInitialized = false;
+    uno.m_initialized = false;
+
     irn.m_enabled = false;
     irn.m_highest_ack = 0;
     irn.m_max_seq = 0;
@@ -81,6 +114,8 @@ void RdmaQueuePair::SetSize(uint64_t size) { m_size = size; }
 void RdmaQueuePair::SetWin(uint32_t win) { m_win = win; }
 
 void RdmaQueuePair::SetBaseRtt(uint64_t baseRtt) { m_baseRtt = baseRtt; }
+
+void RdmaQueuePair::SetCcMode(uint32_t ccMode) { m_ccMode = ccMode; }
 
 void RdmaQueuePair::SetVarWin(bool v) { m_var_win = v; }
 
@@ -137,6 +172,10 @@ bool RdmaQueuePair::IsWinBound() {
 }
 
 uint64_t RdmaQueuePair::GetWin() {
+    if (m_useExplicitWin) return m_ccWin;
+    if (m_ccMode == CC_MODE_UNOCC && uno.m_initialized && uno.m_cwnd > 0) {
+        return std::max<uint64_t>(1, static_cast<uint64_t>(uno.m_cwnd));
+    }
     if (m_win == 0) return 0;
     uint64_t w;
     if (m_var_win) {
@@ -215,7 +254,7 @@ TypeId RdmaQueuePairGroup::GetTypeId(void) {
     return tid;
 }
 
-RdmaQueuePairGroup::RdmaQueuePairGroup(void) { memset(m_qp_finished, 0, sizeof(m_qp_finished)); }
+RdmaQueuePairGroup::RdmaQueuePairGroup(void) = default;
 
 uint32_t RdmaQueuePairGroup::GetN(void) { return m_qps.size(); }
 
@@ -223,11 +262,24 @@ Ptr<RdmaQueuePair> RdmaQueuePairGroup::Get(uint32_t idx) { return m_qps[idx]; }
 
 Ptr<RdmaQueuePair> RdmaQueuePairGroup::operator[](uint32_t idx) { return m_qps[idx]; }
 
-void RdmaQueuePairGroup::AddQp(Ptr<RdmaQueuePair> qp) { m_qps.push_back(qp); }
+void RdmaQueuePairGroup::AddQp(Ptr<RdmaQueuePair> qp) {
+    qp->m_egressQueueIndex = m_qps.size();
+    m_qps.push_back(qp);
+}
 
-// void RdmaQueuePairGroup::AddRxQp(Ptr<RdmaRxQueuePair> rxQp){
-// 	m_rxQps.push_back(rxQp);
-// }
+void RdmaQueuePairGroup::RemoveQp(Ptr<RdmaQueuePair> qp) {
+    const uint32_t index = qp->m_egressQueueIndex;
+    NS_ASSERT_MSG(index < m_qps.size() && m_qps[index] == qp,
+                  "QP is not in the expected egress queue slot");
+
+    const uint32_t last = m_qps.size() - 1;
+    if (index != last) {
+        Ptr<RdmaQueuePair> moved = m_qps[last];
+        m_qps[index] = moved;
+        moved->m_egressQueueIndex = index;
+    }
+    m_qps.pop_back();
+}
 
 void RdmaQueuePairGroup::Clear(void) { m_qps.clear(); }
 

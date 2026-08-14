@@ -86,12 +86,12 @@ class Analyser:
         self.id = str(id)
         self.dir = get_dir_by_id(self.id)
         self.flow_df: pd.DataFrame = None    # 全量流记录
-        self.rtt_info: pd.DataFrame = None #timestamp_ns,switch_id,dst_as,next_hop,rtt1_ms,rtt2_ms,timeout_count
+        self.rtt_info: pd.DataFrame = None #timestamp_ns,switch_id,dst_as,next_hop,rtt1_ms,measured_rtt_ms,timeout_count
         self.drop_info: pd.DataFrame = None #timestamp_ns,switch_id,next_hop,flow_id,seq_num,type
         self.link_info: pd.DataFrame = None #timestamp_ns,src_id,dst_id,flow_id,bytes
         self.buffer_info: pd.DataFrame = None #timestamp_ns,switch_id,next_hop,ingress_bytes,egress_bytes
         self.qp_rate_info: pd.DataFrame = None #timestamp_ns,flow_id,rate,alpha,target_rate
-        self.as_rate_info: pd.DataFrame = None #timestamp_ns,src_as,dst_as,real_rate,ref_rate
+        self.as_rate_info: pd.DataFrame = None #timestamp_ns,src_as,dst_as,real_rate,ref_rate,w,k
         self.cnp_info: pd.DataFrame = None #timestamp_ns,switch_id,flow_id
         self.cnp_trigger_prob_info: pd.DataFrame = None #timestamp_ns,switch_id,src_as,dst_as,cnp_cnt,pkt_cnt,prob
         self.accumulated_bytes_info: pd.DataFrame = None #timestamp_ns,switch_id,dst_as,accumulated_bytes
@@ -100,6 +100,328 @@ class Analyser:
         self.read_config()
         with (Path(__file__).parent.parent / self.config['TOPOLOGY_FILE']).open() as f:
             self.topo = json.load(f)
+
+        self._wan_edge_attr_cache: dict[tuple[int, int], dict[str, float]] | None = None
+        self._dci_to_as_cache: dict[int, int] | None = None
+
+    def _parse_time_to_seconds(self, v: object) -> float:
+        """Parse ns-3 style time string (e.g., '4000ns','1000us','2ms','1s') to seconds."""
+        if v is None:
+            raise ValueError('time is None')
+        if isinstance(v, (int, float)):
+            # Heuristic: treat numeric as nanoseconds.
+            return float(v) * 1e-9
+        s = str(v).strip()
+        m = re.match(r'^\s*([0-9]*\.?[0-9]+)\s*(ns|us|ms|s)\s*$', s, flags=re.IGNORECASE)
+        if not m:
+            raise ValueError(f'Unsupported time format: {v!r}')
+        val = float(m.group(1))
+        unit = m.group(2).lower()
+        if unit == 'ns':
+            return val * 1e-9
+        if unit == 'us':
+            return val * 1e-6
+        if unit == 'ms':
+            return val * 1e-3
+        if unit == 's':
+            return val
+        raise ValueError(f'Unsupported time unit: {unit}')
+
+    def _parse_rate_to_bps(self, v: object) -> float:
+        """Parse ns-3 style data rate string (e.g., '200Gbps') to bits/s."""
+        if v is None:
+            raise ValueError('rate is None')
+        if isinstance(v, (int, float)):
+            return float(v)
+        s = str(v).strip()
+        m = re.match(r'^\s*([0-9]*\.?[0-9]+)\s*([KMGTP]?)(?:b|B)ps\s*$', s, flags=re.IGNORECASE)
+        if not m:
+            raise ValueError(f'Unsupported rate format: {v!r}')
+        val = float(m.group(1))
+        prefix = m.group(2).upper()
+        mult = {
+            '': 1.0,
+            'K': 1e3,
+            'M': 1e6,
+            'G': 1e9,
+            'T': 1e12,
+            'P': 1e15,
+        }.get(prefix)
+        if mult is None:
+            raise ValueError(f'Unsupported rate prefix: {prefix}')
+        # Input is bps (bits per second) per ns-3 naming.
+        return val * mult
+
+    def _get_dci_to_as_map(self) -> dict[int, int]:
+        if self._dci_to_as_cache is not None:
+            return self._dci_to_as_cache
+        m: dict[int, int] = {}
+        for as_obj in self.topo.get('as_topologies', []):
+            m[int(as_obj['dci_switch'])] = int(as_obj['as_id'])
+        self._dci_to_as_cache = m
+        return m
+
+    def _get_as_by_dci_switch(self, switch_id: int) -> int | None:
+        return self._get_dci_to_as_map().get(int(switch_id))
+
+    def _get_wan_edge_attr(self) -> dict[tuple[int, int], dict[str, float]]:
+        """Return per-directed-edge attributes for WAN links: delay_s, bw_Bps."""
+        if self._wan_edge_attr_cache is not None:
+            return self._wan_edge_attr_cache
+
+        edges: dict[tuple[int, int], dict[str, float]] = {}
+        for link in self.topo.get('wan_links', []):
+            u = int(link['src'])
+            v = int(link['dst'])
+            delay_s = self._parse_time_to_seconds(link.get('delay', 0))
+            bw_bps = self._parse_rate_to_bps(link.get('bw', 0))
+            bw_Bps = bw_bps / 8.0 if bw_bps > 0 else 0.0
+            edges[(u, v)] = {'delay_s': delay_s, 'bw_Bps': bw_Bps}
+            edges[(v, u)] = {'delay_s': delay_s, 'bw_Bps': bw_Bps}
+
+        self._wan_edge_attr_cache = edges
+        return edges
+
+    def get_wan_base_rtt_ms(self, src_as: int, dst_as: int) -> float:
+        """Compute shortest-path base RTT (propagation-only) between src_as and dst_as in ms."""
+        path = self.get_wan_key_path(src_as, dst_as)
+        if not path or len(path) < 2:
+            return float('nan')
+        attr = self._get_wan_edge_attr()
+        one_way_s = 0.0
+        for u, v in zip(path[:-1], path[1:]):
+            a = attr.get((int(u), int(v)))
+            if a is None:
+                raise KeyError(f'No WAN link attrs for edge {u}->{v} on path {path}')
+            one_way_s += float(a['delay_s'])
+        return float(one_way_s * 2.0 * 1e3)
+
+    def _build_wan_path_edges(self, src_as: int, dst_as: int, *, include_return: bool) -> list[tuple[int, int]]:
+        path = self.get_wan_key_path(src_as, dst_as)
+        if not path or len(path) < 2:
+            return []
+        edges = [(int(u), int(v)) for u, v in zip(path[:-1], path[1:])]
+        if include_return:
+            edges += [(v, u) for (u, v) in edges]
+        return edges
+
+    def _get_queue_predictor_series(
+        self,
+        src_as: int,
+        dst_as: int,
+        *,
+        include_return: bool = True,
+        egress: bool = True,
+        start_time_s: float | None = None,
+        end_time_s: float | None = None,
+    ) -> pd.DataFrame:
+        """Build time series of (queue_sum_bytes, queue_delay_pred_ms) along shortest WAN path."""
+        self.__read_buffer_info()
+        edges = self._build_wan_path_edges(src_as, dst_as, include_return=include_return)
+        if not edges:
+            return pd.DataFrame(columns=['timestamp_ns', 'queue_sum_bytes', 'queue_delay_pred_ms'])
+
+        df = self.buffer_info
+        if start_time_s is not None:
+            df = df[df['timestamp_ns'] >= float(start_time_s) * 1e9]
+        if end_time_s is not None:
+            df = df[df['timestamp_ns'] <= float(end_time_s) * 1e9]
+        if df.empty:
+            return pd.DataFrame(columns=['timestamp_ns', 'queue_sum_bytes', 'queue_delay_pred_ms'])
+
+        col = 'egress_bytes' if egress else 'ingress_bytes'
+        edges_df = pd.DataFrame(edges, columns=['switch_id', 'next_hop']).drop_duplicates()
+
+        # attach bandwidth to each edge
+        attr = self._get_wan_edge_attr()
+        edges_df['bw_Bps'] = edges_df.apply(
+            lambda r: float(attr.get((int(r['switch_id']), int(r['next_hop'])), {}).get('bw_Bps', 0.0)),
+            axis=1,
+        )
+
+        merged = df.merge(edges_df, on=['switch_id', 'next_hop'], how='inner')
+        if merged.empty:
+            return pd.DataFrame(columns=['timestamp_ns', 'queue_sum_bytes', 'queue_delay_pred_ms'])
+
+        q_bytes = pd.to_numeric(merged[col], errors='coerce').fillna(0.0)
+        bw_Bps = pd.to_numeric(merged['bw_Bps'], errors='coerce').replace(0.0, np.nan)
+        merged = merged.assign(
+            queue_bytes=q_bytes,
+            queue_delay_ms=(q_bytes / bw_Bps) * 1e3,
+        )
+        merged['queue_delay_ms'] = merged['queue_delay_ms'].fillna(0.0)
+
+        series = (
+            merged
+            .groupby('timestamp_ns', as_index=False)
+            .agg(queue_sum_bytes=('queue_bytes', 'sum'), queue_delay_pred_ms=('queue_delay_ms', 'sum'))
+            .sort_values('timestamp_ns')
+            .reset_index(drop=True)
+        )
+        return series
+
+    def rtt_queue_linearity(
+        self,
+        *,
+        src_as: int | None = None,
+        dst_as: int | None = None,
+        start_time_s: float | None = None,
+        end_time_s: float | None = None,
+        include_return: bool = True,
+        egress: bool = True,
+        tolerance_s: float | None = None,
+        plot_pair: tuple[int, int] | None = None,
+    ) -> tuple[pd.DataFrame, pd.DataFrame]:
+        """Compare (measured_rtt_ms - base_rtt_ms) vs queue predictor along WAN shortest path.
+
+        Returns:
+        - summary_df: per (src_as,dst_as) linearity stats (corr, r2, slope, intercept, mae, n)
+        - samples_df: joined samples with columns including extra_rtt_ms and queue_delay_pred_ms
+
+        Notes:
+        - base_rtt_ms uses propagation delay only from topo['wan_links'].
+        - queue_delay_pred_ms = Σ(queue_bytes / link_bw_Bps) along path (optionally include return direction).
+        """
+        self.__read_rtt_info()
+        self.__read_buffer_info()
+
+        rtt = self.rtt_info.copy()
+        rtt['src_as'] = rtt['switch_id'].map(lambda x: self._get_as_by_dci_switch(int(x)))
+        rtt = rtt.dropna(subset=['src_as']).copy()
+        rtt['src_as'] = rtt['src_as'].astype(int)
+        rtt['dst_as'] = rtt['dst_as'].astype(int)
+
+        # rtt_log's dst_as may contain WAN switch IDs as well; keep only valid AS IDs.
+        valid_as_set = set(int(a.get('as_id')) for a in self.topo.get('as_topologies', []))
+        if valid_as_set:
+            rtt = rtt[rtt['dst_as'].isin(valid_as_set)]
+
+        if start_time_s is not None:
+            rtt = rtt[rtt['timestamp_ns'] >= float(start_time_s) * 1e9]
+        if end_time_s is not None:
+            rtt = rtt[rtt['timestamp_ns'] <= float(end_time_s) * 1e9]
+        if src_as is not None:
+            rtt = rtt[rtt['src_as'] == int(src_as)]
+        if dst_as is not None:
+            rtt = rtt[rtt['dst_as'] == int(dst_as)]
+        if rtt.empty:
+            return pd.DataFrame(), pd.DataFrame()
+
+        rtt = rtt.sort_values('timestamp_ns').reset_index(drop=True)
+
+        # default tolerance based on monitoring interval
+        if tolerance_s is None:
+            try:
+                interval_ns = int(float(self.config.get('SW_MONITORING_INTERVAL', 0)))
+            except Exception:
+                interval_ns = 0
+            tolerance_ns = int(interval_ns * 2) if interval_ns > 0 else int(2e6)  # 2ms fallback
+        else:
+            tolerance_ns = int(float(tolerance_s) * 1e9)
+
+        samples_all: list[pd.DataFrame] = []
+        summary_rows: list[dict] = []
+
+        pairs = sorted(set(zip(rtt['src_as'].tolist(), rtt['dst_as'].tolist())))
+        for sa, da in pairs:
+            pair_df = rtt[(rtt['src_as'] == sa) & (rtt['dst_as'] == da)].copy()
+            if pair_df.empty:
+                continue
+
+            base_rtt_ms = self.get_wan_base_rtt_ms(sa, da)
+            q_series = self._get_queue_predictor_series(
+                sa, da,
+                include_return=include_return,
+                egress=egress,
+                start_time_s=start_time_s,
+                end_time_s=end_time_s,
+            )
+            if q_series.empty:
+                continue
+
+            joined = pd.merge_asof(
+                pair_df.sort_values('timestamp_ns'),
+                q_series.sort_values('timestamp_ns'),
+                on='timestamp_ns',
+                direction='nearest',
+                tolerance=tolerance_ns,
+            )
+
+            joined['base_rtt_ms'] = float(base_rtt_ms)
+            joined['measured_rtt_ms'] = pd.to_numeric(joined['measured_rtt_ms'], errors='coerce')
+            joined['extra_rtt_ms'] = joined['measured_rtt_ms'] - joined['base_rtt_ms']
+            joined = joined.dropna(subset=['measured_rtt_ms', 'queue_delay_pred_ms'])
+            if joined.empty:
+                continue
+
+            # optional: drop negative extra RTT (numerical / model mismatch)
+            joined = joined[joined['extra_rtt_ms'].notna()].copy()
+
+            y = joined['extra_rtt_ms'].to_numpy(dtype=float)
+
+            def _fit_stats(x_arr: np.ndarray, y_arr: np.ndarray) -> tuple[float, float, float, float, float]:
+                mask = np.isfinite(x_arr) & np.isfinite(y_arr)
+                x2 = x_arr[mask]
+                y2 = y_arr[mask]
+                if len(x2) < 3:
+                    return (float('nan'), float('nan'), float('nan'), float('nan'), float('nan'))
+                a2, b2 = np.polyfit(x2, y2, deg=1)
+                y_hat2 = a2 * x2 + b2
+                ss_res2 = float(np.sum((y2 - y_hat2) ** 2))
+                ss_tot2 = float(np.sum((y2 - float(np.mean(y2))) ** 2))
+                r2_2 = 1.0 - ss_res2 / ss_tot2 if ss_tot2 > 1e-12 else float('nan')
+                corr2 = float(np.corrcoef(x2, y2)[0, 1])
+                mae2 = float(np.mean(np.abs(y2 - y_hat2)))
+                return (corr2, r2_2, float(a2), float(b2), mae2)
+
+            x_delay = joined['queue_delay_pred_ms'].to_numpy(dtype=float)
+            x_bytes = pd.to_numeric(joined['queue_sum_bytes'], errors='coerce').to_numpy(dtype=float)
+
+            corr_d, r2_d, a_d, b_d, mae_d = _fit_stats(x_delay, y)
+            corr_b, r2_b, a_b, b_b, mae_b = _fit_stats(x_bytes, y)
+
+            summary_rows.append({
+                'src_as': int(sa),
+                'dst_as': int(da),
+                'n': int(len(joined)),
+                'base_rtt_ms': float(base_rtt_ms),
+                'corr(extra_vs_queueDelay)': float(corr_d),
+                'r2(extra~a*queueDelay+b)': float(r2_d),
+                'slope_a_delay': float(a_d),
+                'intercept_b_delay': float(b_d),
+                'mae_ms_delay': float(mae_d),
+                'corr(extra_vs_queueBytes)': float(corr_b),
+                'r2(extra~a*queueBytes+b)': float(r2_b),
+                'slope_a_bytes': float(a_b),
+                'intercept_b_bytes': float(b_b),
+                'mae_ms_bytes': float(mae_b),
+            })
+
+            joined = joined.assign(
+                src_as=int(sa),
+                dst_as=int(da),
+                timestamp_s=joined['timestamp_ns'] / 1e9,
+            )
+            samples_all.append(joined)
+
+            if plot_pair is not None and (int(sa), int(da)) == (int(plot_pair[0]), int(plot_pair[1])):
+                plt.figure(figsize=(6, 4), dpi=300)
+                plt.scatter(joined['queue_delay_pred_ms'], joined['extra_rtt_ms'], s=6, alpha=0.35)
+                xs = np.linspace(float(np.nanmin(joined['queue_delay_pred_ms'])), float(np.nanmax(joined['queue_delay_pred_ms'])), 200)
+                plt.plot(xs, a_d * xs + b_d, color='red', linewidth=2.0, label=f'fit: y={a_d:.2f}x+{b_d:.2f}; R2={r2_d:.2f}; r={corr_d:.2f}')
+                plt.xlabel('Pred queueing delay (ms) = Σ(q/BW) along WAN path')
+                plt.ylabel('Extra RTT (ms) = measured_rtt - base_rtt')
+                plt.title(f'Linearity check: AS {sa}->{da} | baseRTT={base_rtt_ms:.3f}ms')
+                plt.grid(True, linestyle='--', alpha=0.5)
+                plt.legend(fontsize=9)
+                plt.tight_layout()
+                plt.show()
+
+        summary_df = pd.DataFrame(summary_rows)
+        if not summary_df.empty:
+            summary_df = summary_df.sort_values(['r2(extra~a*queueDelay+b)', 'corr(extra_vs_queueDelay)'], ascending=False).reset_index(drop=True)
+        samples_df = pd.concat(samples_all, axis=0, ignore_index=True) if samples_all else pd.DataFrame()
+        return summary_df, samples_df
 
     def __read_accumulated_bytes_info(self):
         if self.accumulated_bytes_info is None:
@@ -205,11 +527,7 @@ class Analyser:
     @auto_save_plot
     def plot_as_rate(self, src_as, dst_as):
         """绘制AS间的real_rate和ref_rate对比图"""
-        self.__read_as_rate_info()
-        df = self.as_rate_info[
-            (self.as_rate_info['src_as'] == src_as) & 
-            (self.as_rate_info['dst_as'] == dst_as)
-        ]
+        df = self.__get_as_rate_df(src_as, dst_as, required_columns=['real_rate', 'ref_rate'])
         if df.empty:
             print(f'No rate info for AS {src_as}->{dst_as}')
             return
@@ -220,6 +538,36 @@ class Analyser:
         plt.xlabel('Time (s)', fontsize=14)
         plt.ylabel('Rate (GB/s)', fontsize=14)
         #plt.title(f'DC Rate Monitor: {src_as}->{dst_as}', fontsize=14)
+        plt.grid(True, linestyle='--', alpha=0.7)
+        plt.legend(fontsize=10)
+
+    @auto_save_plot
+    def plot_as_w(self, src_as, dst_as):
+        """绘制AS间的w变化曲线"""
+        df = self.__get_as_rate_df(src_as, dst_as, required_columns=['w'])
+        if df.empty:
+            print(f'No w info for AS {src_as}->{dst_as}')
+            return
+
+        plt.figure(figsize=(5, 4), dpi=300)
+        plt.plot(df['timestamp_ns'] / 1e9, df['w'], label='w', color='purple')
+        plt.xlabel('Time (s)', fontsize=14)
+        plt.ylabel('w', fontsize=14)
+        plt.grid(True, linestyle='--', alpha=0.7)
+        plt.legend(fontsize=10)
+
+    @auto_save_plot
+    def plot_as_k(self, src_as, dst_as):
+        """绘制AS间的k变化曲线"""
+        df = self.__get_as_rate_df(src_as, dst_as, required_columns=['k'])
+        if df.empty:
+            print(f'No k info for AS {src_as}->{dst_as}')
+            return
+
+        plt.figure(figsize=(5, 4), dpi=300)
+        plt.plot(df['timestamp_ns'] / 1e9, df['k'], label='k', color='green')
+        plt.xlabel('Time (s)', fontsize=14)
+        plt.ylabel('k', fontsize=14)
         plt.grid(True, linestyle='--', alpha=0.7)
         plt.legend(fontsize=10)
 
@@ -280,6 +628,49 @@ class Analyser:
         plt.ylabel('RTT (ms)', fontsize=12)
         plt.grid(True, linestyle='--', alpha=0.7)
         plt.legend(fontsize=10)
+
+    def get_avg_abs_rtt_diff(
+        self,
+        *,
+        switch_id: int | None = None,
+        dst_as: int | None = None,
+        next_hop: int | None = None,
+        start_time_s: float | None = None,
+        end_time_s: float | None = None,
+        use_rtt_col: str = 'rtt1_ms',
+        use_measured_col: str = 'measured_rtt_ms',
+    ) -> float:
+        """返回 rtt_info 中 |rtt1_ms - measured_rtt_ms| 的平均值。
+
+        可选按 switch_id/dst_as/next_hop 以及时间窗过滤。
+        """
+        self.__read_rtt_info()
+        df = self.rtt_info
+
+        missing = [c for c in (use_rtt_col, use_measured_col, 'timestamp_ns') if c not in df.columns]
+        if missing:
+            raise KeyError(f"rtt_log missing columns: {missing}; got {list(df.columns)}")
+
+        if switch_id is not None:
+            df = df[df['switch_id'] == int(switch_id)]
+        if dst_as is not None:
+            df = df[df['dst_as'] == int(dst_as)]
+        if next_hop is not None:
+            df = df[df['next_hop'] == int(next_hop)]
+        if start_time_s is not None:
+            df = df[df['timestamp_ns'] >= float(start_time_s) * 1e9]
+        if end_time_s is not None:
+            df = df[df['timestamp_ns'] <= float(end_time_s) * 1e9]
+
+        if df.empty:
+            return float('nan')
+
+        a = pd.to_numeric(df[use_rtt_col], errors='coerce')
+        b = pd.to_numeric(df[use_measured_col], errors='coerce')
+        diff = (a - b).abs().dropna()
+        if diff.empty:
+            return float('nan')
+        return float(diff.mean())
 
     @auto_save_plot
     def plot_fct_cdf(self):
@@ -416,6 +807,24 @@ class Analyser:
             self.get_intra_df()['fct_slowdown'].quantile(.99),
             self.get_inter_df()['fct_slowdown'].quantile(.99)
         )
+
+    def get_fct_until_finish_time(self, max_finish_time_s=3.0):
+        """Return avg/p99 FCT after excluding flows that finish after the cutoff."""
+        self.__read_flow_info()
+        df = self.flow_df[self.flow_df['finish_time'] <= max_finish_time_s]
+        intra_df = df[df['src_as'] == df['dst_as']]
+        inter_df = df[df['src_as'] != df['dst_as']]
+        avg_fct = (
+            df['fct_slowdown'].mean(),
+            intra_df['fct_slowdown'].mean(),
+            inter_df['fct_slowdown'].mean(),
+        )
+        p99_fct = (
+            df['fct_slowdown'].quantile(.99),
+            intra_df['fct_slowdown'].quantile(.99),
+            inter_df['fct_slowdown'].quantile(.99),
+        )
+        return avg_fct, p99_fct
     
     def get_large_flow_fct(self):
         self.__read_flow_info()
@@ -456,7 +865,36 @@ class Analyser:
             
         # Each row is a queue sample.
         # We calculate statistics across all samples (all queues, all times).
-        return df['egress_bytes'].mean(), df['egress_bytes'].quantile(0.99)
+        # Convert to MB
+        return df['egress_bytes'].mean() / 1e6, df['egress_bytes'].quantile(0.99) / 1e6
+
+    def get_wan_buffer_stats_50_150(self):
+        """
+        Returns (mean, p99, peak) of buffer occupancy (egress_bytes) for WAN
+        switches during the 50ms-150ms window after traffic starts, i.e.
+        [2.05s, 2.15s].
+        """
+        self.__read_buffer_info()
+        wan_set = set(map(int, self.topo.get('wan_switches', [])))
+        if not wan_set:
+            return (0.0, 0.0, 0.0)
+
+        df = self.buffer_info[self.buffer_info['switch_id'].isin(wan_set)]
+        if df.empty:
+            return (0.0, 0.0, 0.0)
+
+        df = df[
+            (df['timestamp_ns'] >= 2050000000) &
+            (df['timestamp_ns'] <= 2150000000)
+        ]
+        if df.empty:
+            return (0.0, 0.0, 0.0)
+
+        return (
+            df['egress_bytes'].mean() / 1e6,
+            df['egress_bytes'].quantile(0.99) / 1e6,
+            df['egress_bytes'].max() / 1e6,
+        )
 
 
     def get_fct(self):
@@ -877,11 +1315,27 @@ class Analyser:
         if self.as_rate_info is None:
             self.as_rate_info = pd.read_csv(op.join(self.dir, 'rate_monitor'))
 
+    def __get_as_rate_df(self, src_as, dst_as, required_columns=None):
+        self.__read_as_rate_info()
+        df = self.as_rate_info
+        required_columns = required_columns or []
+        missing = [col for col in ['timestamp_ns', 'src_as', 'dst_as', *required_columns] if col not in df.columns]
+        if missing:
+            print(f'rate_monitor missing columns: {missing}')
+            return pd.DataFrame()
+        return df[
+            (df['src_as'] == src_as) &
+            (df['dst_as'] == dst_as)
+        ]
+
     def read_config(self):
         with open(op.join(self.dir, 'config.txt')) as f:
             lines = f.readlines()
             lines = [l.strip() for l in lines if l.strip()]
-            self.config = {l.split()[0] : l.split(maxsplit=2)[-1] for l in lines}
+            self.config = {}
+            for line in lines:
+                parts = line.split(maxsplit=1)
+                self.config[parts[0]] = parts[1] if len(parts) > 1 else ''
 
     def rtt_detail(self):
         file_path = op.join(self.dir, 'wan_log')
@@ -1107,16 +1561,20 @@ def get_basic_result(config_ids_str: str):
     results = []
     for ana in analyser_iter(config_ids_str):
         try:
+            msg = ana.config.get('MSG', '')
+            if msg == 'MSG':
+                msg = ''
             avg_vals, avg_intra, avg_inter = ana.get_avg_fct()
             p99_vals, p99_intra, p99_inter = ana.get_p99_fct()
             results.append({
                 'ID': ana.id,
+                'MSG': msg,
                 'Avg_FCT': avg_vals,
                 'Avg_Intra_FCT': avg_intra,
                 'Avg_Inter_FCT': avg_inter,
                 'P99_FCT': p99_vals,
                 'P99_Intra_FCT': p99_intra,
-                'P99_Inter_FCT': p99_inter
+                'P99_Inter_FCT': p99_inter,
             })
         except Exception as e:
             print(f'Error processing {ana.id}: {e}')
@@ -1124,8 +1582,8 @@ def get_basic_result(config_ids_str: str):
     return df
         
 def plot_motivation_expr():
-    a = get_analyser(863)
-    b = get_analyser(864)
+    a = get_analyser(40)
+    b = get_analyser(41)
     plt.figure(figsize=(5, 4), dpi=300)
     plot_cdf(a.get_inter_df()['fct_slowdown'], label='Disable-ECN')
     plot_cdf(b.get_inter_df()['fct_slowdown'], label='Enable-ECN')
@@ -1143,15 +1601,10 @@ def plot_motivation_expr():
     #plt.grid(True, linestyle='--', alpha=0.7)
 
 def plot_motivation_expr2():
-    get_analyser(863).plot_qp_rate([467])
+    get_analyser(40).plot_qp_rate([467])
 
 if __name__ == '__main__':
-    # Test CNP K analysis on experiment 132
-    try:
-        ana = get_analyser(132)
-        ana.analyze_cnp_k(w_max=4, start_time=2.01, end_time=2.1)
-    except Exception as e:
-        print(f"Error running analysis on 132: {e}")
-        # traceback.print_exc()
+    pass
+    #print(get_analyser(1).config)
 
 # %%

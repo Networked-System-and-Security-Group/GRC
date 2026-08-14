@@ -1,180 +1,238 @@
+from collections import OrderedDict
+import math
+from matplotlib.lines import Line2D
+
 from deep_analyse import *
 import argparse
 import os.path as op
 import numpy as np
 import matplotlib.pyplot as plt
-from itertools import cycle
-import math
-
-gscc_c = (130/255, 0, 180/255)
-_style_list = [
-    ('--', 'orange', 'o'),
-    ('--', 'c', 'o'),
-    ('--', gscc_c, 'o'),
-]
 
 
-def process_y_data(y_list):
-    """
-    将y数据按索引模5分组，每组取平均值（排除None），返回长度为5的列表。
-    若某组无有效数据（全为None），则对应位置为None。
-    """
-    # 初始化5个分组（对应模5的0-4）
-    groups = [[] for _ in range(5)]
-    for idx, val in enumerate(y_list):
-        if val is not None:  # 只保留非None值
-            mod = idx % 5  # 计算索引模5的结果
-            groups[mod].append(val)
-    # 计算每个分组的平均值（空分组返回None）
-    processed = []
-    for group in groups:
-        if group:  # 分组非空时取平均
-            processed.append(sum(group) / len(group))
-        else:  # 分组为空时保留None
-            processed.append(None)
-    return processed
+plt.rcParams["pdf.fonttype"] = 42
 
-def plot_auto_lines(data, xlabel, ylabel, filename, xticks=None, xlim=None, logtag=0):
-    """
-    针对任意多条曲线，按 _style_list 轮换样式画图，支持处理None值。
-    当logtag为1时，Y轴使用对数坐标
-    """
-    plt.figure(figsize=(5, 4), dpi=300)
-    plt.rcParams['pdf.fonttype']= 42
-    style_cycle = cycle(_style_list)
-    
-    # 收集所有有效y值，用于计算y_min和y_max
-    all_valid_y = []
-    for label, (x, y) in data.items():
-        # 过滤掉y为None的点
+MAIN_FIGSIZE = (5.6, 3.1)
+LEGEND_FIGSIZE = (8.8, 1.5)
+TICK_FONTSIZE = 16
+LABEL_FONTSIZE = 18.4
+LEGEND_FONTSIZE = 13.6
+MARKER_SIZE = 6.5
+
+SCHEME_STYLES = {
+    "DCQCN": {"color": "#F28E2B", "marker": "o"},
+    "DCQCN-SR": {"color": "#4E79A7", "marker": "s"},
+    "GEMINI": {"color": "#2A9D8F", "marker": "D"},
+    "UNO": {"color": "#E15759", "marker": "^"},
+    "GRC": {"color": "#8F63B8", "marker": "v"},
+}
+
+DEFAULT_EXPRS = OrderedDict(
+    [
+        ("DCQCN", "392-395"),
+        ("DCQCN-SR", "414-417"),
+        ("GEMINI", "328-331"),
+        ("UNO", "437-440"),
+        ("GRC", "336-339"),
+    ]
+)
+
+FLOW_SET_CONFIGS = {
+    "w": {
+        "file_name": "websearch",
+        "exprs": DEFAULT_EXPRS,
+    },
+    "a": {
+        "file_name": "alistorage",
+        "exprs": DEFAULT_EXPRS,
+    },
+}
+
+
+def get_integer_ticks(y_values, target_tick_count=6):
+    if not y_values:
+        return 0, 1, np.array([0, 1], dtype=int)
+
+    y_min = int(np.floor(min(y_values)))
+    y_max = int(np.ceil(max(y_values)))
+    if y_max <= y_min:
+        y_max = y_min + 1
+
+    span = y_max - y_min
+    approx_step = max(1, int(np.ceil(span / max(target_tick_count - 1, 1))))
+    magnitude = 10 ** int(math.floor(math.log10(approx_step)))
+
+    for factor in (1, 2, 3, 4, 5, 6, 8, 10):
+        step = factor * magnitude
+        if step >= approx_step:
+            break
+
+    tick_min = int(math.floor(y_min / step) * step)
+    tick_max = int(math.ceil(y_max / step) * step)
+    ticks = np.arange(tick_min, tick_max + step, step, dtype=int)
+    return tick_min, tick_max, ticks
+
+
+def save_legend_figure(filename):
+    handles = []
+    for scheme, style in SCHEME_STYLES.items():
+        handles.append(
+            Line2D(
+                [0],
+                [0],
+                color=style["color"],
+                linestyle="-",
+                linewidth=2.8,
+                marker=style["marker"],
+                markersize=MARKER_SIZE,
+                markerfacecolor="none",
+                markeredgecolor=style["color"],
+                markeredgewidth=1.6,
+                label=scheme,
+            )
+        )
+
+    fig, ax = plt.subplots(figsize=LEGEND_FIGSIZE, dpi=300)
+    ax.axis("off")
+    ax.legend(
+        handles=handles,
+        frameon=False,
+        fontsize=LEGEND_FONTSIZE,
+        loc="center",
+        ncol=len(handles),
+        handlelength=2.4,
+        columnspacing=1.4,
+    )
+
+    filepath = filename if op.isabs(filename) else op.join(op.dirname(__file__), filename)
+    fig.savefig(filepath, bbox_inches="tight", pad_inches=0.05)
+    plt.close(fig)
+    print(f"Saved legend to {filepath}")
+
+
+def plot_auto_lines(data, xlabel, ylabel, filename, xticks=None, xlim=None):
+    plt.figure(figsize=MAIN_FIGSIZE, dpi=300)
+    y_values = []
+
+    for label, spec in data.items():
         filtered_x = []
         filtered_y = []
-        for xi, yi in zip(x, y):
-            if yi is not None:  # 只保留y不为None的点
+        for xi, yi in zip(spec["x"], spec["y"]):
+            if yi is not None:
                 filtered_x.append(xi)
                 filtered_y.append(yi)
-                all_valid_y.append(yi)  # 收集有效y值
-        
-        ls, col, mk = next(style_cycle)
+                y_values.append(yi)
+
+        style = SCHEME_STYLES[spec["scheme"]]
         plt.plot(
-            filtered_x, filtered_y,
+            filtered_x,
+            filtered_y,
             label=label,
-            linestyle=ls,
-            color=col,
-            marker=mk,
-            linewidth=3.5,
-            markersize=4
+            linestyle="-",
+            color=style["color"],
+            marker=style["marker"],
+            linewidth=2.8,
+            markersize=MARKER_SIZE,
+            markerfacecolor="none",
+            markeredgecolor=style["color"],
+            markeredgewidth=1.6,
         )
-    
-    # 计算实际的y_min和y_max（处理无有效数据的极端情况）
-    if not all_valid_y:  # 无有效数据时，默认范围0-1
-        y_min, y_max = 0, 1
-    else:
-        y_min = min(all_valid_y)
-        y_max = max(all_valid_y)
-    
-    # 设置Y轴为对数坐标（如果logtag为1）
-    if logtag == 1:
-        plt.yscale('log')
-        # 对数坐标下使用实际的最小最大值
-        plt.ylim(y_min * 0.9, y_max * 1.1)  # 稍微扩展范围以便更好地显示数据
-    else:
-        # 线性坐标：y_min向下取整，y_max向上取整
-        y_min_floor = math.floor(y_min)
-        y_max_ceil = math.ceil(y_max)
-        
-        # 生成Y轴刻度
-        range_ = y_max_ceil - y_min_floor
-        if range_ == 0:  # 所有值相同的极端情况
-            step = 1
-        else:
-            step = max(1, round(range_ / 10))  # 最多10个刻度，步长至少为1
-        all_ticks = np.arange(y_min_floor, y_max_ceil + step, step)
-        
-        # 调整刻度显示（隔行显示，避免拥挤）
-        visible = [t if i % 2 == 0 else '' for i, t in enumerate(all_ticks)]
-        plt.yticks(all_ticks, visible, fontsize=14)
-        plt.ylim(y_min_floor, y_max_ceil)
-    
-    # X轴刻度
+
+    y_min, y_max, all_ticks = get_integer_ticks(y_values)
+
     if xticks is None:
         all_x = []
-        for xs, ys in data.values():
-            for xi, yi in zip(xs, ys):
+        for spec in data.values():
+            for xi, yi in zip(spec["x"], spec["y"]):
                 if yi is not None:
                     all_x.append(xi)
         all_x = sorted(set(all_x))
-        plt.xticks(all_x, fontsize=14)
+        plt.xticks(all_x, fontsize=TICK_FONTSIZE)
     else:
-        plt.xticks(xticks, fontsize=14)
-    
-    # 轴标签、图例、网格、去除多余边框
-    plt.xlabel(xlabel, fontsize=16)
-    plt.ylabel(ylabel, fontsize=16)
-    plt.legend(frameon=False, fontsize=16, loc='upper left', bbox_to_anchor=(0,1.1))
-    plt.grid(axis='y', alpha=0.3)
+        plt.xticks(xticks, fontsize=TICK_FONTSIZE)
+
+    plt.yticks(all_ticks, [str(int(t)) for t in all_ticks], fontsize=TICK_FONTSIZE)
+
+    plt.xlabel(xlabel, fontsize=LABEL_FONTSIZE)
+    plt.ylabel(ylabel, fontsize=LABEL_FONTSIZE)
+    plt.grid(axis="y", alpha=0.25, linewidth=0.8)
+
     ax = plt.gca()
-    ax.spines['top'].set_visible(False)
-    ax.spines['right'].set_visible(False)
-    
+    for spine in ("left", "bottom", "top", "right"):
+        ax.spines[spine].set_visible(True)
+        ax.spines[spine].set_linewidth(1.0)
+        ax.spines[spine].set_linestyle("-")
+        ax.spines[spine].set_color("#222222")
+
+    ax.tick_params(axis="both", which="both", width=1.0, color="#222222")
+
+    plt.ylim(y_min, y_max)
     if xlim:
         plt.xlim(*xlim)
-    
-    # 保存并关闭
+
     filepath = filename if op.isabs(filename) else op.join(op.dirname(__file__), filename)
-    plt.savefig(filepath, bbox_inches='tight')
+    plt.savefig(filepath, bbox_inches="tight")
     plt.close()
     print(f"Saved figure to {filepath}")
+
 
 def get_buffer(expr):
     res = []
     for ana in analyser_iter(expr):
         try:
-            avg_buffer = ana.get_buffer_information()
-            res.append(avg_buffer)
-        except:
+            _, p99_buffer = ana.get_wan_buffer_stats()
+            res.append(p99_buffer)
+        except Exception:
             res.append(None)
-    return [x / 1e6 if x is not None else None for x in res]
+    return res
+
+
+def get_flow_set_config(flow_set):
+    if flow_set not in FLOW_SET_CONFIGS:
+        supported = ", ".join(sorted(FLOW_SET_CONFIGS))
+        raise ValueError(
+            f"Unsupported flow_set '{flow_set}'. Supported flow_set values: {supported}."
+        )
+    return FLOW_SET_CONFIGS[flow_set]
+
+
+def build_plot_data(x_data, values_by_scheme):
+    data_to_plot = OrderedDict()
+    for scheme, y_vals in values_by_scheme.items():
+        data_to_plot[scheme] = {
+            "x": x_data,
+            "y": y_vals,
+            "scheme": scheme,
+        }
+    return data_to_plot
 
 
 def main():
-    # dcqcn_res = get_buffer('309,312,315,318,321')
-    # gscc_res = get_buffer('310,313,316,319,322')
-    # dcqcn_ecn_res = get_buffer('311,314,317,320,323')
+    parser = argparse.ArgumentParser()
+    parser.add_argument("-f", "--flow_set", default="w")
+    args = parser.parse_args()
 
-    # dcqcn_res = get_buffer('380,383,386,599,602')
-    # gscc_res = get_buffer('381,384,387,600,603')
+    config = get_flow_set_config(args.flow_set)
+    file_name = config["file_name"]
+    exprs = config["exprs"]
 
-    # dcqcn_res = get_buffer('380,383,386,389,602')
-    # gscc_res = get_buffer('381,384,387,390,603')
-    # dcqcn_inf_res = get_buffer('567-569,605,606')
+    x_data = [0, 60, 120, 180]
+    x_label = "Dynamic traffic throughput (Gbps)"
 
-    dcqcn_res = get_buffer('448,451,454,457,460')
-    gscc_res = get_buffer('449,452,455,458,461')
-    dcqcn_inf_res = get_buffer('562-566')
+    save_legend_figure(f"{file_name}-P99-Buffer-Legend.pdf")
 
-    print(f"buffer{(dcqcn_res[4]-gscc_res[4])/dcqcn_res[4]}")
-
-    x_data = [0, 50, 100, 150, 200]
-    x_label = 'Dynamic traffic throughput (Gbps)'
-
-    # 绘制Average normalized FCT
-    data_to_plot = {
-        'w/o-GSCC': (x_data, dcqcn_res),
-        'inf-w/o-GSCC': (x_data, dcqcn_inf_res),
-        'GSCC': (x_data, gscc_res)
-    }
+    values_by_scheme = OrderedDict()
+    for scheme, expr in exprs.items():
+        values_by_scheme[scheme] = get_buffer(expr)
 
     plot_auto_lines(
-        data_to_plot,
+        build_plot_data(x_data, values_by_scheme),
         xlabel=x_label,
-        ylabel="Buffer utilization (MB)",
-        filename="buffer.pdf",
+        ylabel="P99 Buffer Util. (MB)",
+        filename=f"{file_name}-P99-Buffer-Util.pdf",
         xticks=x_data,
         xlim=(x_data[0], x_data[-1]),
     )
 
-    quit()
 
 if __name__ == "__main__":
     main()

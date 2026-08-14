@@ -14,15 +14,6 @@
 #include <vector>
 #include <ns3/simulator.h>
 
-#define BITMASK(b) (1 << ((b) % CHAR_BIT))
-#define BITSLOT(b) ((b) / CHAR_BIT)
-#define BITSET(a, b) ((a)[BITSLOT(b)] |= BITMASK(b))
-#define BITCLEAR(a, b) ((a)[BITSLOT(b)] &= ~BITMASK(b))
-#define BITTEST(a, b) ((a)[BITSLOT(b)] & BITMASK(b))
-#define BITNSLOTS(nb) ((nb + CHAR_BIT - 1) / CHAR_BIT)
-
-#define ESTIMATED_MAX_FLOW_PER_HOST 9120
-
 namespace ns3 {
 
 enum CcMode {
@@ -30,6 +21,8 @@ enum CcMode {
     CC_MODE_HPCC = 3,
     CC_MODE_TIMELY = 7,
     CC_MODE_DCTCP = 8,
+    CC_MODE_GEMINI = 9,
+    CC_MODE_UNOCC = 10,
     CC_MODE_UNDEFINED = 0,
 };
 
@@ -64,11 +57,17 @@ class RdmaQueuePair : public Object {
     uint32_t m_win;       // bound of on-the-fly packets
     uint64_t m_baseRtt;   // base RTT of this qp
     DataRate m_max_rate;  // max rate
+    uint32_t m_ccMode;
     bool m_var_win;       // variable window size
+    bool m_useExplicitWin;
+    uint64_t m_ccWin;
     Time m_nextAvail;     //< Soonest time of next send
     uint32_t wp;          // current window of packets
     uint32_t lastPktSize;
     int32_t m_flow_id;
+    // Position in the owning NIC's active-QP group.  Maintained by
+    // RdmaQueuePairGroup so completed QPs can be removed in O(1).
+    uint32_t m_egressQueueIndex;
     Time m_timeout;
 
     /******************************
@@ -116,6 +115,39 @@ class RdmaQueuePair : public Object {
         uint32_t m_ecnCnt;
         uint32_t m_batchSizeOfAlpha;
     } dctcp;
+    struct {
+        uint32_t m_lastUpdateSeq;
+        double m_alpha;
+        bool m_inSlowStart;
+        bool m_baseRttValid;
+        uint64_t m_baseRtt;
+        uint64_t m_rttMinThisRtt;
+        uint64_t m_ecnBytes;
+        uint64_t m_ackedBytes;
+    } gemini;
+
+    struct {
+        double m_cwnd;
+        double m_aiBytes;
+        double m_kBytes;
+        double m_mdGainEcn;
+        double m_ecnFractionEwma;
+        uint64_t m_baseRtt;
+        uint64_t m_lastRtt;
+        uint64_t m_epochPeriodNs;
+        uint64_t m_epochStartTs;
+        uint64_t m_epochEndTs;
+        uint64_t m_epochAckedBytes;
+        double m_epochMarkedBytes;
+        uint64_t m_qaPeriodNs;
+        uint64_t m_qaEndTimeNs;
+        uint64_t m_qaAckedBytes;
+        uint64_t m_skipUntilNs;
+        uint64_t m_lastAckSeq;
+        bool m_qaEnabled;
+        bool m_epochInitialized;
+        bool m_initialized;
+    } uno;
 
     struct {
         bool m_enabled;
@@ -148,6 +180,7 @@ class RdmaQueuePair : public Object {
     void SetSize(uint64_t size);
     void SetWin(uint32_t win);
     void SetBaseRtt(uint64_t baseRtt);
+    void SetCcMode(uint32_t ccMode);
     void SetVarWin(bool v);
     void SetFlowId(int32_t v);
     void SetTimeout(Time v);
@@ -169,22 +202,13 @@ class RdmaQueuePair : public Object {
     }
 
     Time GetRto(uint32_t mtu) {
-        if (irn.m_enabled) {
-            if (GetIrnBytesInFlight() > 3 * mtu) {
-                return irn.m_rtoHigh;
-            }
-            return irn.m_rtoLow;
-        } else {
-            return m_timeout;
-        }
+        return m_timeout;
     }
 
     inline bool CanIrnTransmit(uint32_t mtu) const {
-        uint64_t len_left = m_size >= snd_nxt ? m_size - snd_nxt : 0;
-
-        return !irn.m_enabled ||
-               (GetIrnBytesInFlight() + ((len_left > mtu) ? mtu : len_left)) < irn.m_bdp ||
-               (irn.m_highest_ack + irn.m_bdp > snd_nxt);
+        // Disable IRN's BDP-based flight cap so the sender is not throttled by pairBdp.
+        // Keep the hook in place to preserve the rest of IRN's loss-recovery behavior.
+        return true;
     }
 };
 
@@ -193,8 +217,8 @@ class RdmaRxQueuePair : public Object {  // Rx side queue pair
     struct ECNAccount {
         uint16_t qIndex;
         uint8_t ecnbits;
-        uint16_t qfb;
-        uint16_t total;
+        uint32_t qfb;
+        uint32_t total;
 
         ECNAccount() { memset(this, 0, sizeof(ECNAccount)); }
     };
@@ -221,8 +245,6 @@ class RdmaRxQueuePair : public Object {  // Rx side queue pair
 class RdmaQueuePairGroup : public Object {
    public:
     std::vector<Ptr<RdmaQueuePair>> m_qps;
-    // std::vector<Ptr<RdmaRxQueuePair> > m_rxQps;
-    char m_qp_finished[BITNSLOTS(ESTIMATED_MAX_FLOW_PER_HOST)];
 
     static TypeId GetTypeId(void);
     RdmaQueuePairGroup(void);
@@ -230,17 +252,8 @@ class RdmaQueuePairGroup : public Object {
     Ptr<RdmaQueuePair> Get(uint32_t idx);
     Ptr<RdmaQueuePair> operator[](uint32_t idx);
     void AddQp(Ptr<RdmaQueuePair> qp);
-    // void AddRxQp(Ptr<RdmaRxQueuePair> rxQp);
+    void RemoveQp(Ptr<RdmaQueuePair> qp);
     void Clear(void);
-    inline bool IsQpFinished(uint32_t idx) {
-        if (__glibc_unlikely(idx >= ESTIMATED_MAX_FLOW_PER_HOST)) return false;
-        return BITTEST(m_qp_finished, idx);
-    }
-
-    inline void SetQpFinished(uint32_t idx) {
-        if (__glibc_unlikely(idx >= ESTIMATED_MAX_FLOW_PER_HOST)) return;
-        BITSET(m_qp_finished, idx);
-    }
 };
 
 }  // namespace ns3

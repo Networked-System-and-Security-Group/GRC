@@ -51,7 +51,7 @@ DCTCP_RATE_AI {dctcp_ai}Mb/s
 
 ERROR_RATE_PER_LINK 0.0000
 L2_CHUNK_SIZE 40000
-L2_ACK_INTERVAL 40000
+L2_ACK_INTERVAL {ack_interval}
 L2_BACK_TO_ZERO 0
 
 RATE_BOUND 1
@@ -68,6 +68,7 @@ SAMPLE_FEEDBACK 0
 ENABLE_QCN 1
 USE_DYNAMIC_PFC_THRESHOLD 1
 PACKET_PAYLOAD_SIZE 1000
+PRINT_LOG {print_log}
 
 
 KMAX_MAP {kmax_map}
@@ -76,6 +77,7 @@ PMAX_MAP {pmax_map}
 RANDOM_SEED {random_seed}
 TIME {time}
 WAN_CC_MODE {wan_cc_mode}
+THEMIS_ENABLE 0
 MSG {msg}
 """
 
@@ -86,6 +88,10 @@ cc_modes = {
     "hpcc": 3,
     "timely": 7,
     "dctcp": 8,
+    "gemini": 9,
+    "unocc": 10,
+    # Themis is a switch-side DCQCN baseline; keep the host CC mode at 1.
+    "themis": 1,
 }
 
 lb_modes = {
@@ -138,7 +144,7 @@ def main():
 
     parser = argparse.ArgumentParser(description='run simulation')
     parser.add_argument('--cc', dest='cc', action='store',
-                        default='dcqcn', help="hpcc/dcqcn/timely/dctcp (default: dcqcn)")
+                        default='dcqcn', help="hpcc/dcqcn/timely/dctcp/gemini/unocc/themis (default: dcqcn)")
     parser.add_argument('--lb', dest='lb', action='store',
                         default='fecmp', help="fecmp/pecmp/drill/conga (default: fecmp)")
     parser.add_argument('--pfc', dest='pfc', action='store',
@@ -146,7 +152,7 @@ def main():
     parser.add_argument('--irn', dest='irn', action='store',
                         type=int, default=0, help="enable IRN (default: 0)")
     parser.add_argument('--simul_time', dest='simul_time', action='store',
-                        default='0.05', help="traffic time to simulate (up to 3 seconds) (default: 0.1)")#
+                        default='0.1', help="traffic time to simulate (up to 3 seconds) (default: 0.1)")
     parser.add_argument('--buffer', dest="buffer", action='store',
                         default='9', help="the switch buffer size (MB) (default: 9)")
     parser.add_argument('--dci_buffer', dest='dci_buffer', action='store',
@@ -166,14 +172,29 @@ def main():
     parser.add_argument('--sw_monitoring_interval', dest='sw_monitoring_interval', action='store',
                         type=int, default=10000, help="interval of sampling statistics for queue status (default: 10000ns)")
     parser.add_argument('--my_flow', type=str, default='w-dynamic-100-150', help="use my own flow, if '', use default flow")#
-    parser.add_argument('--tcp_flow', type=str, default='config/w-tcp-100.txt', help="optional TCP flow file path; enables TCP/RDMA mixed-run")
+    parser.add_argument('--tcp_flow', type=str, default='', help="optional TCP flow file path; enables TCP/RDMA mixed-run")
     # NOTE: argparse with type=bool is almost always wrong (e.g. "0" becomes True).
     # Use 0/1 integers for stable CLI behavior.
     parser.add_argument('--debug', type=int, default=0, help="debug (0/1)")
     parser.add_argument('--stdout', type=int, default=0, help="stdout (0/1)")
+    parser.add_argument('--print_log', type=int, default=0, help="enable verbose runtime prints in selected modules (0/1)")
     parser.add_argument('--inter_load_all', type=int, default=60, help="不同DC之间之间通信的负载，单位Gbps")
     parser.add_argument('--intra_load', type=int, default=30, help="单个host在DC内之间通信的负载")
     parser.add_argument('--wan_cc_mode', type=int, default=1, help="DC间拥塞控制方案")#
+    parser.add_argument('--uno_ai_factor', type=float, default=0.001)
+    parser.add_argument('--uno_beta', type=float, default=0.5)
+    parser.add_argument('--uno_ewma_gain', type=float, default=0.65)
+    parser.add_argument('--uno_k', type=float, default=-1.0, help="UnoCC K in bytes; <=0 means BDP/7")
+    parser.add_argument('--uno_gentle_scale', type=float, default=0.3)
+    parser.add_argument('--uno_delay_threshold', type=float, default=0.05)
+    parser.add_argument('--uno_epoch_rtt_factor', type=float, default=2.0)
+    parser.add_argument('--uno_intra_rtt_ns', type=int, default=0, help="0 derives min intra-DC RTT from topology")
+    parser.add_argument('--uno_phantom_enabled', type=int, default=1)
+    parser.add_argument('--uno_phantom_size_kb', type=int, default=50150)
+    parser.add_argument('--uno_phantom_kmin_pct', type=int, default=5)
+    parser.add_argument('--uno_phantom_kmax_pct', type=int, default=60)
+    parser.add_argument('--uno_phantom_pmax', type=float, default=1.0)
+    parser.add_argument('--uno_phantom_slowdown_pct', type=float, default=10.0)
     parser.add_argument('--msg', type=str, default='', help="message")
     parser.add_argument('--config', type=str, default='', help="config.txt file to use, if '', generate a new config.txt file")
     parser.add_argument(
@@ -200,7 +221,20 @@ def main():
         file.write(str(number))
         file.truncate()
 
-    config_ID = f"[{config_index}]-{datetime.now().strftime('%m-%d-%H:%M:%S')}" 
+    def _slugify_msg(raw: str) -> str:
+        raw = raw.strip()
+        if not raw:
+            return ""
+        raw = re.sub(r"\s+", "-", raw)
+        raw = re.sub(r"[^\w.-]+", "-", raw, flags=re.UNICODE)
+        raw = re.sub(r"-{2,}", "-", raw).strip("-_.")
+        return raw
+
+    msg = args.msg.strip()
+    config_ID = f"[{config_index}]-{datetime.now().strftime('%m%d-%H%M')}"
+    msg_tag = _slugify_msg(msg)
+    if msg_tag:
+        config_ID = f"{config_ID}-{msg_tag}"
     
     # while (isExist):
     #     config_ID = str(random.randrange(MAX_RAND_RANGE))
@@ -208,6 +242,7 @@ def main():
 
     # input parameters
     cc_mode = cc_modes[args.cc]
+    themis_enabled = args.cc == "themis"
     lb_mode = lb_modes[args.lb]
     enabled_pfc = int(args.pfc)
     enabled_irn = int(args.irn)
@@ -227,11 +262,12 @@ def main():
     tcp_flow = args.tcp_flow.strip()
     debug = bool(args.debug)
     stdout = bool(args.stdout)
+    print_log = int(args.print_log)
     intra_load = args.intra_load
     inter_load_all = args.inter_load_all
-    wan_cc_mode = args.wan_cc_mode
-    msg = args.msg
-
+    # The standalone Themis baseline is DCQCN + Themis switch control.  Keep
+    # GSCC/WAN control disabled so the baseline is not a hybrid algorithm.
+    wan_cc_mode = 0 if themis_enabled else args.wan_cc_mode
     # Parse passthrough extras: KEY=VALUE (VALUE kept as raw string)
     extra_kv = {}
     for item in args.extra:
@@ -248,9 +284,9 @@ def main():
 
 
     # Sanity checks
-    if enabled_irn == 1 and enabled_pfc == 1:
-        raise Exception(
-            "CONFIG ERROR : If IRN is turn-on, then you should turn off PFC (for better perforamnce).")
+    # if enabled_irn == 1 and enabled_pfc == 1:
+    #     raise Exception(
+    #         "CONFIG ERROR : If IRN is turn-on, then you should turn off PFC (for better perforamnce).")
     if enabled_irn == 0 and enabled_pfc == 0:
         raise Exception(
             "CONFIG ERROR : Either IRN or PFC should be true (at least one).")
@@ -313,7 +349,7 @@ def main():
     # By default, DCQCN uses no window (rate-based).
     has_win = 0
     var_win = 0
-    if (cc_mode == 3 or cc_mode == 8 or enforce_win == 1):  # HPCC or DCTCP or enforcement
+    if (cc_mode == 3 or cc_mode == 8 or cc_mode == 9 or cc_mode == 10 or enforce_win == 1):
         has_win = 1
         var_win = 1
         if enforce_win == 1:
@@ -334,6 +370,8 @@ def main():
     pmax_map = "6 %d %d %d %d %d %.2f %d %.2f %d %.2f %d %.2f" % (
         bw*200000000, 0.2, bw*500000000, 0.2, bw*1000000000, 0.2, bw*2*1000000000, 0.2, bw*2500000000, 0.2, bw*4*1000000000, 0.2)
 
+    ack_interval = 1 if cc_mode == 9 or cc_mode == 10 else 40000
+
     if (cc_mode == 1):  # DCQCN
         ai = 10 * bw / 25
         hai = 25 * bw / 25
@@ -346,14 +384,14 @@ def main():
         config = config_template.format(id=config_ID, topo=topo, flow=flow,
                         flowgen_start_time=flowgen_start_time,
                                         flowgen_stop_time=flowgen_stop_time, sw_monitoring_interval=sw_monitoring_interval,
-                                        buffer_size=buffer, dci_buffer_size=dci_buffer, wan_buffer_size=wan_buffer, lb_mode=lb_mode, 
+                                        buffer_size=buffer, dci_buffer_size=dci_buffer, wan_buffer_size=wan_buffer, lb_mode=lb_mode,
                                         enabled_pfc=enabled_pfc, enabled_irn=enabled_irn,
                                         cc_mode=cc_mode,
                                         ai=ai, hai=hai, dctcp_ai=dctcp_ai,
                                         has_win=has_win, var_win=var_win,
                                         fast_react=fast_react, mi=mi, int_multi=int_multi, ewma_gain=ewma_gain,
-                                        kmax_map=kmax_map, kmin_map=kmin_map, pmax_map=pmax_map, random_seed=1, time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"), 
-                                        wan_cc_mode=wan_cc_mode, msg=msg)
+                                        kmax_map=kmax_map, kmin_map=kmin_map, pmax_map=pmax_map, random_seed=1, time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                                        ack_interval=ack_interval, wan_cc_mode=wan_cc_mode, msg=msg, print_log=print_log)
     elif cc_mode == 7:
         ai = 10 * bw / 10
         hai = 50 * bw / 10
@@ -366,16 +404,86 @@ def main():
         config = config_template.format(id=config_ID, topo=topo, flow=flow,
                         flowgen_start_time=flowgen_start_time,
                                         flowgen_stop_time=flowgen_stop_time, sw_monitoring_interval=sw_monitoring_interval,
+                                        buffer_size=buffer, dci_buffer_size=dci_buffer, wan_buffer_size=wan_buffer, lb_mode=lb_mode,
+                                        enabled_pfc=enabled_pfc, enabled_irn=enabled_irn,
+                                        cc_mode=cc_mode,
+                                        ai=ai, hai=hai, dctcp_ai=dctcp_ai,
+                                        has_win=has_win, var_win=var_win,
+                                        fast_react=fast_react, mi=mi, int_multi=int_multi, ewma_gain=ewma_gain,
+                                        kmax_map=kmax_map, kmin_map=kmin_map, pmax_map=pmax_map, random_seed=1, time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                                        ack_interval=ack_interval, wan_cc_mode=wan_cc_mode, msg=msg, print_log=print_log)
+    elif cc_mode == 9:
+        ai = 10 * bw / 10
+        hai = 50 * bw / 10
+        dctcp_ai = 1000
+        fast_react = 0
+        mi = 0
+        int_multi = 1
+        ewma_gain = 0.0625
+        # GEMINI uses a dedicated shallow ECN window: 400KB hard threshold.
+        kmax_map = "6 %d %d %d %d %d %d %d %d %d %d %d %d" % (
+            bw*200000000, 400, bw*500000000, 400, bw*1000000000, 400, bw*2*1000000000, 400, bw*2500000000, 400, bw*4*1000000000, 400)
+        kmin_map = "6 %d %d %d %d %d %d %d %d %d %d %d %d" % (
+            bw*200000000, 400, bw*500000000, 400, bw*1000000000, 400, bw*2*1000000000, 400, bw*2500000000, 400, bw*4*1000000000, 400)
+        pmax_map = "6 %d %d %d %d %d %.2f %d %.2f %d %.2f %d %.2f" % (
+            bw*200000000, 1.0, bw*500000000, 1.0, bw*1000000000, 1.0, bw*2*1000000000, 1.0, bw*2500000000, 1.0, bw*4*1000000000, 1.0)
+
+        config = config_template.format(id=config_ID, topo=topo, flow=flow,
+                        flowgen_start_time=flowgen_start_time,
+                                        flowgen_stop_time=flowgen_stop_time, sw_monitoring_interval=sw_monitoring_interval,
                                         buffer_size=buffer, dci_buffer_size=dci_buffer, wan_buffer_size=wan_buffer, lb_mode=lb_mode, 
                                         enabled_pfc=enabled_pfc, enabled_irn=enabled_irn,
                                         cc_mode=cc_mode,
                                         ai=ai, hai=hai, dctcp_ai=dctcp_ai,
                                         has_win=has_win, var_win=var_win,
                                         fast_react=fast_react, mi=mi, int_multi=int_multi, ewma_gain=ewma_gain,
-                                        kmax_map=kmax_map, kmin_map=kmin_map, pmax_map=pmax_map, random_seed=1, time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"), 
-                                        wan_cc_mode=wan_cc_mode, msg=msg)
+                                        kmax_map=kmax_map, kmin_map=kmin_map, pmax_map=pmax_map, random_seed=1, time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                                        ack_interval=ack_interval, wan_cc_mode=wan_cc_mode, msg=msg, print_log=print_log)
+    elif cc_mode == 10:
+        ai = 10 * bw / 25
+        hai = 25 * bw / 25
+        dctcp_ai = 1000
+        fast_react = 0
+        mi = 0
+        int_multi = 1
+        ewma_gain = 0.65
+
+        config = config_template.format(id=config_ID, topo=topo, flow=flow,
+                        flowgen_start_time=flowgen_start_time,
+                                        flowgen_stop_time=flowgen_stop_time, sw_monitoring_interval=sw_monitoring_interval,
+                                        buffer_size=buffer, dci_buffer_size=dci_buffer, wan_buffer_size=wan_buffer, lb_mode=lb_mode,
+                                        enabled_pfc=enabled_pfc, enabled_irn=enabled_irn,
+                                        cc_mode=cc_mode,
+                                        ai=ai, hai=hai, dctcp_ai=dctcp_ai,
+                                        has_win=has_win, var_win=var_win,
+                                        fast_react=fast_react, mi=mi, int_multi=int_multi, ewma_gain=ewma_gain,
+                                        kmax_map=kmax_map, kmin_map=kmin_map, pmax_map=pmax_map, random_seed=1, time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                                        ack_interval=ack_interval, wan_cc_mode=wan_cc_mode, msg=msg, print_log=print_log)
+        config += (
+            f"UNO_AI_FACTOR {args.uno_ai_factor}\n"
+            f"UNO_BETA {args.uno_beta}\n"
+            f"UNO_EWMA_GAIN {args.uno_ewma_gain}\n"
+            f"UNO_K {args.uno_k}\n"
+            f"UNO_GENTLE_SCALE {args.uno_gentle_scale}\n"
+            f"UNO_DELAY_THRESHOLD {args.uno_delay_threshold}\n"
+            f"UNO_EPOCH_RTT_FACTOR {args.uno_epoch_rtt_factor}\n"
+            f"UNO_INTRA_RTT_NS {args.uno_intra_rtt_ns}\n"
+            f"UNO_PHANTOM_ENABLED {args.uno_phantom_enabled}\n"
+            f"UNO_PHANTOM_SIZE_KB {args.uno_phantom_size_kb}\n"
+            f"UNO_PHANTOM_KMIN_PCT {args.uno_phantom_kmin_pct}\n"
+            f"UNO_PHANTOM_KMAX_PCT {args.uno_phantom_kmax_pct}\n"
+            f"UNO_PHANTOM_PMAX {args.uno_phantom_pmax}\n"
+            f"UNO_PHANTOM_SLOWDOWN_PCT {args.uno_phantom_slowdown_pct}\n"
+        )
     else:
         print("unknown cc:{}".format(args.cc))
+
+    # All CC branches share the same config template.  Materialize the
+    # switch-side baseline flag once here instead of duplicating a formatter
+    # argument across every branch.
+    config = re.sub(r'^THEMIS_ENABLE\s+.*$',
+                    f'THEMIS_ENABLE {int(themis_enabled)}',
+                    config, flags=re.MULTILINE)
 
     with open(config_name, "w") as file:
         if not args.config:
@@ -399,7 +507,7 @@ def main():
 
             # Keep run.py knobs authoritative even when reusing a config file.
             def _upsert_line(cfg: str, key: str, value: str) -> str:
-                pattern = rf'^{re.escape(key)}\\s+.*$'
+                pattern = rf'^{re.escape(key)}\s+.*$'
                 line = f'{key} {value}'
                 if re.search(pattern, cfg, flags=re.MULTILINE):
                     return re.sub(pattern, line, cfg, flags=re.MULTILINE)
@@ -409,6 +517,15 @@ def main():
 
             existing_config = _upsert_line(existing_config, 'DCI_BUFFER_SIZE', str(dci_buffer))
             existing_config = _upsert_line(existing_config, 'WAN_BUFFER_SIZE', str(wan_buffer))
+            existing_config = _upsert_line(existing_config, 'PRINT_LOG', str(print_log))
+            existing_config = _upsert_line(existing_config, 'THEMIS_ENABLE', str(int(themis_enabled)))
+            if themis_enabled:
+                # A reused config must still select the standalone Themis
+                # baseline rather than retaining a previous GSCC/WAN mode.
+                existing_config = _upsert_line(existing_config, 'CC_MODE', str(cc_mode))
+                existing_config = _upsert_line(existing_config, 'WAN_CC_MODE', str(wan_cc_mode))
+            if cc_mode == 10:
+                existing_config = _upsert_line(existing_config, 'L2_ACK_INTERVAL', str(ack_interval))
 
             if tcp_flow:
                 existing_config = _upsert_line(existing_config, 'TCP_FLOW_FILE', tcp_flow)
@@ -437,4 +554,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

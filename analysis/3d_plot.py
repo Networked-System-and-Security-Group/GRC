@@ -155,11 +155,14 @@ def calculate_variation(data):
 # 使用示例
 if __name__ == "__main__":
     H_vals = [1/12, 1/16, 1/20, 1/24]
-    beta_vals = [0.5, 0.6, 0.7]
-    result_150_100 = get_avg_inter('503-514')
-    result_150_200 = get_avg_inter('515-526')
-    calculate_variation(result_150_100)
-    calculate_variation(result_150_200)
+    beta_vals = [0, 0.15, 0.3, 0.45, 0.6]
+
+    # result_150_100 = get_avg_inter('503-514')
+    # result_150_200 = get_avg_inter('515-526')
+    result_150_180 = get_avg_inter('241-260,264,265')
+    # calculate_variation(result_150_100)
+    # calculate_variation(result_150_200)
+    calculate_variation(result_150_180)
 
 
     # 生成数据列表
@@ -170,36 +173,52 @@ if __name__ == "__main__":
             x_list.append(h)
             y_list.append(b)
 
-    # 为每组数据创建单独的数据字典
-    data_150_100 = {
-        'GSCC-inter-150-100': (x_list, y_list, result_150_100)
-    }
-    
-    data_150_200 = {
-        'GSCC-inter-150-200': (x_list, y_list, result_150_200)
+    data_150_180 = {
+        'GSCC-inter-150-180': (x_list, y_list, result_150_180)
     }
 
-    # 分别绘制两组数据
     plot_3d_surface(
-        data=data_150_100,
+        data=data_150_180,
         xlabel='H',
         ylabel='$\\beta$',
         zlabel='Dynamic traffic throughput (Gbps)',
-        filename='gscc_para_H_beta_150_100.pdf',
+        filename='gscc_para_H_beta_150_180.pdf',
         xticks=H_vals,
         yticks=beta_vals,
         elev=30,  # 微调仰角（与函数内默认一致）
         azim=45
     )
+
+    # 为每组数据创建单独的数据字典
+    # data_150_100 = {
+    #     'GSCC-inter-150-100': (x_list, y_list, result_150_100)
+    # }
     
-    plot_3d_surface(
-        data=data_150_200,
-        xlabel='H',
-        ylabel='$\\beta$',
-        zlabel='Dynamic traffic throughput (Gbps)',
-        filename='gscc_para_H_beta_150_200.pdf',
-        xticks=H_vals,
-        yticks=beta_vals,
-        elev=30,
-        azim=45
-    )
+    # data_150_200 = {
+    #     'GSCC-inter-150-200': (x_list, y_list, result_150_200)
+    # }
+
+    # # 分别绘制两组数据
+    # plot_3d_surface(
+    #     data=data_150_100,
+    #     xlabel='H',
+    #     ylabel='$\\beta$',
+    #     zlabel='Dynamic traffic throughput (Gbps)',
+    #     filename='gscc_para_H_beta_150_100.pdf',
+    #     xticks=H_vals,
+    #     yticks=beta_vals,
+    #     elev=30,  # 微调仰角（与函数内默认一致）
+    #     azim=45
+    # )
+    
+    # plot_3d_surface(
+    #     data=data_150_200,
+    #     xlabel='H',
+    #     ylabel='$\\beta$',
+    #     zlabel='Dynamic traffic throughput (Gbps)',
+    #     filename='gscc_para_H_beta_150_200.pdf',
+    #     xticks=H_vals,
+    #     yticks=beta_vals,
+    #     elev=30,
+    #     azim=45
+    # )

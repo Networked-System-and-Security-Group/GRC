@@ -14,6 +14,7 @@
 #include "ns3/hula-routing.h"
 #include "ns3/letflow-routing.h"
 #include "ns3/settings.h"
+#include "ns3/themis-routing.h"
 #include "ns3/wan-routing.h"
 
 namespace ns3 {
@@ -71,6 +72,8 @@ class SwitchMmu : public Object {
     // void printQueueStat(std::ostream& os, uint32_t port);
 
     void ConfigEcn(uint32_t port, uint32_t _kmin, uint32_t _kmax, double _pmax);
+    void ConfigUnoPhantom(uint32_t port, uint32_t sizeBytes, uint32_t kminPct, uint32_t kmaxPct,
+                          double pmax, double slowdownPct, uint64_t lineRate);
     void ConfigBufferSize(uint32_t size);
 
     void ConfigHdrm(uint32_t port, uint32_t size);
@@ -90,6 +93,15 @@ class SwitchMmu : public Object {
 
     uint32_t kmin[pCnt], kmax[pCnt];
     double pmax[pCnt];
+    bool m_unoPhantomConfigured;
+    bool unoPhantomEnabled[pCnt];
+    double unoPhantomBytes[pCnt];
+    uint64_t unoPhantomLastUpdateNs[pCnt];
+    uint32_t unoPhantomSizeBytes[pCnt];
+    uint32_t unoPhantomKminBytes[pCnt];
+    uint32_t unoPhantomKmaxBytes[pCnt];
+    double unoPhantomPmax[pCnt];
+    double unoPhantomDrainBps[pCnt];
     uint32_t paused[pCnt][qCnt];
     EventId resumeEvt[pCnt][qCnt];
     bool m_pause_remote[pCnt][qCnt];
@@ -128,6 +140,7 @@ class SwitchMmu : public Object {
     CaverRouting m_caverRouting;
     HulaRouting m_hulaRouting;
     WanRouting m_wanRouting;
+    ThemisRouting m_themisRouting;
 
     inline void printBufferInfo() {
         for (uint32_t port = 0; port < Settings::nodeContainer.Get(node_id)->GetNDevices(); ++port) {

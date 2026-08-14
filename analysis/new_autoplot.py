@@ -1,23 +1,143 @@
+from collections import OrderedDict
+import math
+from matplotlib.lines import Line2D
+
 from deep_analyse import *
 import argparse
 import os.path as op
 import numpy as np
 import matplotlib.pyplot as plt
-from itertools import cycle
 
-gscc_c = (130/255, 0, 180/255)
-_style_list = [
-    ('-.', "orange", 'd'),
-    (':', "orange", '^'),
-    ('-.', "c", 'd'),
-    (':', "c", '^'),
-    ('-.', gscc_c, 'd'),
-    (':', gscc_c, '^')
-]
 
-def plot_auto_lines(data, xlabel, ylabel, filename, xticks=None, xlim=None, logtag=0):
+plt.rcParams["pdf.fonttype"] = 42
+
+MAIN_FIGSIZE = (5.6, 3.1)
+LEGEND_FIGSIZE = (8.8, 1.5)
+TICK_FONTSIZE = 16
+LABEL_FONTSIZE = 18.4
+LEGEND_FONTSIZE = 13.6
+AVG_Y_MAX = 12
+P99_Y_MAX = 120
+GRID_ALPHA = 0.25
+GRID_LINEWIDTH = 0.8
+GRID_LINESTYLE = "--"
+VERTICAL_GUIDES = (60, 120)
+DCQCN_SR_FINISH_TIME_CUTOFF_S = 3.0
+
+LINE_STYLES = {
+    "Inter": "-",
+    "Intra": "-",
+}
+
+SCHEME_STYLES = {
+    "DCQCN": {"color": "#F28E2B", "marker": "o"},
+    "DCQCN-SR": {"color": "#4E79A7", "marker": "s"},
+    "GEMINI": {"color": "#2A9D8F", "marker": "D"},
+    "UnoCC": {"color": "#E15759", "marker": "^"},
+    "GRC": {"color": "#8F63B8", "marker": "v"},
+}
+
+DEFAULT_EXPRS = OrderedDict(
+    [
+        ("DCQCN", "392-395"),
+        ("DCQCN-SR", "414-417"),
+        ("GEMINI", "477-480"),
+        ("UnoCC", "437-440"),
+        ("GRC", "336-339"),
+    ]
+)
+
+FLOW_SET_CONFIGS = {
+    "w": {
+        "file_name": "websearch",
+        "exprs": DEFAULT_EXPRS,
+    },
+    "a": {
+        "file_name": "alistorage",
+        "exprs": DEFAULT_EXPRS,
+    },
+}
+
+
+def get_plot_style(scheme, traffic_class):
+    scheme_style = SCHEME_STYLES[scheme]
+    return {
+        "linestyle": LINE_STYLES[traffic_class],
+        "color": scheme_style["color"],
+        "marker": scheme_style["marker"],
+    }
+
+
+def get_integer_ticks(y_values, target_tick_count=6, fixed_max=None):
+    if not y_values:
+        if fixed_max is None:
+            return 0, 1, np.array([0, 1], dtype=int)
+        return 0, fixed_max, np.array([0, fixed_max], dtype=int)
+
+    if fixed_max is None:
+        y_min = int(np.floor(min(y_values)))
+        y_max = int(np.ceil(max(y_values)))
+    else:
+        y_min = int(np.floor(min(min(v, fixed_max) for v in y_values)))
+        y_max = int(fixed_max)
+    if y_max <= y_min:
+        y_min = max(0, y_max - 1)
+
+    span = y_max - y_min
+    approx_step = max(1, int(np.ceil(span / max(target_tick_count - 1, 1))))
+    magnitude = 10 ** int(math.floor(math.log10(approx_step)))
+
+    for factor in (1, 2, 3, 4, 5, 6, 8, 10):
+        step = factor * magnitude
+        if step >= approx_step:
+            break
+
+    tick_min = int(math.floor(y_min / step) * step)
+    tick_max = int(math.ceil(y_max / step) * step)
+    ticks = np.arange(tick_min, tick_max + step, step, dtype=int)
+    return tick_min, tick_max, ticks
+
+
+def save_legend_figure(filename):
+    handles = []
+    for scheme, style in SCHEME_STYLES.items():
+        handles.append(
+            Line2D(
+                [0],
+                [0],
+                color=style["color"],
+                linestyle="-",
+                linewidth=2.8,
+                marker=style["marker"],
+                markersize=6.5,
+                markerfacecolor="none",
+                markeredgecolor=style["color"],
+                markeredgewidth=1.6,
+                label=scheme,
+            )
+        )
+
+    fig, ax = plt.subplots(figsize=LEGEND_FIGSIZE, dpi=300)
+    ax.axis("off")
+    ax.legend(
+        handles=handles,
+        frameon=False,
+        fontsize=LEGEND_FONTSIZE,
+        loc="center",
+        ncol=len(handles),
+        handlelength=2.4,
+        columnspacing=1.4,
+    )
+
+    filepath = filename if op.isabs(filename) else op.join(op.dirname(__file__), filename)
+    fig.savefig(filepath, bbox_inches="tight", pad_inches=0.05)
+    plt.close(fig)
+    print(f"Saved legend to {filepath}")
+
+
+def plot_auto_lines(data, xlabel, ylabel, filename, xticks=None, xlim=None, y_axis=None, logtag=0):
     """
-    针对任意多条曲线，按 _style_list 轮换样式画图，支持处理None值。
+    针对任意多条曲线画图，支持处理 None 值。
 
     参数:
       data: dict[label, (x_list, y_list)]
@@ -26,187 +146,252 @@ def plot_auto_lines(data, xlabel, ylabel, filename, xticks=None, xlim=None, logt
       xticks: 自定义 x 轴刻度列表（可选）
       xlim: 自定义 x 轴范围 (xmin, xmax)（可选）
     """
-    plt.figure(figsize=(5, 4), dpi=300)
-    plt.rcParams['pdf.fonttype']= 42
-    style_cycle = cycle(_style_list)
-    y_values = []  # 收集所有非None的y值用于计算范围
+    plt.figure(figsize=MAIN_FIGSIZE, dpi=300)
+    y_values = []
+    series = []
 
-    # 逐条绘制
-    for label, (x, y) in data.items():
-        # 过滤掉y为None的点
+    for label, spec in data.items():
+        x = spec["x"]
+        y = spec["y"]
+        scheme = spec["scheme"]
+        traffic_class = spec["traffic_class"]
         filtered_x = []
         filtered_y = []
         for xi, yi in zip(x, y):
-            if yi is not None:  # 只保留y不为None的点
+            if yi is not None:
                 filtered_x.append(xi)
                 filtered_y.append(yi)
-                y_values.append(yi)  # 收集有效的y值
-        
-        ls, col, mk = next(style_cycle)
+                y_values.append(yi)
+
+        style = get_plot_style(scheme, traffic_class)
+        series.append((label, style, filtered_x, filtered_y))
+
+    if y_axis is None:
+        y_min, y_max, all_ticks = get_integer_ticks(y_values)
+    else:
+        y_min, y_max, all_ticks = y_axis
+
+    for label, style, filtered_x, filtered_y in series:
         plt.plot(
-            filtered_x, filtered_y,  # 使用过滤后的数据
+            filtered_x,
+            filtered_y,
             label=label,
-            linestyle=ls,
-            color=col,
-            marker=mk,
-            linewidth=3.5,
-            markersize=4
+            linestyle=style["linestyle"],
+            color=style["color"],
+            linewidth=2.8,
+            clip_on=True,
         )
 
-    # 计算y轴范围：ymin向下取整，ymax向上取整
-    if y_values:  # 确保有有效数据
-        y_min = np.floor(min(y_values))  # 向下取整
-        y_max = np.ceil(max(y_values))   # 向上取整
-    else:  # 没有有效数据时使用默认范围
-        y_min, y_max = 0, 1
+        marker_x = []
+        marker_y = []
+        for xi, yi in zip(filtered_x, filtered_y):
+            if y_min <= yi <= y_max:
+                marker_x.append(xi)
+                marker_y.append(yi)
 
-    # X 轴刻度
+        plt.plot(
+            marker_x,
+            marker_y,
+            linestyle="None",
+            color=style["color"],
+            marker=style["marker"],
+            markersize=6.5,
+            markerfacecolor="none",
+            markeredgecolor=style["color"],
+            markeredgewidth=1.6,
+            clip_on=True,
+        )
+
     if xticks is None:
-        # 收集所有非None值对应的x坐标
         all_x = []
-        for xs, ys in data.values():
-            for xi, yi in zip(xs, ys):
+        for spec in data.values():
+            for xi, yi in zip(spec["x"], spec["y"]):
                 if yi is not None:
                     all_x.append(xi)
-        all_x = sorted(set(all_x))  # 去重并排序
-        plt.xticks(all_x, fontsize=14)
+        all_x = sorted(set(all_x))
+        plt.xticks(all_x, fontsize=TICK_FONTSIZE)
     else:
-        plt.xticks(xticks, fontsize=14)
+        plt.xticks(xticks, fontsize=TICK_FONTSIZE)
 
-    # Y 轴刻度：从y_min到y_max，分10段，隔行显示
-    raw_step = (y_max - y_min) / 10
-    step = 0.5 if raw_step <= 1 else np.ceil(raw_step * 2) / 2
-    all_ticks = np.arange(y_min, y_max + step, step)
-    visible = [t if i % 2 != len(all_ticks) % 2 else ''
-               for i, t in enumerate(all_ticks)]
-    plt.yticks(all_ticks, visible, fontsize=14)
+    plt.yticks(all_ticks, [str(int(t)) for t in all_ticks], fontsize=TICK_FONTSIZE)
 
-    # 轴标签、图例、网格、去除多余边框
-    plt.xlabel(xlabel, fontsize=16)
-    plt.ylabel(ylabel, fontsize=16)
-    #plt.legend(frameon=False, fontsize=16, loc='upper left', bbox_to_anchor=(0,1.1))
-    plt.grid(axis='y', alpha=0.3)
     ax = plt.gca()
-    ax.spines['top'].set_visible(False)
-    ax.spines['right'].set_visible(False)
+    plt.xlabel(xlabel, fontsize=LABEL_FONTSIZE)
+    plt.ylabel(ylabel, fontsize=LABEL_FONTSIZE)
+    ax.grid(axis="y", alpha=GRID_ALPHA, linewidth=GRID_LINEWIDTH, linestyle=GRID_LINESTYLE)
+    for xpos in VERTICAL_GUIDES:
+        ax.axvline(
+            xpos,
+            color="#b0b0b0",
+            alpha=GRID_ALPHA,
+            linewidth=GRID_LINEWIDTH,
+            linestyle=GRID_LINESTYLE,
+            zorder=0,
+        )
 
-    # 设置范围
-    plt.ylim(y_min, y_max)  # 使用计算出的范围
+    for spine in ("left", "bottom", "top", "right"):
+        ax.spines[spine].set_visible(True)
+        ax.spines[spine].set_linewidth(1.0)
+        ax.spines[spine].set_linestyle("-")
+        ax.spines[spine].set_color("#222222")
+
+    ax.tick_params(axis="both", which="both", width=1.0, color="#222222")
+
+    plt.ylim(y_min, y_max)
     if xlim:
         plt.xlim(*xlim)
 
-    # 保存并关闭
     filepath = filename if op.isabs(filename) else op.join(op.dirname(__file__), filename)
-    plt.savefig(filepath, bbox_inches='tight')
+    plt.savefig(filepath, bbox_inches="tight")
     plt.close()
     print(f"Saved figure to {filepath}")
 
-def get_avg_fct(expr):
-    inter = []
-    intra = []
-    all = []
-    for ana in analyser_iter(expr):
-        try:
-            avg,avg_intra,avg_inter = ana.get_avg_fct()
-            inter.append(avg_inter)
-            intra.append(avg_intra)
-            all.append(avg)
-        except:
-            inter.append(None)
-            intra.append(None)
-            all.append(None)
-    return inter,intra,all
 
-def get_p99_fct(expr):
+def get_avg_fct(expr, finish_time_cutoff_s=None):
+    inter = []
+    intra = []
+    all_vals = []
+    for ana in analyser_iter(expr):
+        try:
+            if finish_time_cutoff_s is None:
+                avg, avg_intra, avg_inter = ana.get_avg_fct()
+            else:
+                (avg, avg_intra, avg_inter), _ = ana.get_fct_until_finish_time(
+                    finish_time_cutoff_s
+                )
+            inter.append(avg_inter)
+            intra.append(avg_intra)
+            all_vals.append(avg)
+        except Exception:
+            inter.append(None)
+            intra.append(None)
+            all_vals.append(None)
+    return inter, intra, all_vals
+
+
+def get_p99_fct(expr, finish_time_cutoff_s=None):
     inter = []
     intra = []
     for ana in analyser_iter(expr):
         try:
-            _,avg_intra,avg_inter = ana.get_p99_fct()
-            inter.append(avg_inter)
-            intra.append(avg_intra)
-        except:
+            if finish_time_cutoff_s is None:
+                _, p99_intra, p99_inter = ana.get_p99_fct()
+            else:
+                _, (_, p99_intra, p99_inter) = ana.get_fct_until_finish_time(
+                    finish_time_cutoff_s
+                )
+            inter.append(p99_inter)
+            intra.append(p99_intra)
+        except Exception:
             inter.append(None)
             intra.append(None)
-    return inter,intra
+    return inter, intra
+
+
+def get_flow_set_config(flow_set):
+    if flow_set not in FLOW_SET_CONFIGS:
+        supported = ", ".join(sorted(FLOW_SET_CONFIGS))
+        raise ValueError(
+            f"Unsupported flow_set '{flow_set}'. Supported flow_set values: {supported}."
+        )
+    return FLOW_SET_CONFIGS[flow_set]
+
+
+def build_plot_data(x_data, metric_by_scheme, traffic_class):
+    data_to_plot = OrderedDict()
+    for scheme, (inter_vals, intra_vals) in metric_by_scheme.items():
+        y_vals = inter_vals if traffic_class == "Inter" else intra_vals
+        data_to_plot[scheme] = {
+            "x": x_data,
+            "y": y_vals,
+            "scheme": scheme,
+            "traffic_class": traffic_class,
+        }
+    return data_to_plot
+
+
+def get_shared_y_axis(metric_by_scheme, fixed_max=None):
+    y_values = []
+    for inter_vals, intra_vals in metric_by_scheme.values():
+        y_values.extend(v for v in inter_vals if v is not None)
+        y_values.extend(v for v in intra_vals if v is not None)
+    return get_integer_ticks(y_values, fixed_max=fixed_max)
+
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('-f', '--flow_set', default='w')
+    parser.add_argument("-f", "--flow_set", default="w")
     args = parser.parse_args()
-    flow_set = args.flow_set
-    if flow_set == 'a':
-        file_name = 'alistorage'
-    else:
-        file_name = 'websearch'
-        
-    # websearch
-    # dcqcn_expr = '448,451,454,457,460'
-    # gscc_expr = '449,452,455,458,461'
-    # dcqcn_inf_expr = '562-566'
 
-    # dcqcn_expr = '350,353,356,359,362'
-    # gscc_expr = '351,354,357,360,363'
-    # dcqcn_inf_expr = '562-566'
+    config = get_flow_set_config(args.flow_set)
+    file_name = config["file_name"]
+    exprs = config["exprs"]
 
-    # alistorage
-    dcqcn_expr = '380,383,386,389,392'
-    gscc_expr = '381,384,387,390,393'
-    dcqcn_inf_expr = '567-569,605,606'
+    x_data = [0, 60, 120, 180]
+    x_label = "Dynamic traffic throughput (Gbps)"
 
-    dcqcn_inter, dcqcn_intra, dcqcn_all = get_avg_fct(dcqcn_expr)
-    gscc_inter, gscc_intra, gscc_all = get_avg_fct(gscc_expr)
-    dcqcn_inf_inter, dcqcn_inf_intra, dcqcn_inf_all = get_avg_fct(dcqcn_inf_expr)
+    save_legend_figure(f"{file_name}-Legend.pdf")
 
-    print((dcqcn_inf_all[4] - gscc_all[4])/ dcqcn_inf_all[4])
+    avg_metric_by_scheme = OrderedDict()
+    for scheme, expr in exprs.items():
+        finish_time_cutoff_s = (
+            DCQCN_SR_FINISH_TIME_CUTOFF_S if scheme == "DCQCN-SR" else None
+        )
+        inter_vals, intra_vals, _ = get_avg_fct(expr, finish_time_cutoff_s)
+        avg_metric_by_scheme[scheme] = (inter_vals, intra_vals)
 
-
-    x_data = [0, 50, 100, 150, 200]
-    x_label = 'Dynamic traffic throughput (Gbps)'
-
-    # 绘制Average normalized FCT
-    data_to_plot = {
-        "w/o-GSCC-inter": (x_data, dcqcn_inter),
-        "w/o-GSCC-intra": (x_data, dcqcn_intra),
-        "inf-w/o-GSCC-inter": (x_data, dcqcn_inf_inter),
-        "inf-w/o-GSCC-intra": (x_data, dcqcn_inf_intra),
-        "GSCC-inter": (x_data, gscc_inter),
-        "GSCC-intra": (x_data, gscc_intra)
-    }
+    avg_y_axis = get_shared_y_axis(avg_metric_by_scheme, fixed_max=AVG_Y_MAX)
 
     plot_auto_lines(
-        data_to_plot,
+        build_plot_data(x_data, avg_metric_by_scheme, "Inter"),
         xlabel=x_label,
-        ylabel="Average normalized FCT",
-        filename=f"{file_name}-Average-normalized-FCT.pdf",
+        ylabel="Avg. Normalized FCT",
+        filename=f"{file_name}-Average-normalized-FCT-Inter.pdf",
         xticks=x_data,
-        xlim=(x_data[0], x_data[-1])
+        xlim=(x_data[0], x_data[-1]),
+        y_axis=avg_y_axis,
     )
-
-    dcqcn_inter, dcqcn_intra = get_p99_fct(dcqcn_expr)
-    gscc_inter, gscc_intra = get_p99_fct(gscc_expr)
-    dcqcn_inf_inter, dcqcn_inf_intra = get_p99_fct(dcqcn_inf_expr)
-
-    # 绘制 P99 normalized FCT
-    data_to_plot = {
-        "w/o-GSCC-inter": (x_data, dcqcn_inter),
-        "w/o-GSCC-intra": (x_data, dcqcn_intra),
-        "inf-w/o-GSCC-inter": (x_data, dcqcn_inf_inter),
-        "inf-w/o-GSCC-intra": (x_data, dcqcn_inf_intra),
-        "GSCC-inter": (x_data, gscc_inter),
-        "GSCC-intra": (x_data, gscc_intra)
-    }
 
     plot_auto_lines(
-        data_to_plot,
+        build_plot_data(x_data, avg_metric_by_scheme, "Intra"),
         xlabel=x_label,
-        ylabel="P99 normalized FCT",
-        filename=f"{file_name}-P99-normalized-FCT.pdf",
+        ylabel="Avg. Normalized FCT",
+        filename=f"{file_name}-Average-normalized-FCT-Intra.pdf",
         xticks=x_data,
-        xlim=(x_data[0], x_data[-1])
+        xlim=(x_data[0], x_data[-1]),
+        y_axis=avg_y_axis,
     )
 
-    quit()
+    p99_metric_by_scheme = OrderedDict()
+    for scheme, expr in exprs.items():
+        finish_time_cutoff_s = (
+            DCQCN_SR_FINISH_TIME_CUTOFF_S if scheme == "DCQCN-SR" else None
+        )
+        inter_vals, intra_vals = get_p99_fct(expr, finish_time_cutoff_s)
+        p99_metric_by_scheme[scheme] = (inter_vals, intra_vals)
+
+    p99_y_axis = get_shared_y_axis(p99_metric_by_scheme, fixed_max=P99_Y_MAX)
+
+    plot_auto_lines(
+        build_plot_data(x_data, p99_metric_by_scheme, "Inter"),
+        xlabel=x_label,
+        ylabel="P99 Normalized FCT",
+        filename=f"{file_name}-P99-normalized-FCT-Inter.pdf",
+        xticks=x_data,
+        xlim=(x_data[0], x_data[-1]),
+        y_axis=p99_y_axis,
+    )
+
+    plot_auto_lines(
+        build_plot_data(x_data, p99_metric_by_scheme, "Intra"),
+        xlabel=x_label,
+        ylabel="P99 Normalized FCT",
+        filename=f"{file_name}-P99-normalized-FCT-Intra.pdf",
+        xticks=x_data,
+        xlim=(x_data[0], x_data[-1]),
+        y_axis=p99_y_axis,
+    )
+
 
 if __name__ == "__main__":
     main()

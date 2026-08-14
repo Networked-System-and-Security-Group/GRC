@@ -125,18 +125,12 @@ int RdmaEgressQueue::GetNextQindex(bool paused[]) {
     int rdma_candidate = -1024;
     uint32_t qIndex;
     for (qIndex = 1; qIndex <= fcount; qIndex++) {
-        if (m_qpGrp->IsQpFinished((qIndex + m_rrlast) % fcount)) continue;
         Ptr<RdmaQueuePair> qp = m_qpGrp->Get((qIndex + m_rrlast) % fcount);
         bool cond1 = !paused[qp->m_pg];
         bool cond_window_allowed =
             (!qp->IsWinBound() && (!qp->irn.m_enabled || qp->CanIrnTransmit(m_mtu)));
         bool cond2 = (qp->GetBytesLeft() > 0 && cond_window_allowed);
 
-        if (!cond2 && !m_qpGrp->IsQpFinished((qIndex + m_rrlast) % fcount)) {
-            if (qp->IsFinishedConst()) {
-                m_qpGrp->SetQpFinished((qIndex + m_rrlast) % fcount);
-            }
-        }
         if (!cond1 && cond2) {
             if (m_qpGrp->Get((qIndex + m_rrlast) % fcount)->m_nextAvail.GetTimeStep() >
                 Simulator::Now().GetTimeStep()) {

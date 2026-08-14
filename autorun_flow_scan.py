@@ -27,9 +27,9 @@ def main():
     p = argparse.ArgumentParser(description="Scan flow sets with variations")
     p.add_argument("--topo", default="cernet_topo")
     p.add_argument("--simul_time", type=float, default=0.1)
-    p.add_argument("--flow_set", choices=["w", "a"], default="w")
+    p.add_argument("--flow_set", choices=["w", "a", "s", 'm'], default="m")
     p.add_argument("--background_inter_load", type=int, default=150)
-    p.add_argument("--dynamic_list", default="60,120,180")
+    p.add_argument("--dynamic_list", default="0,60,120,180")
     p.add_argument("--variations", type=int, default=2)
     p.add_argument("--modes", default="wo_gscc,inf_wo_gscc,gscc")
     p.add_argument("--inf_buffer_mb", type=int, default=4000)
@@ -51,10 +51,10 @@ def main():
     
     for dyn in dynamics:
         # The filename that large_traffic_gen.py produces by default
-        base_flow_name = f"{args.flow_set}-dynamic-{args.background_inter_load}-{dyn}"
+        base_flow_name = f"{args.flow_set}-dynamic-70-{args.background_inter_load}-{dyn}"
         base_path = ROOT / "config" / f"{base_flow_name}.txt"
         
-        for v in range(args.variations):
+        for v in range(1, args.variations + 1):
             # Target flow name with variation suffix
             target_flow_name = f"{base_flow_name}-v{v}"
             target_path = ROOT / "config" / f"{target_flow_name}.txt"
@@ -88,14 +88,13 @@ def main():
                         raise FileNotFoundError(f"Expected generated file not found: {base_path}")
             
             generated_flows[(dyn, v)] = target_flow_name
-
     # 2. Run Experiments
     run_id = 1
     # Order: For each load -> For each variation -> For each mode
     # Total 3 * 2 * 3 = 18 experiments (with default args)
     
     for dyn in dynamics:
-        for v in range(args.variations):
+        for v in range(1, args.variations + 1):
             flow = generated_flows[(dyn, v)]
             for mode in modes:
                 preset = PRESETS[mode]

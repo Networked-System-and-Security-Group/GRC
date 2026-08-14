@@ -25,3 +25,7 @@ autokill.pid
 .venv
 Notes.md
 *.csv
+package.json
+package-lock.json
+expr*
+venv/*

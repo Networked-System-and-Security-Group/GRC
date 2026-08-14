@@ -6,6 +6,10 @@
 #include <ns3/udp-header.h>
 
 #include <climits>
+#include <algorithm>
+#include <cstdarg>
+#include <cmath>
+#include <cstdio>
 
 #include "cn-header.h"
 #include "flow-stat-tag.h"
@@ -28,6 +32,40 @@ NS_LOG_COMPONENT_DEFINE("RdmaHw");
 
 std::unordered_map<unsigned, unsigned> acc_timeout_count;
 uint64_t RdmaHw::nAllPkts = 0;
+
+namespace {
+inline int32_t GetDebugFlowId() {
+    static bool initialized = false;
+    static int32_t flow_id = -1;
+    if (!initialized) {
+        initialized = true;
+        const std::string raw = Settings::GetRawParam("FLOW_DEBUG_ID", "-1");
+        try {
+            flow_id = std::stoi(raw);
+        } catch (...) {
+            flow_id = -1;
+        }
+    }
+    return flow_id;
+}
+
+inline bool ShouldDebugFlow(int32_t flow_id) {
+    const int32_t target = GetDebugFlowId();
+    return target >= 0 && flow_id == target;
+}
+
+inline void LogFlowDebugf(int32_t flow_id, const char* fmt, ...) {
+    if (!ShouldDebugFlow(flow_id) || logfile::flow_debug_log == nullptr) return;
+    va_list args;
+    va_start(args, fmt);
+    fprintf(logfile::flow_debug_log, "[%lu] FlowId:%d, ",
+            Simulator::Now().GetNanoSeconds(), flow_id);
+    vfprintf(logfile::flow_debug_log, fmt, args);
+    fprintf(logfile::flow_debug_log, "\n");
+    va_end(args);
+    fflush(logfile::flow_debug_log);
+}
+}  // namespace
 
 TypeId RdmaHw::GetTypeId(void) {
     static TypeId tid =
@@ -118,8 +156,51 @@ TypeId RdmaHw::GetTypeId(void) {
             .AddAttribute("DctcpRateAI", "DCTCP's Rate increment unit in AI period",
                           DataRateValue(DataRate("1000Mb/s")),
                           MakeDataRateAccessor(&RdmaHw::m_dctcp_rai), MakeDataRateChecker())
+            .AddAttribute("GeminiH", "GEMINI's additive increase factor coefficient",
+                          DoubleValue(0.001), MakeDoubleAccessor(&RdmaHw::m_gemini_h),
+                          MakeDoubleChecker<double>())
+            .AddAttribute("GeminiBeta", "GEMINI's WAN multiplicative decrease factor",
+                          DoubleValue(0.2), MakeDoubleAccessor(&RdmaHw::m_gemini_beta),
+                          MakeDoubleChecker<double>())
+            .AddAttribute("GeminiT", "GEMINI's WAN delay threshold in ns",
+                          UintegerValue(4000000), MakeUintegerAccessor(&RdmaHw::m_gemini_t),
+                          MakeUintegerChecker<uint64_t>())
+            .AddAttribute("GeminiK", "GEMINI's ECN threshold surrogate in bytes",
+                          UintegerValue(409600), MakeUintegerAccessor(&RdmaHw::m_gemini_k),
+                          MakeUintegerChecker<uint64_t>())
+            .AddAttribute("GeminiInitCwnd",
+                          "GEMINI's initial congestion window in bytes; default is 10us * 100Gbps",
+                          UintegerValue(125000),
+                          MakeUintegerAccessor(&RdmaHw::m_gemini_init_cwnd),
+                          MakeUintegerChecker<uint64_t>())
+            .AddAttribute("UnoAiFactor", "UnoCC additive increase as a BDP fraction",
+                          DoubleValue(0.001), MakeDoubleAccessor(&RdmaHw::m_unoAiFactor),
+                          MakeDoubleChecker<double>())
+            .AddAttribute("UnoBeta", "UnoCC quick-adapt cwnd ratio threshold",
+                          DoubleValue(0.5), MakeDoubleAccessor(&RdmaHw::m_unoBeta),
+                          MakeDoubleChecker<double>())
+            .AddAttribute("UnoEwmaGain", "UnoCC ECN fraction EWMA gain",
+                          DoubleValue(0.65), MakeDoubleAccessor(&RdmaHw::m_unoEwmaGain),
+                          MakeDoubleChecker<double>())
+            .AddAttribute("UnoK", "UnoCC K in bytes; <=0 means BDP/7",
+                          DoubleValue(-1.0), MakeDoubleAccessor(&RdmaHw::m_unoK),
+                          MakeDoubleChecker<double>())
+            .AddAttribute("UnoGentleScale", "UnoCC MD scale for phantom-only congestion",
+                          DoubleValue(0.3), MakeDoubleAccessor(&RdmaHw::m_unoGentleScale),
+                          MakeDoubleChecker<double>())
+            .AddAttribute("UnoDelayThreshold", "Relative RTT threshold for physical queues",
+                          DoubleValue(0.05), MakeDoubleAccessor(&RdmaHw::m_unoDelayThreshold),
+                          MakeDoubleChecker<double>())
+            .AddAttribute("UnoEpochRttFactor", "UnoCC epoch length in intra-DC RTTs",
+                          DoubleValue(2.0), MakeDoubleAccessor(&RdmaHw::m_unoEpochRttFactor),
+                          MakeDoubleChecker<double>())
+            .AddAttribute("UnoIntraRttNs", "Topology-derived intra-DC RTT for UnoCC epoch",
+                          UintegerValue(0), MakeUintegerAccessor(&RdmaHw::m_unoIntraRttNs),
+                          MakeUintegerChecker<uint64_t>())
             .AddAttribute("IrnEnable", "Enable IRN", BooleanValue(false),
                           MakeBooleanAccessor(&RdmaHw::m_irn), MakeBooleanChecker())
+            .AddAttribute("PrintLog", "Enable verbose runtime prints", BooleanValue(false),
+                          MakeBooleanAccessor(&RdmaHw::m_printLog), MakeBooleanChecker())
             .AddAttribute("IrnRtoLow", "Low RTO for IRN", TimeValue(MicroSeconds(454)),
                           MakeTimeAccessor(&RdmaHw::m_irn_rtoLow), MakeTimeChecker())
             .AddAttribute("IrnRtoHigh", "High RTO for IRN", TimeValue(MicroSeconds(1350)),
@@ -136,6 +217,7 @@ RdmaHw::RdmaHw() {
     cnp_total = 0;
     cnp_by_ecn = 0;
     cnp_by_ooo = 0;
+    m_printLog = false;
 }
 
 void RdmaHw::SetNode(Ptr<Node> node) { m_node = node; }
@@ -161,14 +243,12 @@ uint32_t RdmaHw::GetNicIdxOfQp(Ptr<RdmaQueuePair> qp) {
     auto &v = m_rtTable[qp->dip.Get()];
     if (v.size() > 0) {
         uint32_t hash = qp->GetHash();
-        auto it = std::find(Hashlist.begin(), Hashlist.end(), hash);
-        if (it == Hashlist.end()) {
-            Hashlist.push_back(hash);
-            return v[(Hashlist.size() - 1) % v.size()];
-        }else{
-            return v[std::distance(Hashlist.begin(), it) % v.size()];
+        auto it = m_hashOrdinal.find(hash);
+        if (it == m_hashOrdinal.end()) {
+            const uint32_t ordinal = m_hashOrdinal.size();
+            it = m_hashOrdinal.emplace(hash, ordinal).first;
         }
-        // return v[qp->GetHash() % v.size()];
+        return v[it->second % v.size()];
     }
     NS_ASSERT_MSG(false, "We assume at least one NIC is alive");
     std::cout << "We assume at least one NIC is alive" << std::endl;
@@ -197,8 +277,10 @@ void RdmaHw::AddQueuePair(uint64_t size, uint16_t pg, Ipv4Address sip, Ipv4Addre
     qp->SetSize(size);
     qp->SetWin(win);
     qp->SetBaseRtt(baseRtt);
+    qp->SetCcMode(m_cc_mode);
     qp->SetVarWin(m_var_win);
     qp->SetFlowId(flow_id);
+    assert(flow_id >= 0); //这里上层拥有flow_id == -1的重载，不确定有什么用处，先加个assert判断。
     auto& flow_info = Settings::flowInfos[flow_id];
     if (Settings::nodeInfos[flow_info.src].as_id == Settings::nodeInfos[flow_info.dst].as_id) {
         qp->SetTimeout(m_waitAckTimeout);
@@ -237,6 +319,16 @@ void RdmaHw::AddQueuePair(uint64_t size, uint16_t pg, Ipv4Address sip, Ipv4Addre
         }
     } else if (m_cc_mode == 7) {
         qp->tmly.m_curRate = m_bps;
+    } else if (m_cc_mode == CC_MODE_GEMINI) {
+        qp->m_useExplicitWin = true;
+        qp->m_ccWin = std::max<uint64_t>(m_gemini_init_cwnd, m_mtu);
+        qp->gemini.m_inSlowStart = true;
+        qp->gemini.m_baseRttValid = false;
+        qp->gemini.m_baseRtt = 0;
+        qp->gemini.m_rttMinThisRtt = 0;
+        qp->m_rate = qp->m_max_rate;
+    } else if (m_cc_mode == CC_MODE_UNOCC) {
+        InitUno(qp);
     }
 
     // Notify Nic
@@ -244,14 +336,9 @@ void RdmaHw::AddQueuePair(uint64_t size, uint16_t pg, Ipv4Address sip, Ipv4Addre
 }
 
 void RdmaHw::DeleteQueuePair(Ptr<RdmaQueuePair> qp) {
-    // remove qp from the m_qpMap
     uint64_t key = GetQpKey(qp->dip.Get(), qp->sport, qp->dport, qp->m_pg);
-
-    // record to Akashic record
-    //NS_ASSERT(akashic_Qp.find(key) == akashic_Qp.end());  // should not be already existing
-    //akashic_Qp.insert(key);
-
-    // delete
+    uint32_t nic_idx = GetNicIdxOfQp(qp);
+    m_nic[nic_idx].qpGrp->RemoveQp(qp);
     m_qpMap.erase(key);
 }
 
@@ -338,12 +425,24 @@ int RdmaHw::ReceiveUdp(Ptr<Packet> p, CustomHeader &ch) {
     }
 
     bool cnp_check = false;
+    const uint32_t old_expected_seq = rxQp->ReceiverNextExpectedSeq;
     int x = ReceiverCheckSeq(ch.udp.seq, rxQp, payload_size, cnp_check);
+    LogFlowDebugf(flow_id,
+                  "Receiver got data seq=%u, expected_seq changed %u->%u, "
+                  "receiver_check_result=%d, ecn_bits=%u",
+                  ch.udp.seq, old_expected_seq, rxQp->ReceiverNextExpectedSeq, x, ecnbits);
     if (x == 2 || x == 4) {
         //printf("[%ld]Out of order，Flow:%u, 期待Seq：%u，当前Seq:%u\n", Simulator::Now().GetNanoSeconds(), flow_id, rxQp->ReceiverNextExpectedSeq, ch.udp.seq);
         //fflush(stdout);
     }
-    rxQp->send_cnp = ((ecnbits || cnp_check) && Simulator::Now() - rxQp->last_cnp_send_time > MicroSeconds(10));
+    if (m_cc_mode == CC_MODE_GEMINI) {
+        rxQp->send_cnp = (ecnbits != 0);
+    } else if (m_cc_mode == CC_MODE_UNOCC) {
+        rxQp->send_cnp = (ecnbits || cnp_check);
+    } else {
+        rxQp->send_cnp = ((ecnbits || cnp_check) &&
+                          Simulator::Now() - rxQp->last_cnp_send_time > MicroSeconds(10));
+    }
     //printf("Receive a udp\n");
     if ((ack_req && x == 1) || x == 2 || x == 6) {  // generate ACK or NACK
         qbbHeader seqh;
@@ -353,7 +452,14 @@ int RdmaHw::ReceiveUdp(Ptr<Packet> p, CustomHeader &ch) {
         seqh.SetDport(ch.udp.sport);
         seqh.SetIntHeader(ch.udp.ih);
 
-        if (m_irn) {
+        if (m_cc_mode == CC_MODE_UNOCC) {
+            const uint32_t unoEcnMarked = rxQp->m_ecn_source.qfb;
+            const uint32_t unoEcnTotal = rxQp->m_ecn_source.total;
+            seqh.SetIrnNack(unoEcnMarked);
+            seqh.SetIrnNackSize(unoEcnTotal);
+            rxQp->m_ecn_source.qfb = 0;
+            rxQp->m_ecn_source.total = 0;
+        } else if (m_irn) {
             if (x == 2) {
                 seqh.SetIrnNack(ch.udp.seq);
                 seqh.SetIrnNackSize(payload_size);
@@ -381,7 +487,7 @@ int RdmaHw::ReceiveUdp(Ptr<Packet> p, CustomHeader &ch) {
         head.SetDestination(Ipv4Address(ch.sip));
         head.SetSource(Ipv4Address(ch.dip));
         head.SetProtocol(x == 1 ? 0xFC : 0xFD);  // ack=0xFC nack=0xFD
-        if (x != 1) {
+        if (m_printLog && x != 1) {
             printf("[%ld]Send NACK, FlowId:%u, Expect:%u, PacketSeq:%u\n",
                    Simulator::Now().GetNanoSeconds(), flow_id, rxQp->ReceiverNextExpectedSeq, ch.udp.seq);
         }
@@ -434,6 +540,10 @@ int RdmaHw::ReceiveAck(Ptr<Packet> p, CustomHeader &ch) {
     int i;
     uint64_t key = GetQpKey(ch.sip, port, sport, qIndex);
     Ptr<RdmaQueuePair> qp = GetQp(key);
+    const uint64_t old_snd_una = qp->snd_una;
+    LogFlowDebugf(qp->m_flow_id,
+                  "Sender received ACK/NACK seq=%u protocol=0x%x snd_una=%lu snd_nxt=%lu",
+                  ch.ack.seq, ch.l3Prot, qp->snd_una, qp->snd_nxt);
 
     uint32_t nic_idx = GetNicIdxOfQp(qp);
     Ptr<QbbNetDevice> dev = m_nic[nic_idx].dev;
@@ -489,6 +599,8 @@ int RdmaHw::ReceiveAck(Ptr<Packet> p, CustomHeader &ch) {
             QpComplete(qp);
         }
     }
+    const uint32_t acked_bytes =
+        qp->snd_una > old_snd_una ? static_cast<uint32_t>(qp->snd_una - old_snd_una) : 0;
 
     /**
      * IB Spec Vol. 1 o9-85
@@ -538,6 +650,10 @@ int RdmaHw::ReceiveAck(Ptr<Packet> p, CustomHeader &ch) {
         HandleAckTimely(qp, p, ch);
     } else if (m_cc_mode == 8) {
         HandleAckDctcp(qp, p, ch);
+    } else if (m_cc_mode == CC_MODE_GEMINI) {
+        HandleAckGemini(qp, p, ch, acked_bytes);
+    } else if (m_cc_mode == CC_MODE_UNOCC) {
+        HandleAckUno(qp, p, ch, old_snd_una);
     }
     // ACK may advance the on-the-fly window, allowing more packets to send
     dev->TriggerTransmit();
@@ -782,7 +898,12 @@ Ptr<Packet> RdmaHw::GetNxtPacket(Ptr<RdmaQueuePair> qp) {
     //    printf("Generate a packet, FlowId:%u, Seq:%u\n", qp->m_flow_id, seq);
     //}
 
-    bool ack_req = (seq + payload_size >= qp->m_size) || (seq % m_ack_interval == 0 && seq != 0);
+    bool ack_req = (seq + payload_size >= qp->m_size) ||(m_ack_interval == 1) ||
+                   (m_ack_interval > 1 && seq % m_ack_interval == 0 && seq != 0);
+    if (m_cc_mode == CC_MODE_GEMINI && ShouldDebugFlow(qp->m_flow_id)) {
+        LogFlowDebugf(qp->m_flow_id, "Send data seq=%u size=%u snd_una=%lu cwnd=%lu",
+                    seq, payload_size, qp->snd_una, qp->m_ccWin);
+    }
     // attach Stat Tag
     uint8_t packet_pos = UINT8_MAX;
     {
@@ -858,9 +979,6 @@ void RdmaHw::HandleTimeout(Ptr<RdmaQueuePair> qp, Time rto) {
     uint32_t nic_idx = GetNicIdxOfQp(qp);
     Ptr<QbbNetDevice> dev = m_nic[nic_idx].dev;
 
-    // IRN: disable timeouts when PFC is enabled to prevent spurious retransmissions
-    if (qp->irn.m_enabled && dev->IsQbbEnabled()) return;
-
     if (acc_timeout_count.find(qp->m_flow_id) == acc_timeout_count.end())
         acc_timeout_count[qp->m_flow_id] = 0;
     acc_timeout_count[qp->m_flow_id]++;
@@ -869,9 +987,19 @@ void RdmaHw::HandleTimeout(Ptr<RdmaQueuePair> qp, Time rto) {
     if (m_cc_mode == 1){ // mlx version
         cnp_received_mlx(qp); //当超时发生的时候，等效于接收到CNP？
 	}
-    printf("[%ld]Retransmission Timeout! FlowId:%u, %lu->%lu, fsize:%lu, Rate:%lu, Alpha:%lf\n", 
-        Simulator::Now().GetNanoSeconds(), qp->m_flow_id, qp->snd_nxt, qp->snd_una,
-        qp->m_size, qp->m_rate.GetBitRate(), qp->mlx.m_alpha);
+    LogFlowDebugf(qp->m_flow_id,
+                  "Sender timeout snd_una=%lu snd_nxt=%lu flow_size=%lu rto_ns=%lu",
+                  qp->snd_una, qp->snd_nxt, qp->m_size,
+                  static_cast<uint64_t>(rto.GetNanoSeconds()));
+    if (m_cc_mode == CC_MODE_UNOCC && qp->uno.m_initialized) {
+        qp->uno.m_cwnd = std::max<double>(m_mtu, qp->uno.m_cwnd - m_mtu);
+        UnoApplyRateFromCwnd(qp);
+    }
+    if (m_printLog) {
+        printf("[%ld]Retransmission Timeout! FlowId:%u, %lu->%lu, fsize:%lu, Rate:%lu, Alpha:%lf\n",
+               Simulator::Now().GetNanoSeconds(), qp->m_flow_id, qp->snd_nxt, qp->snd_una,
+               qp->m_size, qp->m_rate.GetBitRate(), qp->mlx.m_alpha);
+    }
     RecoverQueue(qp);
     //Settings::flowInfos[qp->m_flow_id].print();
     //printf("\n");
@@ -1355,6 +1483,376 @@ void RdmaHw::HandleAckDctcp(Ptr<RdmaQueuePair> qp, Ptr<Packet> p, CustomHeader &
     // additive inc
     if (qp->dctcp.m_caState == 0 && new_batch)
         qp->m_rate = std::min(qp->m_max_rate, qp->m_rate + m_dctcp_rai);
+}
+
+void RdmaHw::HandleAckGemini(Ptr<RdmaQueuePair> qp, Ptr<Packet> p, CustomHeader &ch,
+                             uint32_t ackedBytes) {
+    (void)p;
+    if (ackedBytes == 0 || IntHeader::mode != 1 || ch.l3Prot != 0xFC) {
+        return;
+    }
+
+    const uint8_t cnp = (ch.ack.flags >> qbbHeader::FLAG_CNP) & 1;
+    const uint64_t rtt = Simulator::Now().GetTimeStep() - ch.ack.ih.ts;
+    UpdateCwndGemini(qp, ackedBytes, ch.ack.seq, rtt, cnp > 0);
+}
+
+// GEMINI congestion window update, called once per ACK.
+// Design overview:
+//   - Epoch-based: cwnd is updated at most once per RTT (when ackSeq crosses
+//     m_lastUpdateSeq, i.e., the send frontier recorded at the previous epoch boundary).
+//   - Dual signal: ECN marks detect DCN congestion; RTT inflation detects WAN congestion.
+//   - MD formula:
+//       f_dcn = alpha * 4K / (C*RTT + K)   (BDP-normalised, matches DCTCP at K = C*RTT/7)
+//       f_wan = beta                        (fixed constant)
+//       reduction = min(0.95, max(f_dcn, f_wan))
+//     Taking the max prevents double-counting when both signals fire simultaneously.
+//   - AI formula (per ACK, not per epoch):
+//       h = clip(H * C * RTT / 8, kMin, kMax)   [bytes]
+//       delta_cwnd = h * ackedBytes / cwnd        [bytes/ACK, scales with BDP]
+//   - Rate is derived from cwnd: rate = cwnd * 8 / baseRtt (see UpdateGeminiPacingRate).
+//   - Cwnd is clamped to [m_mtu, C*baseRtt/8] (see ClampGeminiCwnd).
+void RdmaHw::UpdateCwndGemini(Ptr<RdmaQueuePair> qp, uint32_t ackedBytes, uint32_t ackSeq,
+                              uint64_t rttNs, bool ecn) {
+    // Clamp bounds for the AI step size h = H * C * RTT / 8.
+    // Prevents degenerate behaviour on very short or very long RTT paths.
+    constexpr double kGeminiMinHBytes = 100.0;
+    constexpr double kGeminiMaxHBytes = 500000.0;
+
+    if (rttNs == 0) {
+        return;
+    }
+
+    // --- RTT tracking ---
+    // baseRtt: running minimum over the entire flow lifetime (proxy for propagation delay).
+    // rttMinThisRtt: minimum within the current epoch, used for WAN congestion detection.
+    if (!qp->gemini.m_baseRttValid || rttNs < qp->gemini.m_baseRtt) {
+        qp->gemini.m_baseRtt = rttNs;
+        qp->gemini.m_baseRttValid = true;
+    }
+    if (qp->gemini.m_rttMinThisRtt == 0 || rttNs < qp->gemini.m_rttMinThisRtt) {
+        qp->gemini.m_rttMinThisRtt = rttNs;
+    }
+
+    // --- Per-ACK ECN accounting ---
+    // Accumulate bytes over the epoch; the ECN fraction is computed at epoch boundary.
+    // A single ECN-marked ACK also exits slow start immediately.
+    qp->gemini.m_ackedBytes += ackedBytes;
+    if (ecn) {
+        qp->gemini.m_ecnBytes += ackedBytes;
+        if (qp->gemini.m_inSlowStart) {
+            qp->gemini.m_inSlowStart = false;
+        }
+    }
+
+    // --- First ACK: initialise epoch anchor and do a single AI step ---
+    // m_lastUpdateSeq == 0 means we haven't seen a full RTT yet.
+    // Record the current send frontier as the epoch boundary and immediately
+    // apply one AI step so the sender doesn't stall before the first epoch ends.
+    if (qp->gemini.m_lastUpdateSeq == 0) {
+        qp->gemini.m_lastUpdateSeq = qp->snd_nxt;
+        if (!ecn && qp->gemini.m_inSlowStart) {
+            // Slow start: grow by one full MSS per ACK (exponential growth).
+            qp->m_ccWin = ClampGeminiCwnd(qp, static_cast<double>(qp->m_ccWin) + ackedBytes);
+        } else if (!ecn) {
+            // Congestion avoidance AI: delta = h * ackedBytes / cwnd.
+            const double cwnd = std::max<double>(qp->m_ccWin, m_mtu);
+            double h = m_gemini_h * qp->m_max_rate.GetBitRate() *
+                       (static_cast<double>(qp->gemini.m_baseRtt) * 1e-9) / 8.0;
+            h = std::min(kGeminiMaxHBytes, std::max(kGeminiMinHBytes, h));
+            const double ai = h * static_cast<double>(ackedBytes) / cwnd;
+            qp->m_ccWin = ClampGeminiCwnd(qp, cwnd + ai);
+        }
+        UpdateGeminiPacingRate(qp);
+        return;
+    }
+
+    // --- Epoch boundary detection ---
+    // An epoch ends when the ACK sequence number passes the send frontier recorded
+    // at the previous epoch end.  This is equivalent to "one full RTT has elapsed"
+    // without requiring a timer.
+    const bool round_boundary = ackSeq > qp->gemini.m_lastUpdateSeq;
+    if (!round_boundary) {
+        // Mid-epoch: only do AI (no MD, no alpha update).
+        // If any ECN has been seen this epoch, suppress AI to avoid fighting the
+        // upcoming MD that will fire at the epoch boundary.
+        if (!ecn && qp->gemini.m_inSlowStart) {
+            qp->m_ccWin = ClampGeminiCwnd(qp, static_cast<double>(qp->m_ccWin) + ackedBytes);
+        } else if (!ecn && qp->gemini.m_ecnBytes == 0) {
+            const double cwnd = std::max<double>(qp->m_ccWin, m_mtu);
+            double h = m_gemini_h * qp->m_max_rate.GetBitRate() *
+                       (static_cast<double>(qp->gemini.m_baseRtt) * 1e-9) / 8.0;
+            h = std::min(kGeminiMaxHBytes, std::max(kGeminiMinHBytes, h));
+            const double ai = h * static_cast<double>(ackedBytes) / cwnd;
+            qp->m_ccWin = ClampGeminiCwnd(qp, cwnd + ai);
+        }
+        UpdateGeminiPacingRate(qp);
+        return;
+    }
+
+    // === Epoch boundary: update alpha, detect congestion, apply MD or AI ===
+
+    // --- Alpha update (EWMA of ECN fraction over this epoch) ---
+    // frac = ecnBytes / ackedBytes for the epoch just ended.
+    // alpha tracks a smoothed version: alpha = (1-g)*alpha + g*frac.
+    const double frac =
+        qp->gemini.m_ackedBytes == 0
+            ? 0.0
+            : std::min(1.0, static_cast<double>(qp->gemini.m_ecnBytes) /
+                                 static_cast<double>(qp->gemini.m_ackedBytes));
+    qp->gemini.m_alpha = (1.0 - m_g) * qp->gemini.m_alpha + m_g * frac;
+
+    // --- Congestion signal evaluation ---
+    // DCN congestion: any ECN-marked byte in this epoch.
+    // WAN congestion: minimum RTT this epoch exceeded baseRtt + T (delay threshold).
+    const bool congestedDcn = qp->gemini.m_ecnBytes > 0;
+    const bool congestedWan =
+        qp->gemini.m_baseRttValid && qp->gemini.m_rttMinThisRtt > qp->gemini.m_baseRtt + m_gemini_t;
+
+    const uint64_t cwnd_before = qp->m_ccWin;
+    const bool was_in_slow_start = qp->gemini.m_inSlowStart;
+
+    // Exit slow start on first congestion signal (either ECN or delay).
+    if (qp->gemini.m_inSlowStart && (congestedDcn || congestedWan)) {
+        qp->gemini.m_inSlowStart = false;
+    }
+
+    // --- MD or AI ---
+    if (!qp->gemini.m_inSlowStart && (congestedDcn || congestedWan)) {
+        // Multiplicative decrease.
+        // f_dcn = alpha * F,  where F = 4K / (C*RTT + K).
+        //   F normalises by BDP: large-RTT (WAN) flows use a smaller F so they drain
+        //   queues less aggressively and avoid emptying shallow DC switch buffers.
+        //   At K = C*RTT/7 (DCTCP guideline for intra-DC), F = 1/2, matching DCTCP.
+        // f_wan = beta (fixed, independent of RTT).
+        // Take max(f_dcn, f_wan) to react to whichever signal is stronger;
+        // do NOT add them to avoid over-reduction when both fire together.
+        const double c = static_cast<double>(qp->m_max_rate.GetBitRate()) / 8.0;
+        const double rttSeconds =
+            std::max(1e-9, static_cast<double>(qp->gemini.m_baseRtt) * 1e-9);
+        const double fdcn =
+            congestedDcn
+                ? qp->gemini.m_alpha *
+                      (4.0 * static_cast<double>(m_gemini_k) /
+                       std::max(1.0, c * rttSeconds + static_cast<double>(m_gemini_k)))
+                : 0.0;
+        const double fwan = congestedWan ? m_gemini_beta : 0.0;
+        const double reduction = std::min(0.95, std::max(fdcn, fwan));
+        qp->m_ccWin = ClampGeminiCwnd(qp, static_cast<double>(qp->m_ccWin) * (1.0 - reduction));
+    } else if (!qp->gemini.m_inSlowStart && !ecn) {
+        // Congestion avoidance AI at epoch boundary (no congestion this epoch).
+        const double cwnd = std::max<double>(qp->m_ccWin, m_mtu);
+        double h = m_gemini_h * qp->m_max_rate.GetBitRate() *
+                   (static_cast<double>(qp->gemini.m_baseRtt) * 1e-9) / 8.0;
+        h = std::min(kGeminiMaxHBytes, std::max(kGeminiMinHBytes, h));
+        const double ai = h * static_cast<double>(ackedBytes) / cwnd;
+        qp->m_ccWin = ClampGeminiCwnd(qp, cwnd + ai);
+    }
+    // Derive pacing rate from updated cwnd: rate = cwnd * 8 / baseRtt.
+    UpdateGeminiPacingRate(qp);
+
+    if (ShouldDebugFlow(qp->m_flow_id)) {
+        const double c = static_cast<double>(qp->m_max_rate.GetBitRate()) / 8.0;
+        const double rttSeconds = std::max(1e-9, static_cast<double>(qp->gemini.m_baseRtt) * 1e-9);
+        double h = m_gemini_h * qp->m_max_rate.GetBitRate() *
+                   (static_cast<double>(qp->gemini.m_baseRtt) * 1e-9) / 8.0;
+        h = std::min(kGeminiMaxHBytes, std::max(kGeminiMinHBytes, h));
+        const double fdcn_log = congestedDcn
+            ? qp->gemini.m_alpha * (4.0 * static_cast<double>(m_gemini_k) /
+              std::max(1.0, c * rttSeconds + static_cast<double>(m_gemini_k))) : 0.0;
+        const double fwan_log = congestedWan ? m_gemini_beta : 0.0;
+        const char* state_str =
+            (was_in_slow_start && (congestedDcn || congestedWan)) ? "EXIT_SS" :
+            (was_in_slow_start)                                   ? "SS_HOLD" :
+            (congestedDcn && congestedWan)                        ? "MD_BOTH" :
+            (congestedDcn)                                        ? "MD_DCN"  :
+            (congestedWan)                                        ? "MD_WAN"  :
+            (!ecn)                                                ? "AI"      : "HOLD";
+        LogFlowDebugf(qp->m_flow_id,
+            "GEMINI ackSeq=%u state=%s cwnd=%lu->%lu rate=%.3fGbps"
+            " alpha=%.4f frac=%.4f fdcn=%.4f fwan=%.4f h=%.1f"
+            " baseRtt=%.2fus rttMin=%.2fus ecnB=%lu ackedB=%lu",
+            ackSeq, state_str,
+            cwnd_before, qp->m_ccWin,
+            qp->m_rate.GetBitRate() * 1e-9,
+            qp->gemini.m_alpha, frac,
+            fdcn_log, fwan_log, h,
+            static_cast<double>(qp->gemini.m_baseRtt) / 1000.0,
+            static_cast<double>(qp->gemini.m_rttMinThisRtt) / 1000.0,
+            static_cast<unsigned long>(qp->gemini.m_ecnBytes),
+            static_cast<unsigned long>(qp->gemini.m_ackedBytes));
+    }
+
+    qp->gemini.m_lastUpdateSeq = qp->snd_nxt;
+    qp->gemini.m_ackedBytes = 0;
+    qp->gemini.m_ecnBytes = 0;
+    qp->gemini.m_rttMinThisRtt = 0;
+}
+
+void RdmaHw::UpdateGeminiPacingRate(Ptr<RdmaQueuePair> qp) {
+    if (m_cc_mode != CC_MODE_GEMINI) return;
+    if (!qp->gemini.m_baseRttValid || qp->gemini.m_baseRtt == 0) {
+        if (qp->m_rate != qp->m_max_rate) {
+            ChangeRate(qp, qp->m_max_rate);
+        }
+        return;
+    }
+
+    const double rttSeconds = static_cast<double>(qp->gemini.m_baseRtt) * 1e-9;
+    if (rttSeconds <= 0) return;
+
+    uint64_t bits_per_sec =
+        static_cast<uint64_t>(std::llround((static_cast<double>(qp->m_ccWin) * 8.0) / rttSeconds));
+    DataRate new_rate(bits_per_sec);
+    if (new_rate < m_minRate) new_rate = m_minRate;
+    if (new_rate > qp->m_max_rate) new_rate = qp->m_max_rate;
+    if (new_rate != qp->m_rate) {
+        ChangeRate(qp, new_rate);
+    }
+}
+
+uint64_t RdmaHw::ClampGeminiCwnd(const Ptr<RdmaQueuePair>& qp, double cwndBytes) const {
+    const uint64_t minCwnd = m_mtu;
+    double bounded = std::max<double>(cwndBytes, minCwnd);
+    if (qp->gemini.m_baseRttValid) {
+        const double cap =
+            static_cast<double>(qp->m_max_rate.GetBitRate()) *
+            (static_cast<double>(qp->gemini.m_baseRtt) * 1e-9) / 8.0;
+        bounded = std::min(bounded, std::max<double>(cap, minCwnd));
+    }
+    return static_cast<uint64_t>(std::llround(bounded));
+}
+
+void RdmaHw::InitUno(Ptr<RdmaQueuePair> qp) {
+    const double bdp = std::max<double>(m_mtu, qp->m_baseRtt * qp->m_max_rate.GetBitRate() / 8e9);
+    qp->uno.m_cwnd = bdp;
+    qp->uno.m_aiBytes = std::max<double>(1.0, m_unoAiFactor * bdp);
+    qp->uno.m_kBytes = m_unoK > 0 ? m_unoK : std::max<double>(1.0, bdp / 7.0);
+    qp->uno.m_mdGainEcn = 4.0 * qp->uno.m_kBytes / (bdp + qp->uno.m_kBytes);
+    qp->uno.m_ecnFractionEwma = 0;
+    qp->uno.m_baseRtt = qp->m_baseRtt ? qp->m_baseRtt : 1;
+    qp->uno.m_lastRtt = qp->uno.m_baseRtt;
+    qp->uno.m_epochPeriodNs =
+        std::max<uint64_t>(1, static_cast<uint64_t>((m_unoIntraRttNs ? m_unoIntraRttNs : qp->uno.m_baseRtt) *
+                                                    m_unoEpochRttFactor));
+    qp->uno.m_epochStartTs = 0;
+    qp->uno.m_epochEndTs = 0;
+    qp->uno.m_epochAckedBytes = 0;
+    qp->uno.m_epochMarkedBytes = 0;
+    qp->uno.m_qaPeriodNs = qp->uno.m_baseRtt;
+    qp->uno.m_qaEndTimeNs = qp->uno.m_qaPeriodNs;
+    qp->uno.m_qaAckedBytes = 0;
+    qp->uno.m_skipUntilNs = 0;
+    qp->uno.m_lastAckSeq = 0;
+    qp->uno.m_qaEnabled = false;
+    qp->uno.m_epochInitialized = false;
+    qp->uno.m_initialized = true;
+    qp->m_win = static_cast<uint32_t>(std::min<double>(UINT32_MAX, qp->uno.m_cwnd));
+    UnoApplyRateFromCwnd(qp);
+}
+
+void RdmaHw::HandleAckUno(Ptr<RdmaQueuePair> qp, Ptr<Packet> p, CustomHeader &ch, uint64_t oldSndUna) {
+    if (!qp->uno.m_initialized) {
+        InitUno(qp);
+    }
+
+    const uint64_t ackSeq = ch.ack.seq;
+    const uint64_t bytesAcked = ackSeq > oldSndUna ? ackSeq - oldSndUna : 0;
+    const bool marked = ((ch.ack.flags >> qbbHeader::FLAG_CNP) & 1) != 0;
+    const double ackMarkedFraction =
+        ch.ack.irnNackSize > 0
+            ? std::min(1.0, static_cast<double>(ch.ack.irnNack) / ch.ack.irnNackSize)
+            : (marked ? 1.0 : 0.0);
+    const uint64_t nowNs = Simulator::Now().GetNanoSeconds();
+    const uint64_t ackedPktTs = ch.ack.ih.GetTs();
+
+    if (ackedPktTs > 0 && nowNs > ackedPktTs) {
+        const uint64_t rtt = nowNs - ackedPktTs;
+        qp->uno.m_lastRtt = rtt;
+        if (qp->uno.m_baseRtt == 0 || rtt < qp->uno.m_baseRtt) {
+            qp->uno.m_baseRtt = rtt;
+            qp->uno.m_qaPeriodNs = std::max<uint64_t>(1, rtt);
+        }
+    }
+
+    if (bytesAcked > 0) {
+        if (ackMarkedFraction == 0.0) {
+            qp->uno.m_cwnd += qp->uno.m_aiBytes * bytesAcked / std::max<double>(1.0, qp->uno.m_cwnd);
+        }
+        qp->uno.m_epochAckedBytes += bytesAcked;
+        qp->uno.m_epochMarkedBytes += bytesAcked * ackMarkedFraction;
+        if (qp->uno.m_qaEnabled) {
+            qp->uno.m_qaAckedBytes += bytesAcked;
+        }
+    }
+
+    const uint64_t epochProbe = ackedPktTs > 0 ? ackedPktTs : nowNs;
+    if (!qp->uno.m_epochInitialized) {
+        qp->uno.m_epochStartTs = epochProbe;
+        qp->uno.m_epochEndTs = epochProbe + qp->uno.m_epochPeriodNs;
+        qp->uno.m_epochInitialized = true;
+    } else {
+        while (epochProbe >= qp->uno.m_epochEndTs) {
+            UnoProcessEpochEnd(qp);
+            qp->uno.m_epochStartTs = qp->uno.m_epochEndTs;
+            qp->uno.m_epochEndTs += qp->uno.m_epochPeriodNs;
+        }
+    }
+
+    if (ackedPktTs > 0 && nowNs >= qp->uno.m_skipUntilNs) {
+        if (!qp->uno.m_qaEnabled && ackedPktTs >= qp->uno.m_qaEndTimeNs) {
+            qp->uno.m_qaEnabled = true;
+            qp->uno.m_qaAckedBytes = 0;
+            qp->uno.m_qaEndTimeNs = nowNs + qp->uno.m_qaPeriodNs;
+        } else if (qp->uno.m_qaEnabled && nowNs >= qp->uno.m_qaEndTimeNs) {
+            UnoProcessQa(qp);
+        }
+    }
+
+    UnoApplyRateFromCwnd(qp);
+}
+
+void RdmaHw::UnoProcessEpochEnd(Ptr<RdmaQueuePair> qp) {
+    const uint64_t nowNs = Simulator::Now().GetNanoSeconds();
+    const double frac = qp->uno.m_epochAckedBytes > 0
+                            ? std::min(1.0, static_cast<double>(qp->uno.m_epochMarkedBytes) /
+                                                 qp->uno.m_epochAckedBytes)
+                            : 0.0;
+    qp->uno.m_ecnFractionEwma =
+        (1.0 - m_unoEwmaGain) * qp->uno.m_ecnFractionEwma + m_unoEwmaGain * frac;
+
+    if (qp->uno.m_epochMarkedBytes > 0 && nowNs >= qp->uno.m_skipUntilNs) {
+        const double targetRtt = qp->uno.m_baseRtt * (1.0 + m_unoDelayThreshold);
+        const double mdScale = qp->uno.m_lastRtt <= targetRtt ? m_unoGentleScale : 1.0;
+        double reduction = qp->uno.m_ecnFractionEwma * qp->uno.m_mdGainEcn * mdScale;
+        reduction = std::min(0.95, std::max(0.0, reduction));
+        qp->uno.m_cwnd = std::max<double>(m_mtu, qp->uno.m_cwnd * (1.0 - reduction));
+    }
+
+    qp->uno.m_epochAckedBytes = 0;
+    qp->uno.m_epochMarkedBytes = 0;
+}
+
+void RdmaHw::UnoProcessQa(Ptr<RdmaQueuePair> qp) {
+    const uint64_t nowNs = Simulator::Now().GetNanoSeconds();
+    if (nowNs >= qp->uno.m_skipUntilNs &&
+        qp->uno.m_qaAckedBytes < static_cast<uint64_t>(qp->uno.m_cwnd * m_unoBeta)) {
+        qp->uno.m_cwnd = std::max<double>(m_mtu, qp->uno.m_qaAckedBytes);
+        qp->uno.m_skipUntilNs = nowNs + qp->uno.m_qaPeriodNs;
+        qp->uno.m_qaEnabled = false;
+        qp->uno.m_qaEndTimeNs = nowNs;
+    } else {
+        qp->uno.m_qaEndTimeNs = nowNs + qp->uno.m_qaPeriodNs;
+    }
+    qp->uno.m_qaAckedBytes = 0;
+}
+
+void RdmaHw::UnoApplyRateFromCwnd(Ptr<RdmaQueuePair> qp) {
+    const uint64_t rtt = std::max<uint64_t>(1, qp->uno.m_baseRtt);
+    const uint64_t bps = static_cast<uint64_t>(std::max<double>(
+        m_minRate.GetBitRate(), std::min<double>(qp->m_max_rate.GetBitRate(), qp->uno.m_cwnd * 8e9 / rtt)));
+    ChangeRate(qp, DataRate(bps));
+    qp->m_win = static_cast<uint32_t>(std::min<double>(UINT32_MAX, std::max<double>(1, qp->uno.m_cwnd)));
 }
 
 }  // namespace ns3

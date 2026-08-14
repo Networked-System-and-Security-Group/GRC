@@ -235,10 +235,10 @@ if __name__ == '__main__':
     # 添加命令行参数解析
     parser = argparse.ArgumentParser(description='生成网络流量并绘制并发流图')
     # 添加background_inter_load参数（默认值150）
-    parser.add_argument('-b','--background-inter-load', type=int, default=100,
+    parser.add_argument('-b','--background-inter-load', type=int, default=200,
                         help='background_inter_load的值（默认150）')
     # 添加dynamic_load参数（默认值200）
-    parser.add_argument('-d','--dynamic-load', type=int, default=150,
+    parser.add_argument('-d','--dynamic-load', type=int, default=200,
                         help='dynamic_load的值（默认200）')
     # 添加流量集参数
     parser.add_argument('-f', '--flow_set', type=str, default='w')
@@ -260,6 +260,10 @@ if __name__ == '__main__':
 
     if flow_set == 'a':
         cdf_path = op.join(base_dir, 'AliStorage2019') + '.txt'
+    elif flow_set == 's':
+        cdf_path = op.join(base_dir, 'Solar2022') + '.txt'
+    elif flow_set == 'm':
+        cdf_path = op.join(base_dir, 'mining') + '.txt'
     else:
         cdf_path = op.join(base_dir, 'WebSearch') + '.txt'
 
@@ -295,14 +299,13 @@ if __name__ == '__main__':
     for as1 in as_list:
         for as2 in as_list:
             if as1 == as2:
-                flows += generate_flows(as1, as2, cdf_path, f'{intra_load}G', 0.1)
+                flows += generate_flows(as1, as2, cdf_path, f'{intra_load}G', 0.2)
             else:
-                flows += generate_flows(as1, as2, cdf_path, f'{per_host_inter_load}G', 0.1)
+                flows += generate_flows(as1, as2, cdf_path, f'{per_host_inter_load}G', 0.2)
 
     # 生成普通的 Dynamic 流 (使用 as_list)
     if dynamic_load > 0:
-        flows += generate_dynamic_flows(as_list, cdf_path, f'{dynamic_load}G', 0.1, slice_duration=0.03, slice_rate='100G')
-
+        flows += generate_dynamic_flows(as_list, cdf_path, f'{dynamic_load}G', 0.2, slice_duration=0.03, slice_rate='100G')
     # ---------------------------------------------------------------------------------
     # 在跨DC的wan_hosts间生成平均总100G的背景流 (仅使用 wan_as_list)
     # ---------------------------------------------------------------------------------
@@ -313,7 +316,7 @@ if __name__ == '__main__':
     # 修改：为了保证每个 WAN Switch (AS) 到其他 WAN Switch 的总流出速率大概是 100G，
     # 我们需要将系统的总背景流量设置为 (100G * 区域数量)。
     # 这样平均下来，每个区域承担的发送速率就是 100G。
-    wan_bg_total_load = 400.0 * active_wan_as_count if active_wan_as_count > 0 else 100.0
+    wan_bg_total_load = 800.0 * active_wan_as_count if active_wan_as_count > 0 else 100.0
     
     wan_flows = []
     
@@ -336,7 +339,7 @@ if __name__ == '__main__':
             for j, dst_wan in enumerate(wan_as_list):
                 # 仅在不同的 AS 之间，且双方都有 WAN Host 时生成
                 if i != j and len(src_wan) > 0 and len(dst_wan) > 0:
-                    wan_flows += generate_flows(src_wan, dst_wan, cdf_path, wan_rate_str, 0.1)
+                    wan_flows += generate_flows(src_wan, dst_wan, cdf_path, wan_rate_str, 0.2)
     # ---------------------------------------------------------------------------------
 
     flows.sort(key=lambda x : x.t)
@@ -346,7 +349,7 @@ if __name__ == '__main__':
     #                      output_filename=f'concurrent_flows{"_d" if dynamic_load > 0 else ""}.png')
     
     # 输出到文件 (原始逻辑：包含 DC 背景流 + Dynamic 流)
-    saved_path = op.join(op.dirname(__file__), f'{flow_set}-dynamic-{int(background_inter_load)}-{int(dynamic_load)}.txt')
+    saved_path = op.join(op.dirname(__file__), f'{flow_set}-dynamic-200ms-{int(background_inter_load)}-{int(dynamic_load)}.txt')
     print(f'Original Flow count: {len(flows)}, Saved to: {saved_path}')
     with open(saved_path, 'w') as ofile:
         ofile.write(f"{len(flows)}\n")
@@ -354,9 +357,9 @@ if __name__ == '__main__':
             ofile.write(str(f) + '\n')
 
     # 输出到文件 (新逻辑：仅包含 WAN Hosts 间的背景流)
-    wan_saved_path = op.join(op.dirname(__file__), f'{flow_set}-tcp-100.txt')
-    print(f'WAN Flow count: {len(wan_flows)}, Saved to: {wan_saved_path}')
-    with open(wan_saved_path, 'w') as ofile:
-        ofile.write(f"{len(wan_flows)}\n")
-        for f in wan_flows:
-            ofile.write(str(f) + '\n')
+    #wan_saved_path = op.join(op.dirname(__file__), f'{flow_set}-tcp-100.txt')
+    #print(f'WAN Flow count: {len(wan_flows)}, Saved to: {wan_saved_path}')
+    #with open(wan_saved_path, 'w') as ofile:
+    #    ofile.write(f"{len(wan_flows)}\n")
+    #    for f in wan_flows:
+    #        ofile.write(str(f) + '\n')

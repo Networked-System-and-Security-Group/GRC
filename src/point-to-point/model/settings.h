@@ -186,6 +186,9 @@ class Settings {
         WAN_OPT = 1,
         WITH_ECN = 2,
     } wan_cc_mode;
+    // Switch-side Themis baseline.  When enabled, every DCI switch runs PNP
+    // and TRP through its ThemisRouting module.
+    static bool themis_enabled;
 
     // for common setting
     static uint32_t packet_payload;
@@ -280,6 +283,7 @@ namespace logfile {
     extern FILE* cnp_log;
     extern FILE* cnp_trigger_prob_log;
     extern FILE* accumulated_bytes_log;
+    extern FILE* flow_debug_log;
 
     extern FILE* cnp_output;
     extern FILE* voq_output;
@@ -290,6 +294,7 @@ namespace logfile {
     extern FILE* downlink_rx_output;
     extern FILE* flow_rx_output;
     extern FILE* qp_rate_log;
+    extern FILE* uno_cwnd_log;
     extern FILE* conn_output;
     extern FILE* global_CE_map_output;
     extern FILE* all_links_output;

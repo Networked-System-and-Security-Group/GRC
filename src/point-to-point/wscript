@@ -32,6 +32,7 @@ def build(bld):
         'model/caver-routing.cc',
         'model/route-logger.cc',
         'model/wan-routing.cc',
+        'model/themis-routing.cc',
 		'helper/selective-packet-queue.cc',
         ]
 
@@ -73,6 +74,7 @@ def build(bld):
         'model/hula-routing.h',
         'model/route-logger.h',
         'model/wan-routing.h',
+        'model/themis-routing.h',
 		'helper/selective-packet-queue.h',
         ]
 

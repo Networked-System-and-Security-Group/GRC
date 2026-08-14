@@ -60,7 +60,9 @@ class RdmaHw : public Object {
                              uint16_t pg);          // get the lookup key for m_qpMap
     Ptr<RdmaQueuePair> GetQp(uint64_t key);         // get the qp
     uint32_t GetNicIdxOfQp(Ptr<RdmaQueuePair> qp);  // get the NIC index of the qp
-    std::vector<uint32_t> Hashlist;                 // hash list for ECMP
+    // First-seen ordinal for each QP hash.  The ordinal preserves the old
+    // round-robin selection semantics without a linear Hashlist scan.
+    std::unordered_map<uint32_t, uint32_t> m_hashOrdinal;
     void DeleteQueuePair(Ptr<RdmaQueuePair> qp);    // delete TxQP
 
     void AddQueuePair(uint64_t size, uint16_t pg, Ipv4Address _sip, Ipv4Address _dip,
@@ -85,7 +87,6 @@ class RdmaHw : public Object {
                 CustomHeader &
                     ch);  // callback function that the QbbNetDevice should use when receive
                           // packets. Only NIC can call this function. And do not call this upon PFC
-
     void CheckandSendQCN(Ptr<RdmaRxQueuePair> q);
     int ReceiverCheckSeq(uint32_t seq, Ptr<RdmaRxQueuePair> q, uint32_t size, bool &cnp);
     void AddHeader(Ptr<Packet> p, uint16_t protocolNumber);
@@ -181,9 +182,42 @@ class RdmaHw : public Object {
     void HandleAckDctcp(Ptr<RdmaQueuePair> qp, Ptr<Packet> p, CustomHeader &ch);
 
     /**********************
+     * GEMINI
+     *********************/
+    double m_gemini_h;
+    double m_gemini_beta;
+    uint64_t m_gemini_t;
+    uint64_t m_gemini_k;
+    uint64_t m_gemini_init_cwnd;
+    void HandleAckGemini(Ptr<RdmaQueuePair> qp, Ptr<Packet> p, CustomHeader &ch,
+                         uint32_t ackedBytes);
+    void UpdateCwndGemini(Ptr<RdmaQueuePair> qp, uint32_t ackedBytes, uint32_t ackSeq,
+                          uint64_t rttNs, bool ecn);
+    void UpdateGeminiPacingRate(Ptr<RdmaQueuePair> qp);
+    uint64_t ClampGeminiCwnd(const Ptr<RdmaQueuePair>& qp, double cwndBytes) const;
+
+    /**********************
+     * UnoCC
+     *********************/
+    double m_unoAiFactor;
+    double m_unoBeta;
+    double m_unoEwmaGain;
+    double m_unoK;
+    double m_unoGentleScale;
+    double m_unoDelayThreshold;
+    double m_unoEpochRttFactor;
+    uint64_t m_unoIntraRttNs;
+    void InitUno(Ptr<RdmaQueuePair> qp);
+    void HandleAckUno(Ptr<RdmaQueuePair> qp, Ptr<Packet> p, CustomHeader &ch, uint64_t oldSndUna);
+    void UnoProcessEpochEnd(Ptr<RdmaQueuePair> qp);
+    void UnoProcessQa(Ptr<RdmaQueuePair> qp);
+    void UnoApplyRateFromCwnd(Ptr<RdmaQueuePair> qp);
+
+    /**********************
      * IRN
      *********************/
     bool m_irn;
+    bool m_printLog;
     Time m_irn_rtoLow;
     Time m_irn_rtoHigh;
     uint32_t m_irn_bdp;

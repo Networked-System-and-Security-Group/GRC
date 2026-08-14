@@ -21,6 +21,26 @@
 
 namespace ns3 {
 
+namespace {
+const char* kLowPrioWanAckDefault = "FALSE";
+const uint32_t kLowPrioAckQueue = 3;
+
+bool IsEnabledRawParam(const std::string& value) {
+    return value == "TRUE" || value == "true" || value == "1" || value == "YES" ||
+           value == "yes" || value == "ON" || value == "on";
+}
+
+uint32_t GetPacketSeqForLog(const CustomHeader& ch) {
+    if (ch.l3Prot == 0x11) {
+        return ch.udp.seq;
+    }
+    if (ch.l3Prot == 0xFC || ch.l3Prot == 0xFD) {
+        return ch.ack.seq;
+    }
+    return 0;
+}
+}
+
 TypeId SwitchNode::GetTypeId(void) {
     static TypeId tid =
         TypeId("ns3::SwitchNode")
@@ -77,6 +97,10 @@ SwitchNode::SwitchNode() {
     m_mmu->m_wanRouting.SetSwitchSendCallback(MakeCallback(&SwitchNode::DoSwitchSend, this));
     m_mmu->m_wanRouting.SetSwitchSendToDevCallback(
         MakeCallback(&SwitchNode::SendToDevContinue, this));
+    // Themis wraps normal DCI/WAN routing.  Its PNP/TRP state lives in the
+    // dedicated ThemisRouting object rather than in this switch class.
+    m_mmu->m_themisRouting.SetRouteInputCallback(
+        MakeCallback(&WanRouting::RouteInput, &m_mmu->m_wanRouting));
     // pCnt:端口数量
     for (uint32_t i = 0; i < pCnt; i++) {
         m_txBytes[i] = 0;
@@ -298,6 +322,13 @@ void SwitchNode::SendToDev(Ptr<Packet> p, CustomHeader &ch) {
      * Note that DoLbConWeave() and DoLbConga() are flow-ECMP function for control packets
      * or intra-ToR traffic.
      */
+    // Themis is a DCI-wide baseline and must wrap the normal WAN path before
+    // any optional DC load-balancing module can bypass it.
+    if (isDCI && m_mmu->m_themisRouting.IsEnabled()) {
+        m_mmu->m_themisRouting.RouteInput(p, ch);
+        return;
+    }
+
     // Conga
     if (Settings::lb_mode == 3) {
         m_mmu->m_congaRouting.RouteInput(p, ch);
@@ -328,6 +359,25 @@ void SwitchNode::SendToDev(Ptr<Packet> p, CustomHeader &ch) {
     SendToDevContinue(p, ch);
 }
 
+bool SwitchNode::IsWanSideLink(uint32_t outDev) {
+    auto nodeIt = Settings::if2id.find(this);
+    if (nodeIt == Settings::if2id.end()) {
+        return false;
+    }
+    auto ifIt = nodeIt->second.find(outDev);
+    if (ifIt == nodeIt->second.end()) {
+        return false;
+    }
+
+    NodeInfo::NodeType selfType = Settings::nodeInfos[m_id].node_type;
+    NodeInfo::NodeType nextType = Settings::nodeInfos[ifIt->second].node_type;
+    const bool selfWanSide = (selfType == NodeInfo::NodeType::DCI_SWITCH ||
+                              selfType == NodeInfo::NodeType::WAN_SWITCH);
+    const bool nextWanSide = (nextType == NodeInfo::NodeType::DCI_SWITCH ||
+                              nextType == NodeInfo::NodeType::WAN_SWITCH);
+    return selfWanSide && nextWanSide;
+}
+
 void SwitchNode::SendToDevContinue(Ptr<Packet> p, CustomHeader &ch) {
     int idx;
     idx = GetOutDev(p, ch);
@@ -352,11 +402,15 @@ void SwitchNode::SendToDevContinue(Ptr<Packet> p, CustomHeader &ch) {
 
         // determine the qIndex
         uint32_t qIndex;
-        if (ch.l3Prot == 0xFF || ch.l3Prot == 0xFE ||
-            (m_ackHighPrio &&
-             (ch.l3Prot == 0xFD ||
-              ch.l3Prot == 0xFC))) {  // QCN or PFC or ACK/NACK, go highest priority
-            qIndex = 0;               // high priority
+        const bool isAckOrNack = (ch.l3Prot == 0xFC || ch.l3Prot == 0xFD);
+        const bool lowPrioWanAck =
+            IsEnabledRawParam(Settings::GetRawParam("LOW_PRIO_WAN_ACK",
+                                                    kLowPrioWanAckDefault));
+        const bool ackUsesLowPrio = isAckOrNack && lowPrioWanAck && IsWanSideLink(idx);
+        if (ch.l3Prot == 0xFF || ch.l3Prot == 0xFE) {  // QCN or PFC
+            qIndex = 0;                               // high priority
+        } else if (isAckOrNack) {
+            qIndex = (m_ackHighPrio && !ackUsesLowPrio) ? 0 : kLowPrioAckQueue;
         } else {
             // Data traffic: TCP uses a fixed queue, UDP uses its pg field.
             // Other L4 protocols (e.g. ICMP) do not have a valid UDP pg, so
@@ -449,7 +503,7 @@ void SwitchNode::DoSwitchSend(Ptr<Packet> p, CustomHeader &ch, uint32_t outDev, 
                     this->m_id,
                     Settings::if2id[this][inDev],
                     Settings::get_flowid(p),
-                    ch.udp.seq,
+                    GetPacketSeqForLog(ch),
                     0);
                 if (ch.l3Prot == 0x11 && m_pfcEnabled == true && false) {
                     printf("An UDP packet dropped because ingress admission check false: Node:%u, Flow:%u, Seq=%u\n", 
@@ -479,7 +533,7 @@ void SwitchNode::DoSwitchSend(Ptr<Packet> p, CustomHeader &ch, uint32_t outDev, 
                     this->m_id,
                     Settings::if2id[this][outDev],
                     Settings::get_flowid(p),
-                    ch.udp.seq,
+                    GetPacketSeqForLog(ch),
                     1);
             }
             Settings::dropped_pkt_sw_egress++;
@@ -520,6 +574,12 @@ void SwitchNode::SwitchNotifyDequeue(uint32_t ifIndex, uint32_t qIndex, Ptr<Pack
                 //    Settings::if2id[this][ifIndex],
                 //    Settings::get_flowid(p));
             }
+        }
+        // Themis consumes the ECN mark for PNP and emits a direct CNP.  This
+        // call is intentionally a thin dispatch point; all Themis state and
+        // control logic lives in ThemisRouting.
+        if (m_mmu->m_themisRouting.IsEnabled()) {
+            m_mmu->m_themisRouting.OnDequeue(ifIndex, qIndex, p);
         }
         // NOTE: ConWeave's probe/reply does not need to pass inDev interface
         if (inDev != Settings::CONWEAVE_CTRL_DUMMY_INDEV) {
