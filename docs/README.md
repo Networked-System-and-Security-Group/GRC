@@ -24,6 +24,7 @@ If you only remember one thing, remember that most repository changes are either
 | Add or change a DC-side congestion control algorithm | [add-dc-congestion-control.md](add-dc-congestion-control.md) | Host-side RDMA transport and CC extension points |
 | Inspect or change current IRN retransmission behavior | [irn-retransmission-state-machine.md](irn-retransmission-state-machine.md) | Current sender/receiver IRN state machine and long-tail recovery risks |
 | Add or change WAN-side GSCC or routing logic | [add-wan-control.md](add-wan-control.md) | DCI/WAN path, raw params, and WAN logs |
+| Use or modify the Themis baseline | [baselines/themis.md](baselines/themis.md) | Switch-side PNP/TRP and DCQCN baseline behavior |
 | Change topology or traffic inputs | [inputs.md](inputs.md) | Topology JSON schema, flow file format, generators |
 | Parse outputs or add a new metric | [analysis.md](analysis.md) | Log owners, analyser entry points, and plotting |
 

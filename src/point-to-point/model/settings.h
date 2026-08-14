@@ -186,6 +186,9 @@ class Settings {
         WAN_OPT = 1,
         WITH_ECN = 2,
     } wan_cc_mode;
+    // Switch-side Themis baseline.  When enabled, every DCI switch runs PNP
+    // and TRP through its ThemisRouting module.
+    static bool themis_enabled;
 
     // for common setting
     static uint32_t packet_payload;

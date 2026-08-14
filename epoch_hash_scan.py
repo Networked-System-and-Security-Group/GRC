@@ -59,7 +59,8 @@ def main() -> None:
     ]
 
     enable_2layer_hash_values = ["TRUE", "FALSE"]
-    epoch_ms_values = [1, 2, 3, 4, 5]
+    epoch_ms_values = [0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0,
+                   5.5, 6.0, 6.5, 7.0, 7.5, 8.0, 8.5, 9.0, 9.5, 10.0]
 
     # Best-effort check that the flow files exist.
     for flow in flows:

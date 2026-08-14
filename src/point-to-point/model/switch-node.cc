@@ -97,6 +97,10 @@ SwitchNode::SwitchNode() {
     m_mmu->m_wanRouting.SetSwitchSendCallback(MakeCallback(&SwitchNode::DoSwitchSend, this));
     m_mmu->m_wanRouting.SetSwitchSendToDevCallback(
         MakeCallback(&SwitchNode::SendToDevContinue, this));
+    // Themis wraps normal DCI/WAN routing.  Its PNP/TRP state lives in the
+    // dedicated ThemisRouting object rather than in this switch class.
+    m_mmu->m_themisRouting.SetRouteInputCallback(
+        MakeCallback(&WanRouting::RouteInput, &m_mmu->m_wanRouting));
     // pCnt:端口数量
     for (uint32_t i = 0; i < pCnt; i++) {
         m_txBytes[i] = 0;
@@ -318,6 +322,13 @@ void SwitchNode::SendToDev(Ptr<Packet> p, CustomHeader &ch) {
      * Note that DoLbConWeave() and DoLbConga() are flow-ECMP function for control packets
      * or intra-ToR traffic.
      */
+    // Themis is a DCI-wide baseline and must wrap the normal WAN path before
+    // any optional DC load-balancing module can bypass it.
+    if (isDCI && m_mmu->m_themisRouting.IsEnabled()) {
+        m_mmu->m_themisRouting.RouteInput(p, ch);
+        return;
+    }
+
     // Conga
     if (Settings::lb_mode == 3) {
         m_mmu->m_congaRouting.RouteInput(p, ch);
@@ -563,6 +574,12 @@ void SwitchNode::SwitchNotifyDequeue(uint32_t ifIndex, uint32_t qIndex, Ptr<Pack
                 //    Settings::if2id[this][ifIndex],
                 //    Settings::get_flowid(p));
             }
+        }
+        // Themis consumes the ECN mark for PNP and emits a direct CNP.  This
+        // call is intentionally a thin dispatch point; all Themis state and
+        // control logic lives in ThemisRouting.
+        if (m_mmu->m_themisRouting.IsEnabled()) {
+            m_mmu->m_themisRouting.OnDequeue(ifIndex, qIndex, p);
         }
         // NOTE: ConWeave's probe/reply does not need to pass inDev interface
         if (inDev != Settings::CONWEAVE_CTRL_DUMMY_INDEV) {

@@ -77,6 +77,7 @@ PMAX_MAP {pmax_map}
 RANDOM_SEED {random_seed}
 TIME {time}
 WAN_CC_MODE {wan_cc_mode}
+THEMIS_ENABLE 0
 MSG {msg}
 """
 
@@ -89,6 +90,8 @@ cc_modes = {
     "dctcp": 8,
     "gemini": 9,
     "unocc": 10,
+    # Themis is a switch-side DCQCN baseline; keep the host CC mode at 1.
+    "themis": 1,
 }
 
 lb_modes = {
@@ -141,7 +144,7 @@ def main():
 
     parser = argparse.ArgumentParser(description='run simulation')
     parser.add_argument('--cc', dest='cc', action='store',
-                        default='dcqcn', help="hpcc/dcqcn/timely/dctcp/gemini/unocc (default: dcqcn)")
+                        default='dcqcn', help="hpcc/dcqcn/timely/dctcp/gemini/unocc/themis (default: dcqcn)")
     parser.add_argument('--lb', dest='lb', action='store',
                         default='fecmp', help="fecmp/pecmp/drill/conga (default: fecmp)")
     parser.add_argument('--pfc', dest='pfc', action='store',
@@ -149,7 +152,7 @@ def main():
     parser.add_argument('--irn', dest='irn', action='store',
                         type=int, default=0, help="enable IRN (default: 0)")
     parser.add_argument('--simul_time', dest='simul_time', action='store',
-                        default='0.05', help="traffic time to simulate (up to 3 seconds) (default: 0.1)")#
+                        default='0.1', help="traffic time to simulate (up to 3 seconds) (default: 0.1)")
     parser.add_argument('--buffer', dest="buffer", action='store',
                         default='9', help="the switch buffer size (MB) (default: 9)")
     parser.add_argument('--dci_buffer', dest='dci_buffer', action='store',
@@ -239,6 +242,7 @@ def main():
 
     # input parameters
     cc_mode = cc_modes[args.cc]
+    themis_enabled = args.cc == "themis"
     lb_mode = lb_modes[args.lb]
     enabled_pfc = int(args.pfc)
     enabled_irn = int(args.irn)
@@ -261,7 +265,9 @@ def main():
     print_log = int(args.print_log)
     intra_load = args.intra_load
     inter_load_all = args.inter_load_all
-    wan_cc_mode = args.wan_cc_mode
+    # The standalone Themis baseline is DCQCN + Themis switch control.  Keep
+    # GSCC/WAN control disabled so the baseline is not a hybrid algorithm.
+    wan_cc_mode = 0 if themis_enabled else args.wan_cc_mode
     # Parse passthrough extras: KEY=VALUE (VALUE kept as raw string)
     extra_kv = {}
     for item in args.extra:
@@ -472,6 +478,13 @@ def main():
     else:
         print("unknown cc:{}".format(args.cc))
 
+    # All CC branches share the same config template.  Materialize the
+    # switch-side baseline flag once here instead of duplicating a formatter
+    # argument across every branch.
+    config = re.sub(r'^THEMIS_ENABLE\s+.*$',
+                    f'THEMIS_ENABLE {int(themis_enabled)}',
+                    config, flags=re.MULTILINE)
+
     with open(config_name, "w") as file:
         if not args.config:
             if tcp_flow:
@@ -494,7 +507,7 @@ def main():
 
             # Keep run.py knobs authoritative even when reusing a config file.
             def _upsert_line(cfg: str, key: str, value: str) -> str:
-                pattern = rf'^{re.escape(key)}\\s+.*$'
+                pattern = rf'^{re.escape(key)}\s+.*$'
                 line = f'{key} {value}'
                 if re.search(pattern, cfg, flags=re.MULTILINE):
                     return re.sub(pattern, line, cfg, flags=re.MULTILINE)
@@ -505,6 +518,12 @@ def main():
             existing_config = _upsert_line(existing_config, 'DCI_BUFFER_SIZE', str(dci_buffer))
             existing_config = _upsert_line(existing_config, 'WAN_BUFFER_SIZE', str(wan_buffer))
             existing_config = _upsert_line(existing_config, 'PRINT_LOG', str(print_log))
+            existing_config = _upsert_line(existing_config, 'THEMIS_ENABLE', str(int(themis_enabled)))
+            if themis_enabled:
+                # A reused config must still select the standalone Themis
+                # baseline rather than retaining a previous GSCC/WAN mode.
+                existing_config = _upsert_line(existing_config, 'CC_MODE', str(cc_mode))
+                existing_config = _upsert_line(existing_config, 'WAN_CC_MODE', str(wan_cc_mode))
             if cc_mode == 10:
                 existing_config = _upsert_line(existing_config, 'L2_ACK_INTERVAL', str(ack_interval))
 

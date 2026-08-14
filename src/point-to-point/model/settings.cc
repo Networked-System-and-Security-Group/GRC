@@ -84,6 +84,7 @@ uint32_t Settings::host_num = 0;
 uint32_t Settings::switch_num = 0;
 uint32_t Settings::esw_num = 0;
 uint64_t Settings::cnt_finished_flows = 0;
+bool Settings::themis_enabled = false;
 uint32_t Settings::packet_payload = 1000;
 
 uint32_t Settings::dropped_pkt_sw_ingress = 0;

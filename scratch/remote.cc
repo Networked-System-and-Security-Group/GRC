@@ -1357,6 +1357,11 @@ int main(int argc, char *argv[]) {
                 conf >> v;
                 Settings::wan_cc_mode = static_cast<Settings::WanCCMode>(v);
                 std::cerr << "WAN_CC_MODE\t\t\t" << v << "\n";
+            } else if (key.compare("THEMIS_ENABLE") == 0) {
+                int v;
+                conf >> v;
+                Settings::themis_enabled = (v != 0);
+                std::cerr << "THEMIS_ENABLE\t\t" << Settings::themis_enabled << "\n";
             } else {
                 // Unknown key: consume the rest of the line and store as raw string.
                 // This enables quick experimentation without plumbing every knob.
@@ -1786,8 +1791,13 @@ int main(int argc, char *argv[]) {
     }
     for (int i = 0; i < nodeInfos.size(); i++) {
         if (nodeInfos[i].node_type == NodeInfo::NodeType::DCI_SWITCH) {
-            DynamicCast<SwitchNode>(n.Get(i))->m_mmu->m_wanRouting.SetSwitchInfo(i);
-            DynamicCast<SwitchNode>(n.Get(i))->m_mmu->m_wanRouting.init();
+            Ptr<SwitchNode> sw = DynamicCast<SwitchNode>(n.Get(i));
+            sw->m_mmu->m_wanRouting.SetSwitchInfo(i);
+            sw->m_mmu->m_wanRouting.init();
+            // The topology parser has already classified every DCI switch.
+            // Enable Themis on all of them without relying on hard-coded IDs.
+            sw->m_mmu->m_themisRouting.SetSwitchInfo(i);
+            sw->m_mmu->m_themisRouting.Init();
         }
     }
 

@@ -14,6 +14,7 @@
 #include "ns3/hula-routing.h"
 #include "ns3/letflow-routing.h"
 #include "ns3/settings.h"
+#include "ns3/themis-routing.h"
 #include "ns3/wan-routing.h"
 
 namespace ns3 {
@@ -139,6 +140,7 @@ class SwitchMmu : public Object {
     CaverRouting m_caverRouting;
     HulaRouting m_hulaRouting;
     WanRouting m_wanRouting;
+    ThemisRouting m_themisRouting;
 
     inline void printBufferInfo() {
         for (uint32_t port = 0; port < Settings::nodeContainer.Get(node_id)->GetNDevices(); ++port) {
