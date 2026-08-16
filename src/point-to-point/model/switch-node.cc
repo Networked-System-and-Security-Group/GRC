@@ -412,11 +412,11 @@ void SwitchNode::SendToDevContinue(Ptr<Packet> p, CustomHeader &ch) {
         } else if (isAckOrNack) {
             qIndex = (m_ackHighPrio && !ackUsesLowPrio) ? 0 : kLowPrioAckQueue;
         } else {
-            // Data traffic: TCP uses a fixed queue, UDP uses its pg field.
+            // Data traffic: TCP uses the configured queue, UDP uses its pg field.
             // Other L4 protocols (e.g. ICMP) do not have a valid UDP pg, so
             // fall back to the TCP queue to avoid using uninitialized fields.
             if (ch.l3Prot == 0x06) {
-                qIndex = 1;
+                qIndex = Settings::tcp_queue_index;
             } else if (ch.l3Prot == 0x11) {
                 qIndex = ch.udp.pg;
             } else {

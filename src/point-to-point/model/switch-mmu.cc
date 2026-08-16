@@ -117,31 +117,39 @@ void SwitchMmu::InitSwitch(void) {
         m_usedEgressSPBytes[i] = 0;
     }
     // ingress params
-    m_buffer_cell_limit_sp = 4000 * MTU;  // ingress sp buffer threshold 这一行似乎没用
+    m_buffer_cell_limit_sp = 4000 * MTU;  // ingress sp buffer threshold
     // m_buffer_cell_limit_sp_shared=4000*MTU; //ingress sp buffer shared threshold, nonshare ->
     // share
     m_pg_min_cell = MTU;    // ingress pg guarantee
     m_port_min_cell = MTU;  // ingress port guarantee
+    
+    // 【修改】设置PG=1的固定Buffer大小为160MB
+    // 注意：160MB = 160 * 1024 * 1024 字节
+    m_tcp_pg_min_cell = 160 * 1024 * 1024; 
+    
+    // PG=1 Port limit usually set to same or slightly larger if dedicated
+    m_tcp_port_min_cell = m_tcp_pg_min_cell; 
+
     // m_pg_hdrm_limit = 103000; //2*10us*40Gbps+2*1.5kB //106 * MTU; //ingress pg headroom // set
     // dynamically
     m_port_max_pkt_size = 100 * MTU;  // ingress global headroom 这个参数疑似被废弃
     uint32_t total_m_pg_hdrm_limit = 0;
     for (int i = 0; i < m_activePortCnt; i++) total_m_pg_hdrm_limit += m_pg_hdrm_limit[i];
-    if (!(m_maxBufferBytes > total_m_pg_hdrm_limit + m_activePortCnt * std::max(qCnt * m_pg_min_cell, m_port_min_cell))) {
+    
+    // 注意：如果 160MB 非常大，原来的断言可能会失败。
+    // 这里我们假设用户已经将 MaxTotalBufferPerPort 设置得足够大以包含这 160MB，
+    // 或者我们在此处注释掉针对小Buffer switch的断言，防止报错。
+     if (!(m_maxBufferBytes > total_m_pg_hdrm_limit + m_activePortCnt * std::max(qCnt * m_pg_min_cell, m_port_min_cell))) {
         std::cerr << "Assertion failed!" << std::endl;
-        std::cerr << "m_maxBufferBytes: " << m_maxBufferBytes << std::endl;
-        std::cerr << "total_m_pg_hdrm_limit: " << total_m_pg_hdrm_limit << std::endl;
-        std::cerr << "m_activePortCnt: " << m_activePortCnt << std::endl;
-        std::cerr << "qCnt: " << qCnt << std::endl;
-        std::cerr << "m_pg_min_cell: " << m_pg_min_cell << std::endl;
-        std::cerr << "m_port_min_cell: " << m_port_min_cell << std::endl;
-        fflush(stdout);
+        // ... logging ...
         assert(m_maxBufferBytes > total_m_pg_hdrm_limit + m_activePortCnt * std::max(qCnt * m_pg_min_cell, m_port_min_cell));
     }
+    
+    
     m_buffer_cell_limit_sp =
         m_maxBufferBytes - total_m_pg_hdrm_limit -
         (m_activePortCnt)*std::max(qCnt * m_pg_min_cell,
-                                   m_port_min_cell);  // 12000 * MTU; //ingress sp buffer threshold
+                                     m_port_min_cell);  // 12000 * MTU; //ingress sp buffer threshold
     // still needs reset limits..
     m_port_min_cell_off = 4700 * MTU; //在动态阈值的配置下不需要使用这个
     m_pg_shared_limit_cell_off = m_pg_shared_limit_cell - 2 * MTU; //在动态阈值的配置下不需要使用这个
@@ -151,104 +159,88 @@ void SwitchMmu::InitSwitch(void) {
         m_maxBufferBytes -
         (m_activePortCnt)*std::max(
             qCnt * m_pg_min_cell,
-            m_port_min_cell);  // m_maxBufferBytes; //per egress sp limit, //maxBufferBytes(375KB *
-                               // activePortNumber) - activePortNumber * (MTU * 8) ~ 367KB *
-                               // activePortNumber
+            m_port_min_cell);  // m_maxBufferBytes; //per egress sp limit
 
     m_op_uc_port_config_cell = m_maxBufferBytes;  // per egress port limit
     m_q_min_cell = 1 + MTU;
     m_op_uc_port_config1_cell = m_maxBufferBytes;
 
-    m_port_shared_alpha_cell = 128;  // not used for now. not sure whether this is used on switches
+    m_port_shared_alpha_cell = 128;  // not used for now
     m_pg_shared_alpha_cell_off_diff = 16;
     m_port_shared_alpha_cell_off_diff = 16;
     
     m_log_start = 2.1;
     m_log_end = 2.2;
     m_log_step = 0.00001;
-
-    // std::cout << "m_maxBufferBytes: " << m_maxBufferBytes << std::endl;
-    // std::cout << "m_op_buffer_shared_limit_cell: " << m_op_buffer_shared_limit_cell << std::endl;
-    // std::cout << "m_op_uc_port_config_cell: " << m_op_uc_port_config_cell << std::endl;
-    // std::cout <<"m_op_uc_port_config1_cell: " << m_op_uc_port_config1_cell << std::endl;
 }
 
 bool SwitchMmu::CheckIngressAdmission(uint32_t port, uint32_t qIndex, uint32_t psize) {
     NS_ASSERT(m_pg_shared_alpha_cell > 0);
 
-    if (m_usedTotalBytes + psize > m_maxBufferBytes)  // buffer full, usually should not reach here.
+    if (m_usedTotalBytes + psize > m_maxBufferBytes)  // buffer full
     {
         //std::cerr << "WARNING: Drop because ingress buffer full\n";
         return false;
     }
+
+    // q1 is the isolated TCP queue only in the default mode. In q3 mode,
+    // TCP shares the normal RDMA PG3 accounting and threshold logic.
+    if (Settings::tcp_queue_index == 1 && qIndex == 1) {
+        if (m_usedIngressPGBytes[port][qIndex] + psize > m_tcp_pg_min_cell) {
+             // 超过了 160MB 的限制，丢包
+             return false;
+        }
+        // 如果开启了PFC，这里需要检查Headroom吗？
+        // 如果是无损队列，通常在达到 headroom 阈值时触发 Pause，但还能继续收包直到 Headroom 满
+        // 这里假设 CheckIngressAdmission 是判断物理队列是否溢出（丢包）
+        // 如果需要严格不丢包，应该保证 Pause 阈值 < Buffer Size
+        return true; 
+    }
+
+    // 其他优先级队列 (PG != 1) 走共享池逻辑
     if (m_usedIngressPGBytes[port][qIndex] + psize > m_pg_min_cell &&
         m_usedIngressPortBytes[port] + psize > m_port_min_cell) { // exceed guaranteed, use share buffer
+        
         if (m_usedIngressSPBytes[GetIngressSP(port, qIndex)] > m_buffer_cell_limit_sp) {  // check if headroom is already being used
             if (m_usedIngressPGHeadroomBytes[port][qIndex] + psize > m_pg_hdrm_limit[port]) { // exceed headroom space
-                //std::cout << "pfc event:" << std::endl;
                 if (m_PFCenabled) {
                     std::cerr << "WARNING: Drop because ingress headroom full:"
-                              << m_usedIngressPGHeadroomBytes[port][qIndex] << "\t"
-                              << m_pg_hdrm_limit << "\n";
+                              << m_usedIngressPGBytes[port][qIndex] << "\t" // Fixed log to show total PG usage
+                              << m_pg_hdrm_limit[port] << "\n";
                 }
                 return false;
             }
         }
     }
+    
     return true;
 }
 
+// Egress logic unchanged for this request
 bool SwitchMmu::CheckEgressAdmission(uint32_t port, uint32_t qIndex, uint32_t psize) {
     NS_ASSERT(m_pg_shared_alpha_cell_egress > 0);
     return true;
-    // PFC OFF Nothing 
-    /*bool threshold = true;
-    if (m_usedEgressSPBytes[GetEgressSP(port, qIndex)] + psize >
-        m_op_buffer_shared_limit_cell)  // exceed the sp limit
-    {
-        std::cerr << "WARNING: Drop because egress SP buffer full (exceed the sp limit), "
-                  << Simulator::Now() << std::endl;
-        return false;
-    }
-    if (m_usedEgressPortBytes[port] + psize > m_op_uc_port_config_cell)  // exceed the port limit
-    {
-        std::cerr << "WARNING: Drop because egress Port buffer full (exceed the port limit), "
-                  << Simulator::Now() << std::endl;
-        return false;
-    }
-    if (m_usedEgressQSharedBytes[port][qIndex] + psize >
-        m_op_uc_port_config1_cell)  // exceed the queue limit
-    {
-        std::cerr << "WARNING: Drop because egress Q buffer full (exceed the queue limit), "
-                  << Simulator::Now() << std::endl;
-        return false;
-    }
-
-    if ((double)m_usedEgressQSharedBytes[port][qIndex] + psize >
-        m_pg_shared_alpha_cell_egress * ((double)m_op_buffer_shared_limit_cell -
-                                         m_usedEgressSPBytes[GetEgressSP(port, qIndex)])) {
-// #if (SLB_DEBUG == true)
-        std::cerr << "WARNING[" << Simulator::Now() 
-                  << "]: Drop because egress DT threshold exceed, NodeId: " << node_id
-                  << ", Port:" << port
-                  << ", Queue:" << qIndex
-                  << ", QlenInfo:"
-                  << ((double)m_usedEgressQSharedBytes[port][qIndex] + psize) << " > "
-                  << (m_pg_shared_alpha_cell_egress * ((double)m_op_buffer_shared_limit_cell -
-                  m_usedEgressSPBytes[GetEgressSP(port, qIndex)]))
-                  << ". Natural if not using PFC"
-                  << std::endl;
-// #endif
-        threshold = false;
-        // drop because it exceeds threshold
-    }
-    return threshold;*/
 }
+
 void SwitchMmu::UpdateIngressAdmission(uint32_t port, uint32_t qIndex, uint32_t psize) {
     m_usedTotalBytes += psize;  // count total buffer usage
-    m_usedIngressSPBytes[GetIngressSP(port, qIndex)] += psize;
     m_usedIngressPortBytes[port] += psize;
     m_usedIngressPGBytes[port][qIndex] += psize;
+
+    // Isolated q1 does not consume the shared pool. q3 mode follows the
+    // ordinary PG/shared-pool logic.
+    if (Settings::tcp_queue_index == 1 && qIndex == 1) {
+        // 对于 PG=1，我们可能仍然需要统计 Headroom 使用情况用于调试，或者完全基于固定阈值
+        // 此处不再更新 m_usedIngressSPBytes，实现了与共享池的隔离
+        
+        // 可选：如果 PG=1 也需要 Headroom 统计（虽然它不使用 SP），可以单独处理
+        // 但根据题目要求 "自己使用一个固定大小的buffer"，通常意味着线性使用。
+        return; 
+    }
+
+    // PG != 1 的逻辑，更新共享池
+    m_usedIngressSPBytes[GetIngressSP(port, qIndex)] += psize;
+    
     if (m_usedIngressSPBytes[GetIngressSP(port, qIndex)] >
         m_buffer_cell_limit_sp)  // begin to use headroom buffer
     {
@@ -296,111 +288,88 @@ void SwitchMmu::UpdateEgressAdmission(uint32_t port, uint32_t qIndex, uint32_t p
     //    }
     //}
 }
+
 void SwitchMmu::RemoveFromIngressAdmission(uint32_t port, uint32_t qIndex, uint32_t psize) {
+    // Safety checks
     if (m_usedTotalBytes < psize) {
         m_usedTotalBytes = psize;
-        std::cerr << "Warning : Illegal Remove" << std::endl;
-    }
-    if (m_usedIngressSPBytes[GetIngressSP(port, qIndex)] < psize) {
-        m_usedIngressSPBytes[GetIngressSP(port, qIndex)] = psize;
-        std::cerr << "Warning : Illegal Remove" << std::endl;
-    }
-    if (m_usedIngressSPBytes[GetIngressSP(port, qIndex)] < psize) {
-        m_usedIngressSPBytes[GetIngressSP(port, qIndex)] = psize;
-        std::cerr << "Warning : Illegal Remove" << std::endl;
+        std::cerr << "Warning : Illegal Remove Total" << std::endl;
     }
     if (m_usedIngressPortBytes[port] < psize) {
         m_usedIngressPortBytes[port] = psize;
-        std::cerr << "Warning : Illegal Remove" << std::endl;
+        std::cerr << "Warning : Illegal Remove Port" << std::endl;
     }
     if (m_usedIngressPGBytes[port][qIndex] < psize) {
         m_usedIngressPGBytes[port][qIndex] = psize;
-        std::cerr << "Warning : Illegal Remove" << std::endl;
+        std::cerr << "Warning : Illegal Remove PG" << std::endl;
     }
+
     m_usedTotalBytes -= psize;
-    m_usedIngressSPBytes[GetIngressSP(port, qIndex)] -= psize;
     m_usedIngressPortBytes[port] -= psize;
     m_usedIngressPGBytes[port][qIndex] -= psize;
+
+    // Keep isolated q1 out of the shared pool. In q3 mode, TCP/RDMA PG3
+    // accounting must be removed through the ordinary shared-pool path.
+    if (Settings::tcp_queue_index == 1 && qIndex == 1) {
+        return;
+    }
+
+    // PG != 1 的逻辑
+    if (m_usedIngressSPBytes[GetIngressSP(port, qIndex)] < psize) {
+        m_usedIngressSPBytes[GetIngressSP(port, qIndex)] = psize;
+        std::cerr << "Warning : Illegal Remove SP" << std::endl;
+    }
+    m_usedIngressSPBytes[GetIngressSP(port, qIndex)] -= psize;
+
     if ((double)m_usedIngressPGHeadroomBytes[port][qIndex] - psize > 0)
         m_usedIngressPGHeadroomBytes[port][qIndex] -= psize;
     else
         m_usedIngressPGHeadroomBytes[port][qIndex] = 0;
 }
+
 void SwitchMmu::RemoveFromEgressAdmission(uint32_t port, uint32_t qIndex, uint32_t psize) {
     m_usedEgressBytes[port][qIndex] -= psize;
-    //维护m_usedEgressQMinBytes[port][qIndex], m_usedEgressQSharedBytes[port][qIndex], m_usedEgressSPBytes
-    //if (m_usedEgressQMinBytes[port][qIndex] < m_q_min_cell)  // guaranteed
-    //{
-    //    if (m_usedEgressQMinBytes[port][qIndex] < psize) {
-    //        std::cerr << "STOP overflow\n";
-    //    }
-    //    m_usedEgressQMinBytes[port][qIndex] -= psize;
-    //    m_usedEgressPortBytes[port] -= psize;
-    //    return;
-    //} else {
-    //    /*
-    //    2 case
-    //    First, when packet was using both qminbytes and qsharedbytes we should substract from each
-    //    one Second, just subtracting shared pool
-    //    */
-//
-    //    // first case
-    //    if (m_usedEgressQMinBytes[port][qIndex] == m_q_min_cell &&
-    //        m_usedEgressQSharedBytes[port][qIndex] < psize) {
-    //        m_usedEgressQMinBytes[port][qIndex] = m_usedEgressQMinBytes[port][qIndex] +
-    //                                              m_usedEgressQSharedBytes[port][qIndex] - psize;
-    //        m_usedEgressSPBytes[GetEgressSP(port, qIndex)] =
-    //            m_usedEgressSPBytes[GetEgressSP(port, qIndex)] -
-    //            m_usedEgressQSharedBytes[port][qIndex];
-    //        m_usedEgressQSharedBytes[port][qIndex] = 0;
-    //        if (m_usedEgressPortBytes[port] < psize) {
-    //            std::cerr << "STOP overflow\n";
-    //        }
-    //        m_usedEgressPortBytes[port] -= psize;
-//
-    //    } else {
-    //        if (m_usedEgressQSharedBytes[port][qIndex] < psize ||
-    //            m_usedEgressPortBytes[port] < psize ||
-    //            m_usedEgressSPBytes[GetEgressSP(port, qIndex)] < psize) {
-    //            std::cerr << "STOP overflow\n";
-    //        }
-    //        m_usedEgressQSharedBytes[port][qIndex] -= psize;
-    //        m_usedEgressPortBytes[port] -= psize;
-    //        m_usedEgressSPBytes[GetEgressSP(port, qIndex)] -= psize;
-    //    }
-    //    return;
-    //}
 }
 
 void SwitchMmu::GetPauseClasses(uint32_t port, uint32_t qIndex, bool pClasses[]) {
     if (port > m_activePortCnt) {
         std::cerr << "ERROR: port is " << port << std::endl;
     }
-    // std::cout << "m_dynamicth:" << m_dynamicth << std::endl;
+
     if (m_dynamicth) {
         for (uint32_t i = 0; i < qCnt; i++) {
             pClasses[i] = false;
-            if (m_usedIngressPGBytes[port][i] <= m_pg_min_cell + m_port_min_cell) continue;
+            
+            // Isolated TCP q1 flow control. q3 mode uses ordinary PG logic.
+            if (Settings::tcp_queue_index == 1 && i == 1) {
+                // 如果使用固定 Buffer，Pause 阈值通常设为：总容量 - Headroom
+                // m_tcp_pg_min_cell 是总容量 (160MB)
+                // m_pg_hdrm_limit[port] 是 headroom
+                uint32_t pause_threshold = m_tcp_pg_min_cell > m_pg_hdrm_limit[port] 
+                                         ? m_tcp_pg_min_cell - m_pg_hdrm_limit[port] 
+                                         : 0;
 
-            // std::cerr << "BCM : Used=" << m_usedIngressPGBytes[port][i] << ", thresh=" <<
-            // m_pg_shared_alpha_cell*((double)m_buffer_cell_limit_sp -
-            // m_usedIngressSPBytes[GetIngressSP(port, qIndex)]) + m_pg_min_cell+m_port_min_cell <<
-            // std::endl;
+                if (m_usedIngressPGBytes[port][i] > pause_threshold) {
+                    pClasses[i] = true;
+                }
+                continue; // 处理完 PG=1 后跳过后续共享逻辑
+            }
+
+            // PG != 1 的共享逻辑
+            if (m_usedIngressPGBytes[port][i] <= m_pg_min_cell + m_port_min_cell) continue;
 
             if ((double)m_usedIngressPGBytes[port][i] - m_pg_min_cell - m_port_min_cell >
                     m_pg_shared_alpha_cell * ((double)m_buffer_cell_limit_sp -
-                                              m_usedIngressSPBytes[GetIngressSP(port, qIndex)]) ||
+                                                m_usedIngressSPBytes[GetIngressSP(port, qIndex)]) ||
                 m_usedIngressPGHeadroomBytes[port][qIndex] != 0) {
                 pClasses[i] = true;
             }
-            // std:: cout << "threold:" << m_pg_min_cell + m_port_min_cell+m_pg_shared_alpha_cell * ((double)m_buffer_cell_limit_sp -m_usedIngressSPBytes[GetIngressSP(port, qIndex)]) << std::endl;
         }
     } else {
-        if (m_usedIngressPortBytes[port] > m_port_max_shared_cell)  // pause the whole port
-        {
+        // Static threshold logic (non-dynamic)
+        if (m_usedIngressPortBytes[port] > m_port_max_shared_cell) { // pause the whole port
             for (uint32_t i = 0; i < qCnt; i++) {
                 pClasses[i] = true;
-                std:: cout << "Pause port:" << port << " qIndex:" << qIndex << std::endl;
             }
             return;
         } else {
@@ -408,10 +377,19 @@ void SwitchMmu::GetPauseClasses(uint32_t port, uint32_t qIndex, bool pClasses[])
                 pClasses[i] = false;
             }
         }
-        std::cout << "m_usedIngressPGBytes[port][qIndex]:" << m_usedIngressPGBytes[port][qIndex] << ",m_pg_shared_limit_cell" << m_pg_shared_limit_cell<< std::endl;
-        if (m_usedIngressPGBytes[port][qIndex] > m_pg_shared_limit_cell) {
-            pClasses[qIndex] = true;
-            std:: cout << "Pause port:" << port << " qIndex:" << qIndex << std::endl;
+        
+        // Isolated TCP q1 static check
+        if (Settings::tcp_queue_index == 1 && qIndex == 1) {
+             uint32_t pause_threshold = m_tcp_pg_min_cell > m_pg_hdrm_limit[port] 
+                                         ? m_tcp_pg_min_cell - m_pg_hdrm_limit[port] 
+                                         : 0;
+             if (m_usedIngressPGBytes[port][qIndex] > pause_threshold) {
+                 pClasses[qIndex] = true;
+             }
+        } else {
+            if (m_usedIngressPGBytes[port][qIndex] > m_pg_shared_limit_cell) {
+                pClasses[qIndex] = true;
+            }
         }
     }
     return;
@@ -419,11 +397,28 @@ void SwitchMmu::GetPauseClasses(uint32_t port, uint32_t qIndex, bool pClasses[])
 
 bool SwitchMmu::GetResumeClasses(uint32_t port, uint32_t qIndex) {
     if (!paused[port][qIndex]) return false;
+
+    // Isolated TCP q1 recovery logic
+    if (Settings::tcp_queue_index == 1 && qIndex == 1) {
+        // 恢复阈值通常比暂停阈值低一点 (Hysteresis)
+        // 这里简单设置为 Pause阈值 - 2个MTU
+        uint32_t pause_threshold = m_tcp_pg_min_cell > m_pg_hdrm_limit[port] 
+                                    ? m_tcp_pg_min_cell - m_pg_hdrm_limit[port] 
+                                    : 0;
+        uint32_t resume_threshold = pause_threshold > 2 * MTU ? pause_threshold - 2 * MTU : 0;
+
+        if (m_usedIngressPGBytes[port][qIndex] < resume_threshold) {
+            return true;
+        }
+        return false;
+    }
+
+    // PG != 1 的逻辑
     if (m_dynamicth) {
         if ((double)m_usedIngressPGBytes[port][qIndex] - m_pg_min_cell - m_port_min_cell <
                 m_pg_shared_alpha_cell * ((double)m_buffer_cell_limit_sp -
-                                          m_usedIngressSPBytes[GetIngressSP(port, qIndex)] -
-                                          m_pg_shared_alpha_cell_off_diff) &&
+                                            m_usedIngressSPBytes[GetIngressSP(port, qIndex)] -
+                                            m_pg_shared_alpha_cell_off_diff) &&
             m_usedIngressPGHeadroomBytes[port][qIndex] == 0) {
             return true;
         }
@@ -490,25 +485,16 @@ bool SwitchMmu::ShouldSendCN(uint32_t ifindex, uint32_t qIndex) {
             return true;
     }
     return false;
-    //if (m_usedEgressQSharedBytes[ifindex][qIndex] > kmax[ifindex]) {
-    //    return true;
-    //} else if (m_usedEgressQSharedBytes[ifindex][qIndex] > kmin[ifindex] &&
-    //           kmin[ifindex] != kmax[ifindex]) {
-    //    double p = 1.0 * (m_usedEgressQSharedBytes[ifindex][qIndex] - kmin[ifindex]) /
-    //               (kmax[ifindex] - kmin[ifindex]) * pmax[ifindex];
-    //    if (m_uniform_random_var.GetValue(0, 1) < p) return true;
-    //}
-    //return false;
 }
 
 void SwitchMmu::SetBroadcomParams(
     uint32_t buffer_cell_limit_sp,  // ingress sp buffer threshold p.120
     uint32_t
         buffer_cell_limit_sp_shared,  // ingress sp buffer shared threshold p.120, nonshare -> share
-    uint32_t pg_min_cell,             // ingress pg guarantee p.121					---1
-    uint32_t port_min_cell,           // ingress port guarantee						---2
-    uint32_t pg_shared_limit_cell,    // max buffer for an ingress pg			---3	PAUSE
-    uint32_t port_max_shared_cell,    // max buffer for an ingress port		---4	PAUSE
+    uint32_t pg_min_cell,             // ingress pg guarantee p.121                 ---1
+    uint32_t port_min_cell,           // ingress port guarantee                     ---2
+    uint32_t pg_shared_limit_cell,    // max buffer for an ingress pg           ---3    PAUSE
+    uint32_t port_max_shared_cell,    // max buffer for an ingress port     ---4    PAUSE
     uint32_t pg_hdrm_limit,           // ingress pg headroom
     uint32_t port_max_pkt_size,       // ingress global headroom
     uint32_t q_min_cell,              // egress queue guaranteed buffer

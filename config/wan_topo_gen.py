@@ -251,7 +251,7 @@ def generate_cernet_topo():
     # 5. 在每个WAN交换机上绑定5个host
     wan_hosts = []
     wan_host_links = []
-    wan_host_bw = '20Gbps'
+    wan_host_bw = '60Gbps'
     wan_host_delay = '1000ns'
     wan_host_loss = 0.0
 

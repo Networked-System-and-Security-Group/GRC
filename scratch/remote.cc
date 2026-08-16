@@ -7,6 +7,7 @@
 
 #include <fstream>
 #include <iostream>
+#include <sstream>
 #include <unordered_map>
 #include <filesystem>
 #include <cctype>
@@ -60,6 +61,7 @@ uint32_t global_ce_mon_interval = 20; //us
 uint32_t cc_mode = 1;           // mode for congestion control, 1: DCQCN
 bool enable_qcn = true, enable_pfc = true, use_dynamic_pfc_threshold = true;
 uint32_t packet_payload_size = 1000, l2_chunk_size = 0, l2_ack_interval = 0;
+uint32_t fec_parity_pkts = 0;
 double pause_time = 5;  // PFC pause, microseconds
 double flowgen_start_time = 2.0, flowgen_stop_time = 2.5, simulator_extra_time = 0.5;//0.15;
 // queue length monitoring time is not used in this simulator
@@ -147,12 +149,22 @@ std::ifstream flowf;
 std::ifstream tcp_flowf;
 uint32_t flow_num;
 uint32_t tcp_flow_num = 0;
+uint32_t tcp_finished_flows = 0;
+bool wait_tcp_completion = false;
 std::unordered_map<uint32_t, uint16_t> sportNumber;
 std::unordered_map<uint32_t, uint16_t> dportNumber;
 std::unordered_map<uint32_t, uint16_t> tcpDportNumber;
 
 std::string tcp_flow_file;
 std::vector<FlowInput> tcpFlowInfos;
+
+struct TcpFlowCompletion {
+    uint32_t flow_id;
+    uint64_t finish_time_ns;
+    uint32_t completion_count;
+};
+
+std::vector<TcpFlowCompletion> pending_tcp_completions;
 uint64_t pfc_pause_event_count = 0;
 uint64_t pfc_resume_event_count = 0;
 
@@ -170,6 +182,7 @@ bool ReadFlowInput() {
         flowf >> flow_input.src >> flow_input.dst >> flow_input.pg >> flow_input.fsize >> flow_input.start_time;
         flow_input.idx = flow_id;
         flow_input.fsize = std::max(1u, flow_input.fsize);
+        flow_input.fec_n = fec_parity_pkts;
         //printf("flow %u: %u -> %u, pg: %u, fsize: %u, start_time: %.2f\n", flow_id,
         //       flow_input.src, flow_input.dst, flow_input.pg, flow_input.fsize, flow_input.start_time);
         fflush(stdout);
@@ -196,6 +209,7 @@ bool ReadTcpFlowInput() {
         tcp_flowf >> flow_input.src >> flow_input.dst >> flow_input.pg >> flow_input.fsize >> flow_input.start_time;
         flow_input.idx = flow_id;
         flow_input.fsize = std::max(1u, flow_input.fsize);
+        flow_input.fec_n = 0;
         fflush(stdout);
         assert(n.Get(flow_input.src)->GetNodeType() == 0 &&
                n.Get(flow_input.dst)->GetNodeType() == 0);
@@ -241,7 +255,8 @@ void ScheduleFlowInputs() {
         rdma->AddQueuePair(
             fsize, pg, nodeInfos[src].ip, nodeInfos[dst].ip, sport, dport,
             has_win ? (global_t == 1 ? maxBdp : pairBdp.at(n.Get(src)).at(n.Get(dst))) : 0,
-            global_t == 1 ? maxRtt : pairRtt.at(n.Get(src)).at(n.Get(dst)), flowInfo.idx);
+            global_t == 1 ? maxRtt : pairRtt.at(n.Get(src)).at(n.Get(dst)), flowInfo.idx,
+            flowInfo.fec_n);
         
         if (!ReadFlowInput()) {
             flowf.close();
@@ -251,20 +266,43 @@ void ScheduleFlowInputs() {
     Simulator::Schedule(Seconds(Settings::flowInfos.back().start_time) - Simulator::Now(), &ScheduleFlowInputs);
 }
 
-// 这是流完成后的回调处理函数
+void FlushPendingTcpCompletions() {
+    if (pending_tcp_completions.empty()) {
+        return;
+    }
+
+    std::ostringstream batch;
+    batch << "TCP periodic completions at " << Simulator::Now().GetNanoSeconds()
+          << " ns: " << pending_tcp_completions.size() << " flows, completed "
+          << tcp_finished_flows << "/" << tcp_flow_num << "\n";
+    batch << std::fixed << std::setprecision(9);
+    for (const auto& completion : pending_tcp_completions) {
+        batch << "TCP Flow " << completion.flow_id << " finished at "
+              << static_cast<double>(completion.finish_time_ns) / 1e9 << "s ("
+              << completion.completion_count << "/" << tcp_flow_num << ")\n";
+    }
+
+    std::cout << batch.str() << std::flush;
+    pending_tcp_completions.clear();
+}
+
+// Record TCP completions here and let the periodic monitor print them in batches.
 void TcpFlowFinish(uint32_t flowId, uint32_t targetSize, Ptr<PacketSink> sink,
     Ptr<const Packet> p, const Address& addr)
 {
-// 获取当前已接收的总字节数
-// 注意：GetTotalRx() 返回的是应用层收到的有效载荷字节数
-
-if (sink->GetTotalRx() >= targetSize) {
-std::cout << "TCP Flow " << flowId << " finished at "
-   << Simulator::Now().GetSeconds() << "s" << std::endl;
-
-// 可选：如果只需要触发一次，可以在这里断开 Trace（需要保存 Connection 对象），
-// 但鉴于 TCP 有序传输，通常 == targetSize 只会触发一次（除非有后续数据）。
-}
+    // GetTotalRx() returns application payload bytes. The Rx trace can fire
+    // more than once after the target is reached, so count each flow once.
+    if (flowId >= tcpFlowInfos.size() || tcpFlowInfos[flowId].isFinished) {
+        return;
+    }
+    if (sink->GetTotalRx() >= targetSize) {
+        uint64_t finish_time_ns = Simulator::Now().GetNanoSeconds();
+        tcpFlowInfos[flowId].isFinished = true;
+        tcpFlowInfos[flowId].finish_time = static_cast<double>(finish_time_ns) / 1e9;
+        ++tcp_finished_flows;
+        pending_tcp_completions.push_back(
+            {flowId, finish_time_ns, tcp_finished_flows});
+    }
 }
 
 /**
@@ -290,9 +328,13 @@ void ScheduleTcpFlowInputs() {
 
         // Install apps at the scheduled time, and start the sink slightly earlier than the sender
         // to avoid spurious resets/ICMP due to event ordering.
-        Time start = Simulator::Now();
-        Time sinkStart = start;
-        Time senderStart = start + NanoSeconds(1);
+        // Applications are installed dynamically at Simulator::Now().
+        // ApplicationContainer::Start() stores a delay relative to that
+        // installation event, not an absolute simulation timestamp.  Use a
+        // zero delay so the sink starts at the requested flow time, and keep
+        // the sender one nanosecond later only for sink-before-sender ordering.
+        Time sinkStart = Time(0);
+        Time senderStart = NanoSeconds(1);
         PacketSinkHelper sinkHelper("ns3::TcpSocketFactory",
             Address(InetSocketAddress(Ipv4Address::GetAny(), dport)));
         ApplicationContainer sinkApps = sinkHelper.Install(n.Get(dst));
@@ -390,6 +432,7 @@ void m_QP_rate_monitoring()
 void my_periodic_monitoring(Time interval) {
     printf("Periodic monitoring at %lu, %lu flows finished, %ld flows activing\n", 
         Simulator::Now().GetNanoSeconds(), Settings::cnt_finished_flows, Settings::flowInfos.size() - Settings::cnt_finished_flows);
+    FlushPendingTcpCompletions();
     printf("DropInfo: %u %u\n", Settings::dropped_pkt_sw_ingress, Settings::dropped_pkt_sw_egress);
     Settings::dropped_pkt_sw_ingress = 0;
     Settings::dropped_pkt_sw_egress = 0;
@@ -519,15 +562,21 @@ void output_flow_info() {
  */
 void stop_simulation_middle() {
     uint32_t target_flow_num = flow_num - 0;  // can be lower than flownum
-    // When TCP flows are enabled, don't stop early purely based on RDMA completion;
-    // otherwise TCP apps may not have time to run.
-    bool has_tcp_flows = (tcp_flow_num > 0);
     bool rdma_done = (Settings::cnt_finished_flows >= target_flow_num);
+    bool tcp_done = (tcp_finished_flows >= tcp_flow_num);
     bool time_over = (Simulator::Now() > Seconds(flowgen_stop_time + simulator_extra_time));
-    if ((!has_tcp_flows && rdma_done) || time_over) {
+    bool required_flows_done = rdma_done && (!wait_tcp_completion || tcp_done);
+    if (required_flows_done || time_over) {
+        const char* stop_reason = required_flows_done
+                                      ? (wait_tcp_completion ? "RDMA and TCP completed"
+                                                             : "RDMA completed")
+                                      : "time limit";
+        FlushPendingTcpCompletions();
         std::cout << "\n*** Simulator is enforced to be finished, finished so far: "
-                  << Settings::cnt_finished_flows << "/ total: " << target_flow_num
-                  << ", Time:" << Simulator::Now() << std::endl;
+                  << "RDMA " << Settings::cnt_finished_flows << "/" << target_flow_num
+                  << ", TCP " << tcp_finished_flows << "/" << tcp_flow_num
+                  << ", Time:" << Simulator::Now()
+                  << ", Reason:" << stop_reason << std::endl;
         output_flow_info();
         Simulator::Stop(NanoSeconds(1));  // finish soon, stop this schedule (NECESSARY!)
         return;
@@ -1122,6 +1171,11 @@ int main(int argc, char *argv[]) {
                 conf >> v;
                 l2_ack_interval = v;
                 std::cerr << "L2_ACK_INTERVAL\t\t\t" << l2_ack_interval << "\n";
+            } else if (key.compare("FEC_PARITY_PKTS") == 0) {
+                uint32_t v;
+                conf >> v;
+                fec_parity_pkts = v;
+                std::cerr << "FEC_PARITY_PKTS\t\t\t" << fec_parity_pkts << "\n";
             } else if (key.compare("L2_BACK_TO_ZERO") == 0) {
                 uint32_t v;
                 conf >> v;
@@ -1149,6 +1203,21 @@ int main(int argc, char *argv[]) {
                 conf >> v;
                 tcp_flow_file = v;
                 std::cerr << "TCP_FLOW_FILE\t\t\t" << tcp_flow_file << "\n";
+            } else if (key.compare("TCP_QUEUE_INDEX") == 0) {
+                uint32_t v;
+                conf >> v;
+                if (v != 1 && v != 3) {
+                    NS_FATAL_ERROR("TCP_QUEUE_INDEX must be 1 or 3");
+                }
+                Settings::tcp_queue_index = v;
+                std::cerr << "TCP_QUEUE_INDEX\t\t" << v << "\n";
+            } else if (key.compare("WAIT_TCP_COMPLETION") == 0) {
+                uint32_t v;
+                conf >> v;
+                if (v > 1) {
+                    NS_FATAL_ERROR("WAIT_TCP_COMPLETION must be 0 or 1");
+                }
+                wait_tcp_completion = (v != 0);
             } else if (key.compare("FLOWGEN_START_TIME") == 0) {
                 double v;
                 conf >> v;
@@ -1375,6 +1444,8 @@ int main(int argc, char *argv[]) {
             fflush(stdout);
         }
         conf.close();
+        std::cerr << "WAIT_TCP_COMPLETION\t\t"
+                  << (wait_tcp_completion ? "Yes" : "No") << "\n";
 
     } else {
         std::cerr << "Error: require a config file\n";
@@ -1402,6 +1473,21 @@ int main(int argc, char *argv[]) {
     Settings::lb_mode = lb_mode;
     Settings::packet_payload = packet_payload_size;
     initialize_log();
+
+    if (fec_parity_pkts > 0) {
+        if (packet_payload_size == 0) {
+            std::cerr << "Error: PACKET_PAYLOAD_SIZE must be > 0 when FEC_PARITY_PKTS > 0\n";
+            return 1;
+        }
+        if (l2_ack_interval == 0) {
+            std::cerr << "Error: L2_ACK_INTERVAL must be > 0 when FEC_PARITY_PKTS > 0\n";
+            return 1;
+        }
+        if (l2_ack_interval % packet_payload_size != 0) {
+            std::cerr << "Error: L2_ACK_INTERVAL must be a multiple of PACKET_PAYLOAD_SIZE when FEC_PARITY_PKTS > 0\n";
+            return 1;
+        }
+    }
 
     /**
      * @brief PFC/QCN setup
@@ -1717,6 +1803,7 @@ int main(int argc, char *argv[]) {
             rdmaHw->SetAttribute("L2BackToZero", BooleanValue(l2_back_to_zero));
             rdmaHw->SetAttribute("L2ChunkSize", UintegerValue(l2_chunk_size));
             rdmaHw->SetAttribute("L2AckInterval", UintegerValue(l2_ack_interval));
+            rdmaHw->SetAttribute("FecEnable", BooleanValue(fec_parity_pkts > 0));
             rdmaHw->SetAttribute("CcMode", UintegerValue(cc_mode));
             rdmaHw->SetAttribute("RateDecreaseInterval", DoubleValue(rate_decrease_interval));
             rdmaHw->SetAttribute("MinRate", DataRateValue(DataRate(min_rate)));
@@ -1925,7 +2012,7 @@ int main(int argc, char *argv[]) {
         tcp_flowf.open(tcp_flow_file.c_str());
         if (tcp_flowf.is_open()) {
             tcp_flowf >> tcp_flow_num;
-            printf("TCP flow num: %lu\n", tcp_flow_num);
+            printf("TCP flow num: %u\n", tcp_flow_num);
             if (ReadTcpFlowInput()) {
                 Simulator::Schedule(Seconds(0), &ScheduleTcpFlowInputs);
             }
@@ -1976,9 +2063,11 @@ int main(int argc, char *argv[]) {
 
     topof.close();
     std::cout << "============DC Switch===========\n";
-    //DynamicCast<SwitchNode>(n.Get(16))->m_mmu->printBufferManagerStatus();
+    DynamicCast<SwitchNode>(n.Get(16))->m_mmu->printBufferManagerStatus();
     std::cout << "============DCI Switch===========\n";
-    //DynamicCast<SwitchNode>(n.Get(36))->m_mmu->printBufferManagerStatus();
+    DynamicCast<SwitchNode>(n.Get(36))->m_mmu->printBufferManagerStatus();
+    std::cout << "============WAN Switch===========\n";
+    DynamicCast<SwitchNode>(n.Get(223))->m_mmu->printBufferManagerStatus();
 
     //
     // Now, do the actual simulation.
@@ -1991,6 +2080,7 @@ int main(int argc, char *argv[]) {
                         &stop_simulation_middle);  // check every 100us
     Simulator::Stop(Seconds(flowgen_stop_time + 10.0));
     Simulator::Run();
+    FlushPendingTcpCompletions();
     std::cout << "PFC summary: pause_triggers=" << pfc_pause_event_count
               << ", resumes=" << pfc_resume_event_count << std::endl;
 

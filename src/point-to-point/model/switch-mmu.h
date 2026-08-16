@@ -183,7 +183,9 @@ class SwitchMmu : public Object {
     uint32_t
         m_buffer_cell_limit_sp_shared;  // ingress sp buffer shared threshold, nonshare -> share 似乎已经被废弃
     uint32_t m_pg_min_cell;             // ingress pg guarantee
+    uint32_t m_tcp_pg_min_cell;
     uint32_t m_port_min_cell;           // ingress port guarantee
+    uint32_t m_tcp_port_min_cell;
     uint32_t m_pg_shared_limit_cell;    // max buffer for an ingress pg
     uint32_t m_port_max_shared_cell;    // max buffer for an ingress port
     uint32_t m_pg_hdrm_limit[pCnt];     // ingress pg headroom

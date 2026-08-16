@@ -14,6 +14,7 @@
 #include "ns3/object.h"
 #include "ns3/packet.h"
 #include "ns3/ptr.h"
+#include "ns3/random-variable-stream.h"
 #include "ns3/settings.h"
 #include "ns3/simulator.h"
 #include "ns3/tag.h"
@@ -132,6 +133,15 @@ private:
         int64_t get_std_bytes() const;
 
         bool update_and_check_cnp(uint32_t pkt_size);
+        void UpdateRedAvg(uint32_t q_bytes, double red_wq);
+        bool ShouldEarlyDrop(uint32_t q_bytes, uint32_t red_kmin, uint32_t red_kmax,
+                             double red_pmax, double red_wq,
+                             UniformRandomVariable& rng);
+        void ResetEpochRedStats();
+
+        double red_avg_q = 0.0;
+        uint64_t red_drop_cnt = 0;
+        uint64_t red_pass_cnt = 0;
 
     private:
         WanRouting* m_wanRouting = nullptr;
@@ -145,6 +155,13 @@ private:
     // 单路径：dst_as -> out_port
     std::map<uint32_t, uint32_t> m_rtTable;
 
+    bool m_red_enabled = false;
+    uint32_t m_red_kmin = 0;
+    uint32_t m_red_kmax = 0;
+    double m_red_pmax = 0.0;
+    double m_red_wq = 0.0;
+    UniformRandomVariable m_red_uniform;
+
     // Epoch starts at 2s; updated at the beginning of each epoch.
     Time m_epoch_start_time = Seconds(2);
 
@@ -155,6 +172,8 @@ private:
     static double s_w_k;
     static std::vector<double> s_w_k_samples;
     static void update_w_k();
+    void LoadRedConfig();
+    bool MaybeRedDrop(Ptr<Packet> p, CustomHeader& ch, uint32_t out_port, DstDCHandler& dc_handler);
 
     //Congestion control module
     void send_cnp(Ptr<Packet> p, CustomHeader& ch);

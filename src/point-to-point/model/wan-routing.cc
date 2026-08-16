@@ -34,6 +34,11 @@ constexpr const char* kEnable2LayerHashDefault = "TRUE";
 constexpr const char* kGsccFairDefault = "TRUE";
 constexpr const char* kGsccAckTsDefault = "TRUE";
 constexpr const char* kFixedRefRateGbpsDefault = "";
+constexpr const char* kWanRedEnableDefault = "FALSE";
+constexpr const char* kWanRedKminDefault = "131072";
+constexpr const char* kWanRedKmaxDefault = "1048576";
+constexpr const char* kWanRedPmaxDefault = "0.1";
+constexpr const char* kWanRedWqDefault = "0.002";
 
 class GSCCAckTag : public Tag {
 public:
@@ -140,6 +145,7 @@ WanRouting::WanRouting() {
     // 初始化回调函数为空
     m_hash_seed1 = rand();
     m_hash_seed2 = rand();
+    m_red_uniform.SetStream(0);
 }
 
 void WanRouting::DstDCHandler::Init(WanRouting* wan_routing, int64_t max_rate) {
@@ -183,6 +189,9 @@ void WanRouting::DstDCHandler::Init(WanRouting* wan_routing, int64_t max_rate) {
     start_bytes = 0;
     end_bytes = static_cast<int64_t>(ref_rate * WanRouting::epoch_duration.GetSeconds());
     cur_bytes = 0;
+
+    red_avg_q = 0.0;
+    ResetEpochRedStats();
 }
 
 double WanRouting::DstDCHandler::record_w_x(double raw_x, bool enable_smoothing) {
@@ -269,9 +278,59 @@ bool WanRouting::DstDCHandler::update_and_check_cnp(uint32_t pkt_size) {
     //return false;
 }
 
+void WanRouting::DstDCHandler::UpdateRedAvg(uint32_t q_bytes, double red_wq) {
+    red_avg_q = (1.0 - red_wq) * red_avg_q + red_wq * static_cast<double>(q_bytes);
+}
+
+bool WanRouting::DstDCHandler::ShouldEarlyDrop(uint32_t q_bytes, uint32_t red_kmin,
+                                               uint32_t red_kmax, double red_pmax,
+                                               double red_wq, UniformRandomVariable& rng) {
+    UpdateRedAvg(q_bytes, red_wq);
+    if (red_avg_q <= static_cast<double>(red_kmin)) {
+        red_pass_cnt++;
+        return false;
+    }
+    if (red_avg_q >= static_cast<double>(red_kmax)) {
+        red_drop_cnt++;
+        return true;
+    }
+
+    const double p = red_pmax * (red_avg_q - static_cast<double>(red_kmin)) /
+                     static_cast<double>(red_kmax - red_kmin);
+    if (rng.GetValue(0.0, 1.0) < p) {
+        red_drop_cnt++;
+        return true;
+    }
+
+    red_pass_cnt++;
+    return false;
+}
+
+void WanRouting::DstDCHandler::ResetEpochRedStats() {
+    red_drop_cnt = 0;
+    red_pass_cnt = 0;
+}
+
+void WanRouting::LoadRedConfig() {
+    const std::string enable = Settings::GetRawParam("WAN_RED_ENABLE", kWanRedEnableDefault);
+    m_red_enabled = (enable == "1" || enable == "TRUE" || enable == "true" ||
+                     enable == "on" || enable == "ON");
+    m_red_kmin = static_cast<uint32_t>(
+        std::stoul(Settings::GetRawParam("WAN_RED_KMIN", kWanRedKminDefault)));
+    m_red_kmax = static_cast<uint32_t>(
+        std::stoul(Settings::GetRawParam("WAN_RED_KMAX", kWanRedKmaxDefault)));
+    m_red_pmax = std::stod(Settings::GetRawParam("WAN_RED_PMAX", kWanRedPmaxDefault));
+    m_red_wq = std::stod(Settings::GetRawParam("WAN_RED_WQ", kWanRedWqDefault));
+
+    if (m_red_kmax <= m_red_kmin) {
+        m_red_kmax = m_red_kmin + 1;
+    }
+    m_red_pmax = std::max(0.0, std::min(m_red_pmax, 1.0));
+    m_red_wq = std::max(0.0, std::min(m_red_wq, 1.0));
+}
+
 void WanRouting::init() {
     assert(m_switch_id != -1);
-
     // Allow tuning epoch duration via raw params.
     // Unit: microseconds. Key: WAN_EPOCH_US (default 1000us = 1ms).
     {
@@ -283,7 +342,7 @@ void WanRouting::init() {
         printf("[Info] WanRouting on switch %u enables GSCC_FAIR mode\n", m_switch_id);
     }
     m_ackTsMode = IsEnabledRawParam(Settings::GetRawParam("GSCC_ACK_TS", kGsccAckTsDefault));
-
+    LoadRedConfig();
     for (const auto& [dst_as, next_hops] : Settings::wan_routing[m_switch_id]) {
         if (next_hops.empty()) {
             continue;
@@ -309,6 +368,30 @@ void WanRouting::init() {
         s_w_k_update_scheduled = true;
         Simulator::Schedule(Seconds(2) + GetWKSyncInterval(), &WanRouting::update_w_k);
     }
+}
+
+bool WanRouting::MaybeRedDrop(Ptr<Packet> p, CustomHeader& ch, uint32_t out_port,
+                              DstDCHandler& dc_handler) {
+    if (!m_red_enabled) {
+        return false;
+    }
+
+    Ptr<QbbNetDevice> dev =
+        DynamicCast<QbbNetDevice>(Settings::nodeContainer.Get(m_switch_id)->GetDevice(out_port));
+    if (dev == nullptr || dev->GetQueue() == nullptr) {
+        return false;
+    }
+
+    const uint32_t q_bytes = dev->GetQueue()->GetNBytes(ch.udp.pg);
+    if (!dc_handler.ShouldEarlyDrop(q_bytes, m_red_kmin, m_red_kmax, m_red_pmax, m_red_wq,
+                                    m_red_uniform)) {
+        return false;
+    }
+
+    fprintf(logfile::drop_log, "%lu,%u,%u,%u,%u,%u\n", Simulator::Now().GetNanoSeconds(),
+            m_switch_id, Settings::if2id[Settings::nodeContainer.Get(m_switch_id)][out_port],
+            Settings::get_flowid(p), ch.udp.seq, 2);
+    return true;
 }
 
 void WanRouting::RouteInput(Ptr<Packet> p, CustomHeader& ch) {
@@ -387,6 +470,10 @@ void WanRouting::HandleUdpReceived(Ptr<Packet> p, CustomHeader& ch) {
     dc_handler.cur_rate *= w;
     dc_handler.cur_rate += p->GetSize();
     dc_handler.cc_last_update = Simulator::Now();
+
+    if (MaybeRedDrop(p, ch, out_port, dc_handler)) {
+        return;
+    }
 
     const bool ecn_marked = ch.GetIpv4EcnBits() != 0;
     if (Settings::wan_cc_mode == Settings::WanCCMode::WAN_OPT && m_gsccFair && ecn_marked) {
@@ -527,6 +614,11 @@ void WanRouting::controlplane_logic() {
             dc_handler.entry_timeout_count
         );
         dc_handler.entry_timeout_count = 0;
+        fprintf(logfile::wan_log,
+                "%lu,%u,%u,red_enabled=%u,red_avg_q=%.3f,red_drop_cnt=%lu,red_pass_cnt=%lu\n",
+                Simulator::Now().GetNanoSeconds(), m_switch_id,
+                Settings::nodeInfos[m_switch_id].as_id, m_red_enabled ? 1u : 0u,
+                dc_handler.red_avg_q, dc_handler.red_drop_cnt, dc_handler.red_pass_cnt);
 
         // Compute per-epoch CNP trigger probability and w/k for logging.
         const uint64_t pkt_cnt = dc_handler.epoch_pkt_cnt;
@@ -591,8 +683,10 @@ void WanRouting::controlplane_logic() {
         // Reset per-epoch statistics
         dc_handler.epoch_pkt_cnt = 0;
         dc_handler.epoch_cnp_cnt = 0;
+        dc_handler.ResetEpochRedStats();
     }
     fflush(logfile::rate_monitor);
+    fflush(logfile::wan_log);
 }
 
 void WanRouting::update_w_k() {

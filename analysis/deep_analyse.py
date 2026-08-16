@@ -526,12 +526,25 @@ class Analyser:
 
     @auto_save_plot
     def plot_as_rate(self, src_as, dst_as):
-        """绘制AS间的real_rate和ref_rate对比图"""
+        """绘制AS间前0.5秒的real_rate和ref_rate对比图"""
         df = self.__get_as_rate_df(src_as, dst_as, required_columns=['real_rate', 'ref_rate'])
         if df.empty:
             print(f'No rate info for AS {src_as}->{dst_as}')
             return
-            
+        
+        # === 修改部分开始 ===
+        # 1. 获取当前筛选数据的最早时间戳
+        start_ns = df['timestamp_ns'].min()
+        # 2. 计算截止时间戳 (起始时间 + 0.5秒 * 10^9 纳秒)
+        end_ns = start_ns + 0.5 * 1e9
+        # 3. 过滤数据
+        df = df[df['timestamp_ns'] <= end_ns]
+        # === 修改部分结束 ===
+
+        if df.empty:
+            print(f'No data in the first 0.5s for AS {src_as}->{dst_as}')
+            return
+
         plt.figure(figsize=(5, 4), dpi=300)
         plt.plot(df['timestamp_ns'] / 1e9, df['real_rate'] / 1e9, label='Real Rate', color='blue')
         plt.plot(df['timestamp_ns'] / 1e9, df['ref_rate'] / 1e9, label='Base Rate', color='red', linestyle='--')

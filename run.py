@@ -32,6 +32,7 @@ FLOWGEN_STOP_TIME {flowgen_stop_time}
 BUFFER_SIZE {buffer_size}
 DCI_BUFFER_SIZE {dci_buffer_size}
 WAN_BUFFER_SIZE {wan_buffer_size}
+TCP_QUEUE_INDEX {tcp_queue_index}
 
 CC_MODE {cc_mode}
 LB_MODE {lb_mode}
@@ -69,6 +70,7 @@ ENABLE_QCN 1
 USE_DYNAMIC_PFC_THRESHOLD 1
 PACKET_PAYLOAD_SIZE 1000
 PRINT_LOG {print_log}
+FEC_PARITY_PKTS {fec_n}
 
 
 KMAX_MAP {kmax_map}
@@ -172,7 +174,9 @@ def main():
     parser.add_argument('--sw_monitoring_interval', dest='sw_monitoring_interval', action='store',
                         type=int, default=10000, help="interval of sampling statistics for queue status (default: 10000ns)")
     parser.add_argument('--my_flow', type=str, default='w-dynamic-100-150', help="use my own flow, if '', use default flow")#
-    parser.add_argument('--tcp_flow', type=str, default='', help="optional TCP flow file path; enables TCP/RDMA mixed-run")
+    parser.add_argument('--tcp_flow', type=str, default='config/w-tcp-100.txt', help="optional TCP flow file path; enables TCP/RDMA mixed-run")
+    parser.add_argument('--tcp_queue_index', type=int, choices=[1, 3], default=1,
+                        help="TCP queue index: 1 isolates TCP, 3 shares the RDMA PG3 queue (default: 1)")
     # NOTE: argparse with type=bool is almost always wrong (e.g. "0" becomes True).
     # Use 0/1 integers for stable CLI behavior.
     parser.add_argument('--debug', type=int, default=0, help="debug (0/1)")
@@ -197,18 +201,24 @@ def main():
     parser.add_argument('--uno_phantom_slowdown_pct', type=float, default=10.0)
     parser.add_argument('--msg', type=str, default='', help="message")
     parser.add_argument('--config', type=str, default='', help="config.txt file to use, if '', generate a new config.txt file")
+    parser.add_argument('--fec-n', dest='fec_n', type=int, default=0,
+                        help="default FEC parity packet count bound to each RDMA flow")
     parser.add_argument(
         '--extra',
         action='append',
         default=[],
         help="temporary passthrough config knob, format KEY=VALUE; can be repeated",
     )
+    parser.add_argument('--skip-build', dest='skip_build', type=int, default=0,
+                        help="skip ./waf build before running (default: 0)")
 
     args = parser.parse_args()
 
-    if opcode := os.system("./waf") != 0:
-        print("Error: Failed to compile")
-        sys.exit(opcode)
+    if not bool(args.skip_build):
+        opcode = os.system("./waf")
+        if opcode != 0:
+            print("Error: Failed to compile")
+            sys.exit(opcode)
     config_index = 0
     if not os.path.exists('./mix/index.txt'):
         with open('./mix/index.txt', 'w') as file:
@@ -268,6 +278,9 @@ def main():
     # The standalone Themis baseline is DCQCN + Themis switch control.  Keep
     # GSCC/WAN control disabled so the baseline is not a hybrid algorithm.
     wan_cc_mode = 0 if themis_enabled else args.wan_cc_mode
+    msg = args.msg.strip()
+    fec_n = args.fec_n
+    tcp_queue_index = args.tcp_queue_index
     # Parse passthrough extras: KEY=VALUE (VALUE kept as raw string)
     extra_kv = {}
     for item in args.extra:
@@ -384,12 +397,14 @@ def main():
         config = config_template.format(id=config_ID, topo=topo, flow=flow,
                         flowgen_start_time=flowgen_start_time,
                                         flowgen_stop_time=flowgen_stop_time, sw_monitoring_interval=sw_monitoring_interval,
-                                        buffer_size=buffer, dci_buffer_size=dci_buffer, wan_buffer_size=wan_buffer, lb_mode=lb_mode,
+                                        buffer_size=buffer, dci_buffer_size=dci_buffer, wan_buffer_size=wan_buffer,
+                                        tcp_queue_index=tcp_queue_index, lb_mode=lb_mode,
                                         enabled_pfc=enabled_pfc, enabled_irn=enabled_irn,
                                         cc_mode=cc_mode,
                                         ai=ai, hai=hai, dctcp_ai=dctcp_ai,
                                         has_win=has_win, var_win=var_win,
                                         fast_react=fast_react, mi=mi, int_multi=int_multi, ewma_gain=ewma_gain,
+                                        fec_n=fec_n,
                                         kmax_map=kmax_map, kmin_map=kmin_map, pmax_map=pmax_map, random_seed=1, time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                                         ack_interval=ack_interval, wan_cc_mode=wan_cc_mode, msg=msg, print_log=print_log)
     elif cc_mode == 7:
@@ -404,12 +419,14 @@ def main():
         config = config_template.format(id=config_ID, topo=topo, flow=flow,
                         flowgen_start_time=flowgen_start_time,
                                         flowgen_stop_time=flowgen_stop_time, sw_monitoring_interval=sw_monitoring_interval,
-                                        buffer_size=buffer, dci_buffer_size=dci_buffer, wan_buffer_size=wan_buffer, lb_mode=lb_mode,
+                                        buffer_size=buffer, dci_buffer_size=dci_buffer, wan_buffer_size=wan_buffer,
+                                        tcp_queue_index=tcp_queue_index, lb_mode=lb_mode,
                                         enabled_pfc=enabled_pfc, enabled_irn=enabled_irn,
                                         cc_mode=cc_mode,
                                         ai=ai, hai=hai, dctcp_ai=dctcp_ai,
                                         has_win=has_win, var_win=var_win,
                                         fast_react=fast_react, mi=mi, int_multi=int_multi, ewma_gain=ewma_gain,
+                                        fec_n=fec_n,
                                         kmax_map=kmax_map, kmin_map=kmin_map, pmax_map=pmax_map, random_seed=1, time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                                         ack_interval=ack_interval, wan_cc_mode=wan_cc_mode, msg=msg, print_log=print_log)
     elif cc_mode == 9:
@@ -431,12 +448,14 @@ def main():
         config = config_template.format(id=config_ID, topo=topo, flow=flow,
                         flowgen_start_time=flowgen_start_time,
                                         flowgen_stop_time=flowgen_stop_time, sw_monitoring_interval=sw_monitoring_interval,
-                                        buffer_size=buffer, dci_buffer_size=dci_buffer, wan_buffer_size=wan_buffer, lb_mode=lb_mode, 
+                                        buffer_size=buffer, dci_buffer_size=dci_buffer, wan_buffer_size=wan_buffer,
+                                        tcp_queue_index=tcp_queue_index, lb_mode=lb_mode,
                                         enabled_pfc=enabled_pfc, enabled_irn=enabled_irn,
                                         cc_mode=cc_mode,
                                         ai=ai, hai=hai, dctcp_ai=dctcp_ai,
                                         has_win=has_win, var_win=var_win,
                                         fast_react=fast_react, mi=mi, int_multi=int_multi, ewma_gain=ewma_gain,
+                                        fec_n=fec_n,
                                         kmax_map=kmax_map, kmin_map=kmin_map, pmax_map=pmax_map, random_seed=1, time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                                         ack_interval=ack_interval, wan_cc_mode=wan_cc_mode, msg=msg, print_log=print_log)
     elif cc_mode == 10:
@@ -451,12 +470,14 @@ def main():
         config = config_template.format(id=config_ID, topo=topo, flow=flow,
                         flowgen_start_time=flowgen_start_time,
                                         flowgen_stop_time=flowgen_stop_time, sw_monitoring_interval=sw_monitoring_interval,
-                                        buffer_size=buffer, dci_buffer_size=dci_buffer, wan_buffer_size=wan_buffer, lb_mode=lb_mode,
+                                        buffer_size=buffer, dci_buffer_size=dci_buffer, wan_buffer_size=wan_buffer,
+                                        tcp_queue_index=tcp_queue_index, lb_mode=lb_mode,
                                         enabled_pfc=enabled_pfc, enabled_irn=enabled_irn,
                                         cc_mode=cc_mode,
                                         ai=ai, hai=hai, dctcp_ai=dctcp_ai,
                                         has_win=has_win, var_win=var_win,
                                         fast_react=fast_react, mi=mi, int_multi=int_multi, ewma_gain=ewma_gain,
+                                        fec_n=fec_n,
                                         kmax_map=kmax_map, kmin_map=kmin_map, pmax_map=pmax_map, random_seed=1, time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                                         ack_interval=ack_interval, wan_cc_mode=wan_cc_mode, msg=msg, print_log=print_log)
         config += (
@@ -526,6 +547,8 @@ def main():
                 existing_config = _upsert_line(existing_config, 'WAN_CC_MODE', str(wan_cc_mode))
             if cc_mode == 10:
                 existing_config = _upsert_line(existing_config, 'L2_ACK_INTERVAL', str(ack_interval))
+            existing_config = _upsert_line(existing_config, 'TCP_QUEUE_INDEX', str(tcp_queue_index))
+            existing_config = _upsert_line(existing_config, 'FEC_PARITY_PKTS', str(fec_n))
 
             if tcp_flow:
                 existing_config = _upsert_line(existing_config, 'TCP_FLOW_FILE', tcp_flow)
@@ -540,7 +563,7 @@ def main():
     # run program
     print("Running simulation...")
     output_log = config_name.replace(".txt", ".log")
-    run_command = "./waf --run 'scratch/remote {config_name}' > {output_log} 2>&1".format(
+    run_command = "./waf --run 'scratch/remote {config_name}' 2>&1 | tee {output_log}".format(
         config_name=config_name, output_log=output_log)
 
     print(run_command)
@@ -548,7 +571,7 @@ def main():
         os.system(f"./waf --run 'scratch/remote' --command-template='gdb --args %s {config_name}'\n")
     else:
         if stdout:
-            os.system(f"./waf --run 'scratch/remote {config_name}'")
+            os.system(f"./waf --run 'scratch/remote {config_name}' 2>&1 | tee {output_log}")
         else:
             os.system(f"./waf --run 'scratch/remote {config_name}' > {output_log} 2>&1 &")
 

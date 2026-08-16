@@ -1,0 +1,3 @@
+display_name: Topology Canvas
+short_description: Reuse, tune, and render topology canvases.
+default_prompt: Use this skill when working with canvas JSON files under analysis/canvases, generating outline PNGs, checking the canvas catalog, and rendering switch-only link-state GIFs from deep_analyse experiments.

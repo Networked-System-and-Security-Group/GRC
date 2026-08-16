@@ -95,6 +95,7 @@ struct Interface {
 
 struct FlowInput {
     uint32_t src, dst, pg, fsize, port;
+    uint32_t fec_n = 0;
     double start_time, finish_time = 0;
     uint32_t idx;
     uint32_t srcTor=0xFFFFFFFF, dstTor=0xFFFFFFFF;//记录源tor和目的tor。流第一次进入交换机的时候被初始化
@@ -109,8 +110,8 @@ struct FlowInput {
         passed_nodes.push_back(switch_id);
     }
     void print(FILE* file) const {
-        fprintf(file, "FlowInput { src: %d, dst: %d, fsize: %u, start_time: %.9f, idx: %d, isFinished: %s, passed_nodes: ",
-                src, dst, fsize, start_time, idx, (isFinished ? "true" : "false"));
+        fprintf(file, "FlowInput { src: %d, dst: %d, fsize: %u, fec_n: %u, start_time: %.9f, idx: %d, isFinished: %s, passed_nodes: ",
+                src, dst, fsize, fec_n, start_time, idx, (isFinished ? "true" : "false"));
         for (const auto& node : passed_nodes) {
             fprintf(file, "%d ", node);
         }
@@ -192,6 +193,8 @@ class Settings {
 
     // for common setting
     static uint32_t packet_payload;
+    // TCP queue: 1 keeps TCP isolated; 3 shares the normal RDMA PG3 queue.
+    static uint32_t tcp_queue_index;
 
     // for statistic
     static uint32_t node_num;
@@ -284,6 +287,8 @@ namespace logfile {
     extern FILE* cnp_trigger_prob_log;
     extern FILE* accumulated_bytes_log;
     extern FILE* flow_debug_log;
+    extern FILE* fec_log;
+    extern bool fec_log_enabled;
 
     extern FILE* cnp_output;
     extern FILE* voq_output;

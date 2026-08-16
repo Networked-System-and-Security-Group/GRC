@@ -11,6 +11,8 @@
 #include <ns3/selective-packet-queue.h>
 
 #include <climits> /* for CHAR_BIT */
+#include <deque>
+#include <unordered_map>
 #include <vector>
 #include <ns3/simulator.h>
 
@@ -47,6 +49,35 @@ class IrnSackManager {
 
 class RdmaQueuePair : public Object {
    public:
+    struct FecTxGroupState {
+        uint32_t group_id{0};
+        uint32_t data_start_seq{0};
+        uint32_t data_end_seq{0};
+        uint32_t data_payload_bytes{0};
+        uint32_t data_bytes_remaining{0};
+        uint16_t m_snapshot{0};
+        uint16_t n_snapshot{0};
+        uint16_t repair_sent{0};
+        uint16_t data_sent{0};
+        uint32_t repair_seq_base{0};
+        uint32_t repair_seq_next{0};
+        bool ack_requested{false};
+        bool repair_counted_inflight{false};
+    };
+
+    struct FecTxState {
+        bool enabled{false};
+        uint32_t fec_n{0};
+        uint32_t next_group_id{0};
+        uint32_t outstanding_repair_pkts{0};
+        bool active_group_valid{false};
+        bool retransmit_resume_valid{false};
+        uint32_t retransmit_resume_snd_nxt{0};
+        uint32_t retransmit_group_id{0};
+        FecTxGroupState active_group;
+        std::deque<FecTxGroupState> outstanding_groups;
+    };
+
     Time startTime;
     Ipv4Address sip, dip;
     uint16_t sport, dport;
@@ -69,6 +100,7 @@ class RdmaQueuePair : public Object {
     // RdmaQueuePairGroup so completed QPs can be removed in O(1).
     uint32_t m_egressQueueIndex;
     Time m_timeout;
+    FecTxState fec;
 
     /******************************
      * runtime states
@@ -214,6 +246,27 @@ class RdmaQueuePair : public Object {
 
 class RdmaRxQueuePair : public Object {  // Rx side queue pair
    public:
+    struct FecRxGroupState {
+        uint32_t group_id{0};
+        uint32_t data_start_seq{0};
+        uint32_t data_end_seq{0};
+        uint16_t m_snapshot{0};
+        uint16_t n_snapshot{0};
+        uint16_t repair_received{0};
+        uint16_t data_received{0};
+        uint16_t total_received{0};
+        bool recoverable{false};
+        bool ack_emitted{false};
+        std::vector<uint8_t> data_bitmap;
+        std::vector<uint8_t> repair_bitmap;
+    };
+
+    struct FecRxState {
+        bool enabled{false};
+        uint32_t next_expected_group_id{0};
+        std::unordered_map<uint32_t, FecRxGroupState> groups;
+    };
+
     struct ECNAccount {
         uint16_t qIndex;
         uint8_t ecnbits;
@@ -236,6 +289,7 @@ class RdmaRxQueuePair : public Object {  // Rx side queue pair
     Time last_cnp_send_time = Seconds(0);
 
     bool send_cnp;
+    FecRxState fec;
 
     static TypeId GetTypeId(void);
     RdmaRxQueuePair();

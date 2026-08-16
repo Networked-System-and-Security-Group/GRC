@@ -107,6 +107,14 @@ RdmaQueuePair::RdmaQueuePair(uint16_t pg, Ipv4Address _sip, Ipv4Address _dip, ui
     irn.m_recovery = false;
 
     m_timeout = MilliSeconds(4);
+    fec.enabled = false;
+    fec.fec_n = 0;
+    fec.next_group_id = 0;
+    fec.outstanding_repair_pkts = 0;
+    fec.active_group_valid = false;
+    fec.retransmit_resume_valid = false;
+    fec.retransmit_resume_snd_nxt = 0;
+    fec.retransmit_group_id = 0;
 }
 
 void RdmaQueuePair::SetSize(uint64_t size) { m_size = size; }
@@ -163,7 +171,7 @@ void RdmaQueuePair::Acknowledge(uint64_t ack) {
 
 uint64_t RdmaQueuePair::GetOnTheFly() {
     NS_ASSERT(snd_nxt >= snd_una);
-    return snd_nxt - snd_una;
+    return (snd_nxt - snd_una) + static_cast<uint64_t>(fec.outstanding_repair_pkts) * Settings::packet_payload;
 }
 
 bool RdmaQueuePair::IsWinBound() {
@@ -210,7 +218,8 @@ bool RdmaQueuePair::IsFinished() {
         }
     }
 
-    return snd_una >= m_size;
+    return snd_una >= m_size && !fec.active_group_valid && fec.outstanding_groups.empty() &&
+           fec.outstanding_repair_pkts == 0;
 }
 
 /*********************
@@ -229,6 +238,8 @@ RdmaRxQueuePair::RdmaRxQueuePair() {
     m_milestone_rx = 0;
     m_lastNACK = 0;
     send_cnp = false;
+    fec.enabled = false;
+    fec.next_expected_group_id = 0;
 }
 
 uint32_t RdmaRxQueuePair::GetHash(void) {

@@ -65,6 +65,213 @@ inline void LogFlowDebugf(int32_t flow_id, const char* fmt, ...) {
     va_end(args);
     fflush(logfile::flow_debug_log);
 }
+
+const char *FecRoleToString(uint8_t role) {
+    switch (role) {
+        case FlowIDNUMTag::FEC_PKT_ROLE_REPAIR:
+            return "repair";
+        case FlowIDNUMTag::FEC_PKT_ROLE_DATA:
+            return "data";
+        default:
+            return "none";
+    }
+}
+
+void WriteFecLogLine(const char *event, uint32_t node_id, int32_t flow_id, uint32_t group_id,
+                     const char *role, uint32_t seq, uint32_t ack_seq, uint32_t data_start_seq,
+                     uint32_t data_end_seq, uint16_t m, uint16_t n, uint16_t data_idx,
+                     uint16_t repair_idx, uint16_t data_received, uint16_t repair_received,
+                     uint16_t total_received, bool recoverable, bool ack_req, bool ack_triggered,
+                     uint32_t outstanding_repair_pkts, const char *reason) {
+    if (!logfile::fec_log_enabled || logfile::fec_log == nullptr) {
+        return;
+    }
+    fprintf(logfile::fec_log,
+            "%lu,%u,%s,%d,%u,%s,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%s\n",
+            Simulator::Now().GetNanoSeconds(), node_id, event, flow_id, group_id, role, seq,
+            ack_seq, data_start_seq, data_end_seq, m, n, data_idx, repair_idx, data_received,
+            repair_received, total_received, recoverable ? 1 : 0, ack_req ? 1 : 0,
+            ack_triggered ? 1 : 0, outstanding_repair_pkts, reason);
+}
+
+void LogFecTxGroupCreate(Ptr<Node> node, Ptr<RdmaQueuePair> qp,
+                         const RdmaQueuePair::FecTxGroupState &group) {
+    WriteFecLogLine("tx_group_create", node ? node->GetId() : UINT32_MAX, qp->m_flow_id,
+                    group.group_id, "group", group.data_start_seq, qp->snd_una,
+                    group.data_start_seq, group.data_end_seq, group.m_snapshot, group.n_snapshot,
+                    0, 0, 0, 0, 0, false, false, false, qp->fec.outstanding_repair_pkts,
+                    "group_initialized");
+}
+
+void LogFecTxPacket(Ptr<Node> node, Ptr<RdmaQueuePair> qp,
+                    const RdmaQueuePair::FecTxGroupState &group, const char *event,
+                    const char *role, uint32_t seq, uint16_t data_idx, uint16_t repair_idx,
+                    bool ack_req, const char *reason) {
+    WriteFecLogLine(event, node ? node->GetId() : UINT32_MAX, qp->m_flow_id, group.group_id, role,
+                    seq, qp->snd_una, group.data_start_seq, group.data_end_seq, group.m_snapshot,
+                    group.n_snapshot, data_idx, repair_idx, 0, 0, 0, false, ack_req, false,
+                    qp->fec.outstanding_repair_pkts, reason);
+}
+
+void LogFecRxState(Ptr<Node> node, Ptr<RdmaRxQueuePair> rxQp,
+                   const RdmaRxQueuePair::FecRxGroupState &group, const char *event,
+                   const char *role, uint32_t seq, uint32_t ack_seq, uint16_t data_idx,
+                   uint16_t repair_idx, bool ack_req, bool ack_triggered, const char *reason) {
+    WriteFecLogLine(event, node ? node->GetId() : UINT32_MAX, rxQp->m_flow_id, group.group_id, role,
+                    seq, ack_seq, group.data_start_seq, group.data_end_seq, group.m_snapshot,
+                    group.n_snapshot, data_idx, repair_idx, group.data_received,
+                    group.repair_received, group.total_received, group.recoverable, ack_req,
+                    ack_triggered, 0, reason);
+}
+
+void LogFecAckPrune(Ptr<Node> node, Ptr<RdmaQueuePair> qp,
+                    const RdmaQueuePair::FecTxGroupState &group) {
+    WriteFecLogLine("tx_group_acked", node ? node->GetId() : UINT32_MAX, qp->m_flow_id,
+                    group.group_id, "group", group.data_end_seq, qp->snd_una, group.data_start_seq,
+                    group.data_end_seq, group.m_snapshot, group.n_snapshot, group.data_sent,
+                    group.repair_sent, 0, 0, 0, true, group.ack_requested, true,
+                    qp->fec.outstanding_repair_pkts, "cumulative_ack_prune");
+}
+
+std::deque<RdmaQueuePair::FecTxGroupState>::iterator FindOutstandingFecGroup(
+    RdmaQueuePair::FecTxState &state, uint32_t group_id) {
+    return std::find_if(state.outstanding_groups.begin(), state.outstanding_groups.end(),
+                        [group_id](const RdmaQueuePair::FecTxGroupState &group) {
+                            return group.group_id == group_id;
+                        });
+}
+
+std::unordered_map<uint32_t, RdmaRxQueuePair::FecRxGroupState>::iterator FindFecRxGroupBySeq(
+    Ptr<RdmaRxQueuePair> rxQp, uint32_t seq) {
+    return std::find_if(
+        rxQp->fec.groups.begin(), rxQp->fec.groups.end(),
+        [seq](const std::pair<const uint32_t, RdmaRxQueuePair::FecRxGroupState> &entry) {
+            const auto &group = entry.second;
+            return group.data_start_seq <= seq && seq < group.data_end_seq;
+        });
+}
+
+std::unordered_map<uint32_t, RdmaRxQueuePair::FecRxGroupState>::iterator
+FindRecoverableFecRxGroupCoveringSeq(Ptr<RdmaRxQueuePair> rxQp, uint32_t seq) {
+    auto best = rxQp->fec.groups.end();
+    for (auto it = rxQp->fec.groups.begin(); it != rxQp->fec.groups.end(); ++it) {
+        auto &group = it->second;
+        if (!group.recoverable || group.data_end_seq <= seq || group.data_start_seq > seq) {
+            continue;
+        }
+        if (best == rxQp->fec.groups.end() || group.data_end_seq > best->second.data_end_seq) {
+            best = it;
+        }
+    }
+    return best;
+}
+
+void ClearFecAckEmittedFlags(Ptr<RdmaRxQueuePair> rxQp) {
+    for (auto &entry : rxQp->fec.groups) {
+        entry.second.ack_emitted = false;
+    }
+}
+
+void PopulateFecControlTagForExpectedSeq(Ptr<RdmaRxQueuePair> rxQp, uint32_t expected_seq,
+                                         FlowIDNUMTag &fit) {
+    if (!fit.GetFecEnabled()) {
+        return;
+    }
+    auto it = FindFecRxGroupBySeq(rxQp, expected_seq);
+    if (it == rxQp->fec.groups.end()) {
+        return;
+    }
+
+    const auto &group = it->second;
+    fit.SetFecPktRole(FlowIDNUMTag::FEC_PKT_ROLE_DATA);
+    fit.SetFecGroupId(group.group_id);
+    fit.SetFecGroupM(group.m_snapshot);
+    fit.SetFecGroupN(group.n_snapshot);
+    fit.SetFecGroupDataStartSeq(group.data_start_seq);
+    fit.SetFecDataIdx(static_cast<uint16_t>((expected_seq - group.data_start_seq) / Settings::packet_payload));
+    fit.SetFecRepairIdx(0);
+    fit.SetFecRepairSeq(0);
+    fit.SetFecTxOrdinal(0);
+}
+
+void ResetTxGroupForRetransmit(RdmaQueuePair::FecTxGroupState &group) {
+    group.repair_sent = 0;
+    group.data_sent = 0;
+    group.data_bytes_remaining = group.data_payload_bytes;
+    group.repair_seq_next = group.repair_seq_base;
+    group.ack_requested = false;
+}
+
+void PruneAckedFecRxGroups(Ptr<RdmaRxQueuePair> rxQp) {
+    for (auto it = rxQp->fec.groups.begin(); it != rxQp->fec.groups.end();) {
+        const auto &group = it->second;
+        if (group.data_end_seq <= rxQp->ReceiverNextExpectedSeq) {
+            it = rxQp->fec.groups.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
+void RewindFecGroupForNack(Ptr<Node> node, Ptr<RdmaQueuePair> qp, const FlowIDNUMTag &fit) {
+    auto &state = qp->fec;
+    auto outstanding_it = FindOutstandingFecGroup(state, fit.GetFecGroupId());
+    RdmaQueuePair::FecTxGroupState *target = nullptr;
+
+    if (state.active_group_valid && state.active_group.group_id == fit.GetFecGroupId()) {
+        target = &state.active_group;
+    } else if (outstanding_it != state.outstanding_groups.end()) {
+        target = &(*outstanding_it);
+    }
+
+    if (target == nullptr) {
+        return;
+    }
+
+    state.retransmit_resume_valid = true;
+    state.retransmit_resume_snd_nxt = qp->snd_nxt;
+    state.retransmit_group_id = target->group_id;
+    qp->snd_nxt = target->data_start_seq;
+    if (!state.active_group_valid || state.active_group.group_id != target->group_id) {
+        state.active_group = *target;
+    }
+    ResetTxGroupForRetransmit(state.active_group);
+    state.active_group_valid = true;
+    WriteFecLogLine("tx_group_rewind", node ? node->GetId() : UINT32_MAX, qp->m_flow_id,
+                    state.active_group.group_id, "group", static_cast<uint32_t>(qp->snd_nxt),
+                    static_cast<uint32_t>(qp->snd_una), state.active_group.data_start_seq,
+                    state.active_group.data_end_seq, state.active_group.m_snapshot,
+                    state.active_group.n_snapshot, state.active_group.data_sent,
+                    state.active_group.repair_sent, 0, 0, 0, false, false, false,
+                    qp->fec.outstanding_repair_pkts, "nack_retransmit_entire_group");
+}
+
+void MaybeRestoreFecSendCursor(Ptr<Node> node, Ptr<RdmaQueuePair> qp,
+                               const RdmaQueuePair::FecTxGroupState &group) {
+    auto &state = qp->fec;
+    if (!state.retransmit_resume_valid || state.retransmit_group_id != group.group_id) {
+        return;
+    }
+    // Restore only the send cursor. snd_una must continue to reflect the highest
+    // cumulatively acknowledged byte; otherwise a single group-level rewind can
+    // incorrectly mark the entire flow as acknowledged.
+    qp->snd_nxt = std::max<uint64_t>(qp->snd_nxt, state.retransmit_resume_snd_nxt);
+    state.retransmit_resume_valid = false;
+    state.retransmit_group_id = 0;
+    WriteFecLogLine("tx_group_resume", node ? node->GetId() : UINT32_MAX, qp->m_flow_id,
+                    group.group_id, "group", static_cast<uint32_t>(qp->snd_nxt),
+                    static_cast<uint32_t>(qp->snd_una), group.data_start_seq, group.data_end_seq,
+                    group.m_snapshot, group.n_snapshot, group.data_sent, group.repair_sent, 0, 0, 0,
+                    false, group.ack_requested, false, qp->fec.outstanding_repair_pkts,
+                    "restore_post_nack_cursor");
+}
+
+void ClearFecRetransmitResumeState(Ptr<RdmaQueuePair> qp) {
+    qp->fec.retransmit_resume_valid = false;
+    qp->fec.retransmit_resume_snd_nxt = 0;
+    qp->fec.retransmit_group_id = 0;
+}
+
 }  // namespace
 
 TypeId RdmaHw::GetTypeId(void) {
@@ -89,6 +296,9 @@ TypeId RdmaHw::GetTypeId(void) {
                           MakeUintegerChecker<uint32_t>())
             .AddAttribute("L2BackToZero", "Layer 2 go back to zero transmission.",
                           BooleanValue(false), MakeBooleanAccessor(&RdmaHw::m_backto0),
+                          MakeBooleanChecker())
+            .AddAttribute("FecEnable", "Enable grouped FEC packet scheduling.",
+                          BooleanValue(false), MakeBooleanAccessor(&RdmaHw::m_fecEnabled),
                           MakeBooleanChecker())
             .AddAttribute("EwmaGain",
                           "Control gain parameter which determines the level of rate decrease",
@@ -218,6 +428,7 @@ RdmaHw::RdmaHw() {
     cnp_by_ecn = 0;
     cnp_by_ooo = 0;
     m_printLog = false;
+    m_fecEnabled = false;
 }
 
 void RdmaHw::SetNode(Ptr<Node> node) { m_node = node; }
@@ -271,7 +482,7 @@ Ptr<RdmaQueuePair> RdmaHw::GetQp(uint64_t key) {
 }
 void RdmaHw::AddQueuePair(uint64_t size, uint16_t pg, Ipv4Address sip, Ipv4Address dip,
                           uint16_t sport, uint16_t dport, uint32_t win, uint64_t baseRtt,
-                          int32_t flow_id) {
+                          int32_t flow_id, uint32_t fec_n) {
     // create qp
     Ptr<RdmaQueuePair> qp = CreateObject<RdmaQueuePair>(pg, sip, dip, sport, dport);
     qp->SetSize(size);
@@ -281,6 +492,8 @@ void RdmaHw::AddQueuePair(uint64_t size, uint16_t pg, Ipv4Address sip, Ipv4Addre
     qp->SetVarWin(m_var_win);
     qp->SetFlowId(flow_id);
     assert(flow_id >= 0); //这里上层拥有flow_id == -1的重载，不确定有什么用处，先加个assert判断。
+    qp->fec.enabled = (m_fecEnabled && fec_n > 0);
+    qp->fec.fec_n = fec_n;
     auto& flow_info = Settings::flowInfos[flow_id];
     if (Settings::nodeInfos[flow_info.src].as_id == Settings::nodeInfos[flow_info.dst].as_id) {
         qp->SetTimeout(m_waitAckTimeout);
@@ -368,6 +581,7 @@ Ptr<RdmaRxQueuePair> RdmaHw::GetRxQp(uint32_t sip, uint32_t dip, uint16_t sport,
         q->dport = dport;
         q->m_ecn_source.qIndex = pg;
         q->m_flow_id = -1;     // unknown
+        q->fec.enabled = m_fecEnabled;
         m_rxQpMap[rxKey] = q;  // store in map
         return q;
     }
@@ -397,6 +611,157 @@ void RdmaHw::DeleteRxQp(uint32_t dip, uint16_t dport, uint16_t sport, uint16_t p
     m_rxQpMap.erase(key);
 }
 
+uint32_t RdmaHw::GetFecDataPktsPerGroup() const {
+    if (m_ack_interval == 0 || m_mtu == 0) {
+        return 0;
+    }
+    return m_ack_interval / m_mtu;
+}
+
+bool RdmaHw::IsFecEnabled() const { return m_fecEnabled; }
+
+bool RdmaHw::ShouldUseFec(const Ptr<RdmaQueuePair> &qp) const {
+    return qp != NULL && m_fecEnabled && qp->fec.enabled && qp->fec.fec_n > 0 &&
+           GetFecDataPktsPerGroup() > 0;
+}
+
+bool RdmaHw::IsFecRepairPacket(const FlowIDNUMTag &fit) const {
+    return fit.GetFecEnabled() &&
+           fit.GetFecPktRole() == FlowIDNUMTag::FEC_PKT_ROLE_REPAIR;
+}
+
+bool RdmaHw::IsFecDataPacket(const FlowIDNUMTag &fit) const {
+    return fit.GetFecEnabled() &&
+           fit.GetFecPktRole() == FlowIDNUMTag::FEC_PKT_ROLE_DATA;
+}
+
+uint32_t RdmaHw::BuildFecRepairSeq(uint32_t group_id, uint16_t repair_idx) const {
+    return (group_id << 16) | repair_idx;
+}
+
+void RdmaHw::EnsureActiveFecGroup(Ptr<RdmaQueuePair> qp) {
+    if (!ShouldUseFec(qp) || qp->fec.active_group_valid) {
+        return;
+    }
+    uint32_t bytes_left = static_cast<uint32_t>(qp->GetBytesLeft());
+    if (bytes_left == 0) {
+        return;
+    }
+    uint32_t group_m = GetFecDataPktsPerGroup();
+    if (group_m == 0) {
+        return;
+    }
+    uint32_t data_pkts = (bytes_left + m_mtu - 1) / m_mtu;
+    data_pkts = std::min<uint32_t>(group_m, data_pkts);
+    RdmaQueuePair::FecTxGroupState group;
+    group.group_id = qp->fec.next_group_id++;
+    group.data_start_seq = static_cast<uint32_t>(qp->snd_nxt);
+    group.data_payload_bytes = std::min<uint32_t>(bytes_left, data_pkts * m_mtu);
+    group.data_bytes_remaining = group.data_payload_bytes;
+    group.data_end_seq = group.data_start_seq + group.data_payload_bytes;
+    group.m_snapshot = static_cast<uint16_t>(data_pkts);
+    group.n_snapshot = static_cast<uint16_t>(qp->fec.fec_n);
+    group.repair_seq_base = BuildFecRepairSeq(group.group_id, 0);
+    group.repair_seq_next = group.repair_seq_base;
+    qp->fec.active_group = group;
+    qp->fec.active_group_valid = true;
+    LogFecTxGroupCreate(m_node, qp, qp->fec.active_group);
+}
+
+RdmaRxQueuePair::FecRxGroupState &RdmaHw::GetOrCreateFecRxGroup(Ptr<RdmaRxQueuePair> rxQp,
+                                                                const FlowIDNUMTag &fit) {
+    auto &group = rxQp->fec.groups[fit.GetFecGroupId()];
+    if (group.m_snapshot == 0 && group.n_snapshot == 0 && group.data_end_seq == 0 &&
+        group.data_bitmap.empty() && group.repair_bitmap.empty()) {
+        group.group_id = fit.GetFecGroupId();
+        group.data_start_seq = fit.GetFecGroupDataStartSeq();
+        group.m_snapshot = fit.GetFecGroupM();
+        group.n_snapshot = fit.GetFecGroupN();
+        group.data_end_seq = group.data_start_seq + static_cast<uint32_t>(group.m_snapshot) * m_mtu;
+        group.data_bitmap.assign(group.m_snapshot, 0);
+        group.repair_bitmap.assign(group.n_snapshot, 0);
+    }
+    return group;
+}
+
+void RdmaHw::AttachCommonFlowTags(Ptr<Packet> p, Ptr<RdmaQueuePair> qp, bool ack_req) const {
+    FlowIDNUMTag fint;
+    if (!p->PeekPacketTag(fint)) {
+        fint.SetId(qp->m_flow_id);
+        fint.SetFlowSize(qp->m_size);
+        fint.SetAckReq(static_cast<uint8_t>(ack_req));
+        p->AddPacketTag(fint);
+    }
+}
+
+void RdmaHw::AttachFecRepairTag(FlowIDNUMTag &fit, Ptr<RdmaQueuePair> qp) const {
+    const auto &group = qp->fec.active_group;
+    fit.SetFecEnabled(1);
+    fit.SetFecPktRole(FlowIDNUMTag::FEC_PKT_ROLE_REPAIR);
+    fit.SetFecGroupId(group.group_id);
+    fit.SetFecGroupM(group.m_snapshot);
+    fit.SetFecGroupN(group.n_snapshot);
+    fit.SetFecGroupDataStartSeq(group.data_start_seq);
+    fit.SetFecDataIdx(0);
+    fit.SetFecRepairIdx(group.repair_sent);
+    fit.SetFecRepairSeq(group.repair_seq_next);
+    fit.SetFecTxOrdinal(group.repair_sent);
+}
+
+void RdmaHw::AttachFecDataTag(FlowIDNUMTag &fit, Ptr<RdmaQueuePair> qp) const {
+    const auto &group = qp->fec.active_group;
+    fit.SetFecEnabled(1);
+    fit.SetFecPktRole(FlowIDNUMTag::FEC_PKT_ROLE_DATA);
+    fit.SetFecGroupId(group.group_id);
+    fit.SetFecGroupM(group.m_snapshot);
+    fit.SetFecGroupN(group.n_snapshot);
+    fit.SetFecGroupDataStartSeq(group.data_start_seq);
+    fit.SetFecDataIdx(group.data_sent);
+    fit.SetFecRepairIdx(0);
+    fit.SetFecRepairSeq(0);
+    fit.SetFecTxOrdinal(group.n_snapshot + group.data_sent);
+}
+
+void RdmaHw::PruneAckedFecGroups(Ptr<RdmaQueuePair> qp) {
+    if (!qp->fec.enabled) {
+        return;
+    }
+    while (!qp->fec.outstanding_groups.empty() &&
+           qp->snd_una >= qp->fec.outstanding_groups.front().data_end_seq) {
+        if (qp->fec.retransmit_resume_valid &&
+            qp->fec.retransmit_group_id == qp->fec.outstanding_groups.front().group_id) {
+            ClearFecRetransmitResumeState(qp);
+        }
+        LogFecAckPrune(m_node, qp, qp->fec.outstanding_groups.front());
+        if (qp->fec.outstanding_groups.front().repair_counted_inflight &&
+            qp->fec.outstanding_repair_pkts >= qp->fec.outstanding_groups.front().n_snapshot) {
+            qp->fec.outstanding_repair_pkts -= qp->fec.outstanding_groups.front().n_snapshot;
+        } else if (qp->fec.outstanding_groups.front().repair_counted_inflight) {
+            qp->fec.outstanding_repair_pkts = 0;
+        }
+        qp->fec.outstanding_groups.pop_front();
+    }
+}
+
+void RdmaHw::ResetFecStateForRecovery(Ptr<RdmaQueuePair> qp) {
+    if (!qp->fec.enabled) {
+        return;
+    }
+    if (qp->fec.active_group_valid) {
+        const auto &group = qp->fec.active_group;
+        WriteFecLogLine("tx_recovery_reset", m_node ? m_node->GetId() : UINT32_MAX, qp->m_flow_id,
+                        group.group_id, "group", static_cast<uint32_t>(qp->snd_nxt),
+                        static_cast<uint32_t>(qp->snd_una), group.data_start_seq, group.data_end_seq,
+                        group.m_snapshot, group.n_snapshot, group.data_sent, group.repair_sent, 0, 0,
+                        0, false, group.ack_requested, false, qp->fec.outstanding_repair_pkts,
+                        "active_group_cleared");
+    }
+    qp->fec.active_group_valid = false;
+    qp->fec.outstanding_groups.clear();
+    qp->fec.outstanding_repair_pkts = 0;
+    ClearFecRetransmitResumeState(qp);
+}
+
 int RdmaHw::ReceiveUdp(Ptr<Packet> p, CustomHeader &ch) {
     uint8_t ecnbits = ch.GetIpv4EcnBits();
 
@@ -424,6 +789,15 @@ int RdmaHw::ReceiveUdp(Ptr<Packet> p, CustomHeader &ch) {
         rxQp->m_flow_id = flow_id;
     }
 
+    if (fit.GetFecEnabled()) {
+        if (IsFecRepairPacket(fit)) {
+            return ReceiveFecRepair(p, ch, rxQp, fit);
+        }
+        if (IsFecDataPacket(fit)) {
+            return ReceiveFecData(p, ch, rxQp, fit, payload_size);
+        }
+    }
+
     bool cnp_check = false;
     const uint32_t old_expected_seq = rxQp->ReceiverNextExpectedSeq;
     int x = ReceiverCheckSeq(ch.udp.seq, rxQp, payload_size, cnp_check);
@@ -444,73 +818,185 @@ int RdmaHw::ReceiveUdp(Ptr<Packet> p, CustomHeader &ch) {
                           Simulator::Now() - rxQp->last_cnp_send_time > MicroSeconds(10));
     }
     //printf("Receive a udp\n");
-    if ((ack_req && x == 1) || x == 2 || x == 6) {  // generate ACK or NACK
-        qbbHeader seqh;
-        seqh.SetSeq(rxQp->ReceiverNextExpectedSeq);
-        seqh.SetPG(ch.udp.pg);
-        seqh.SetSport(ch.udp.dport);
-        seqh.SetDport(ch.udp.sport);
-        seqh.SetIntHeader(ch.udp.ih);
-
-        if (m_cc_mode == CC_MODE_UNOCC) {
-            const uint32_t unoEcnMarked = rxQp->m_ecn_source.qfb;
-            const uint32_t unoEcnTotal = rxQp->m_ecn_source.total;
-            seqh.SetIrnNack(unoEcnMarked);
-            seqh.SetIrnNackSize(unoEcnTotal);
-            rxQp->m_ecn_source.qfb = 0;
-            rxQp->m_ecn_source.total = 0;
-        } else if (m_irn) {
-            if (x == 2) {
-                seqh.SetIrnNack(ch.udp.seq);
-                seqh.SetIrnNackSize(payload_size);
-            } else {
-                seqh.SetIrnNack(0);  // NACK without ackSyndrome (ACK) in loss recovery mode
-                seqh.SetIrnNackSize(0);
-            }
-        }
-
-        if (rxQp->send_cnp) {  // NACK accompanies with CNP packet
-            // XXX monitor CNP generation at sender
-            cnp_total++;
-            if (ecnbits) cnp_by_ecn++;
-            if (cnp_check) cnp_by_ooo++;
-            seqh.SetCnp();
-            rxQp->send_cnp = false;
-            rxQp->last_cnp_send_time = Simulator::Now();
-        }
-
-        Ptr<Packet> newp =
-            Create<Packet>(std::max(60 - 14 - 20 - (int)seqh.GetSerializedSize(), 0));
-        newp->AddHeader(seqh);
-
-        Ipv4Header head;  // Prepare IPv4 header
-        head.SetDestination(Ipv4Address(ch.sip));
-        head.SetSource(Ipv4Address(ch.dip));
-        head.SetProtocol(x == 1 ? 0xFC : 0xFD);  // ack=0xFC nack=0xFD
-        if (m_printLog && x != 1) {
-            printf("[%ld]Send NACK, FlowId:%u, Expect:%u, PacketSeq:%u\n",
-                   Simulator::Now().GetNanoSeconds(), flow_id, rxQp->ReceiverNextExpectedSeq, ch.udp.seq);
-        }
-        head.SetTtl(64);
-        head.SetPayloadSize(newp->GetSize());
-        head.SetIdentification(rxQp->m_ipid++);
-
-        {
-            FlowIDNUMTag fit;
-            if (p->PeekPacketTag(fit)) {
-                newp->AddPacketTag(fit);
-            }
-        }
-
-        newp->AddHeader(head);
-        AddHeader(newp, 0x800);  // Attach PPP header
-        // send
-        uint32_t nic_idx = GetNicIdxOfRxQp(rxQp);
-        //printf("send a ack\n");
-        m_nic[nic_idx].dev->RdmaEnqueueHighPrioQ(newp);
-        m_nic[nic_idx].dev->TriggerTransmit();
+    if ((ack_req && x == 1) || x == 2 || x == 6) {
+        SendAckOrNack(ch, rxQp, fit, payload_size, x, cnp_check);
     }
     return 0;
+}
+
+void RdmaHw::SendAckOrNack(CustomHeader &ch, Ptr<RdmaRxQueuePair> rxQp, FlowIDNUMTag &fit,
+                           uint32_t payload_size, int seq_check_result, bool cnp_check) {
+    qbbHeader seqh;
+    seqh.SetSeq(rxQp->ReceiverNextExpectedSeq);
+    seqh.SetPG(ch.udp.pg);
+    seqh.SetSport(ch.udp.dport);
+    seqh.SetDport(ch.udp.sport);
+    seqh.SetIntHeader(ch.udp.ih);
+
+    if (m_cc_mode == CC_MODE_UNOCC) {
+        const uint32_t unoEcnMarked = rxQp->m_ecn_source.qfb;
+        const uint32_t unoEcnTotal = rxQp->m_ecn_source.total;
+        seqh.SetIrnNack(unoEcnMarked);
+        seqh.SetIrnNackSize(unoEcnTotal);
+        rxQp->m_ecn_source.qfb = 0;
+        rxQp->m_ecn_source.total = 0;
+    } else if (m_irn) {
+        if (seq_check_result == 2) {
+            seqh.SetIrnNack(ch.udp.seq);
+            seqh.SetIrnNackSize(payload_size);
+        } else {
+            seqh.SetIrnNack(0);
+            seqh.SetIrnNackSize(0);
+        }
+    }
+
+    if (rxQp->send_cnp) {
+        cnp_total++;
+        if (ch.GetIpv4EcnBits()) cnp_by_ecn++;
+        if (cnp_check) cnp_by_ooo++;
+        seqh.SetCnp();
+        rxQp->send_cnp = false;
+        rxQp->last_cnp_send_time = Simulator::Now();
+    }
+
+    Ptr<Packet> newp = Create<Packet>(std::max(60 - 14 - 20 - (int)seqh.GetSerializedSize(), 0));
+    newp->AddHeader(seqh);
+    FlowIDNUMTag controlFit = fit;
+    if (seq_check_result == 2 && controlFit.GetFecEnabled()) {
+        PopulateFecControlTagForExpectedSeq(rxQp, rxQp->ReceiverNextExpectedSeq, controlFit);
+    }
+
+    Ipv4Header head;
+    head.SetDestination(Ipv4Address(ch.sip));
+    head.SetSource(Ipv4Address(ch.dip));
+    head.SetProtocol(seq_check_result == 2 ? 0xFD : 0xFC);
+    if (m_printLog && seq_check_result == 2) {
+        printf("[%ld]Send NACK, FlowId:%u, Expect:%u, PacketSeq:%u\n",
+               Simulator::Now().GetNanoSeconds(), fit.GetId(), rxQp->ReceiverNextExpectedSeq, ch.udp.seq);
+    }
+    head.SetTtl(64);
+    head.SetPayloadSize(newp->GetSize());
+    head.SetIdentification(rxQp->m_ipid++);
+
+    if (controlFit.GetFecEnabled()) {
+        auto it = rxQp->fec.groups.find(controlFit.GetFecGroupId());
+        if (it != rxQp->fec.groups.end()) {
+            LogFecRxState(m_node, rxQp, it->second, seq_check_result == 2 ? "tx_nack" : "tx_ack",
+                          FecRoleToString(controlFit.GetFecPktRole()), ch.udp.seq,
+                          rxQp->ReceiverNextExpectedSeq, controlFit.GetFecDataIdx(),
+                          controlFit.GetFecRepairIdx(), (bool)controlFit.GetAckReq(), true,
+                          seq_check_result == 2 ? "control_nack" : "control_ack");
+        }
+    }
+
+    newp->AddPacketTag(controlFit);
+    newp->AddHeader(head);
+    AddHeader(newp, 0x800);
+
+    uint32_t nic_idx = GetNicIdxOfRxQp(rxQp);
+    m_nic[nic_idx].dev->RdmaEnqueueHighPrioQ(newp);
+    m_nic[nic_idx].dev->TriggerTransmit();
+}
+
+int RdmaHw::ReceiveFecRepair(Ptr<Packet> p, CustomHeader &ch, Ptr<RdmaRxQueuePair> rxQp,
+                             FlowIDNUMTag &fit) {
+    auto &group = GetOrCreateFecRxGroup(rxQp, fit);
+    const uint16_t repair_idx = fit.GetFecRepairIdx();
+    bool new_repair = false;
+    if (repair_idx < group.repair_bitmap.size() && !group.repair_bitmap[repair_idx]) {
+        group.repair_bitmap[repair_idx] = 1;
+        group.repair_received++;
+        group.total_received++;
+        new_repair = true;
+    }
+    group.recoverable = (group.total_received >= group.m_snapshot);
+    LogFecRxState(m_node, rxQp, group, "rx_repair", "repair", fit.GetFecRepairSeq(),
+                  rxQp->ReceiverNextExpectedSeq, 0, repair_idx, false, false,
+                  new_repair ? "accepted" : "duplicate");
+    if (group.recoverable) {
+        const bool ack_progressed = TryAdvanceFecAck(rxQp);
+        if (ack_progressed) {
+            LogFecRxState(m_node, rxQp, group, "rx_group_recovered", "group", fit.GetFecRepairSeq(),
+                          rxQp->ReceiverNextExpectedSeq, 0, repair_idx, false, true,
+                          "repair_made_group_recoverable");
+            SendAckOrNack(ch, rxQp, fit, 0, 1, false);
+            PruneAckedFecRxGroups(rxQp);
+            ClearFecAckEmittedFlags(rxQp);
+        }
+    }
+    return 0;
+}
+
+int RdmaHw::ReceiveFecData(Ptr<Packet> p, CustomHeader &ch, Ptr<RdmaRxQueuePair> rxQp,
+                           FlowIDNUMTag &fit, uint32_t payload_size) {
+    auto &group = GetOrCreateFecRxGroup(rxQp, fit);
+    if (fit.GetFecDataIdx() + 1 == group.m_snapshot) {
+        group.data_end_seq = ch.udp.seq + payload_size;
+    }
+
+    bool cnp_check = false;
+    const uint16_t data_idx = fit.GetFecDataIdx();
+    bool new_data = false;
+    if (data_idx < group.data_bitmap.size() && !group.data_bitmap[data_idx]) {
+        group.data_bitmap[data_idx] = 1;
+        group.data_received++;
+        group.total_received++;
+        new_data = true;
+    }
+    group.recoverable = (group.total_received >= group.m_snapshot);
+    const bool ack_req = (bool)fit.GetAckReq();
+    const bool suppress_nack = group.recoverable;
+    int x = 1;
+    bool ack_progressed = false;
+    if (!suppress_nack) {
+        x = ReceiverCheckSeq(ch.udp.seq, rxQp, payload_size, cnp_check);
+    }
+    LogFecRxState(m_node, rxQp, group, "rx_data", "data", ch.udp.seq,
+                  rxQp->ReceiverNextExpectedSeq, data_idx, 0, ack_req, false,
+                  suppress_nack ? (new_data ? "accepted_recoverable" : "duplicate_recoverable")
+                                : (new_data ? "accepted" : "duplicate"));
+    if (group.recoverable) {
+        ack_progressed = TryAdvanceFecAck(rxQp);
+    }
+
+    rxQp->send_cnp =
+        ((ch.GetIpv4EcnBits() || cnp_check) &&
+         Simulator::Now() - rxQp->last_cnp_send_time > MicroSeconds(10));
+    if ((ack_req && x == 1) || x == 2 || x == 6 || ack_progressed) {
+        int ack_result = (x == 2) ? 2 : 1;
+        LogFecRxState(m_node, rxQp, group,
+                      ack_result == 2 ? "rx_ack_or_nack" : "rx_ack_or_nack", "group", ch.udp.seq,
+                      rxQp->ReceiverNextExpectedSeq, data_idx, 0, ack_req, true,
+                      ack_result == 2 ? "send_nack" : (ack_progressed ? "send_ack_group_advanced"
+                                                                         : "send_ack_ack_req"));
+        SendAckOrNack(ch, rxQp, fit, payload_size, ack_result, cnp_check);
+        if (ack_progressed) {
+            PruneAckedFecRxGroups(rxQp);
+        }
+        ClearFecAckEmittedFlags(rxQp);
+    }
+    return 0;
+}
+
+bool RdmaHw::TryAdvanceFecAck(Ptr<RdmaRxQueuePair> rxQp) {
+    bool progressed = false;
+    while (true) {
+        auto it = FindRecoverableFecRxGroupCoveringSeq(rxQp, rxQp->ReceiverNextExpectedSeq);
+        if (it == rxQp->fec.groups.end()) {
+            break;
+        }
+        auto &group = it->second;
+        if (rxQp->ReceiverNextExpectedSeq >= group.data_end_seq) {
+            break;
+        }
+        rxQp->ReceiverNextExpectedSeq = group.data_end_seq;
+        group.ack_emitted = true;
+        progressed = true;
+        LogFecRxState(m_node, rxQp, group, "rx_ack_advanced", "group", group.data_end_seq,
+                      rxQp->ReceiverNextExpectedSeq, group.data_received, group.repair_received,
+                      false, true, "advance_recoverable_seq_window");
+    }
+    return progressed;
 }
 
 
@@ -556,12 +1042,31 @@ int RdmaHw::ReceiveAck(Ptr<Packet> p, CustomHeader &ch) {
     if (m_ack_interval == 0)
         std::cout << "ERROR: shouldn't receive ack\n";
     else {
+        FlowIDNUMTag ackFit;
+        const bool hasAckFit = p->PeekPacketTag(ackFit);
         if (!m_backto0) {
             qp->Acknowledge(seq);
         } else {
             uint32_t goback_seq = seq / m_chunk * m_chunk;
             qp->Acknowledge(goback_seq);
         }
+        if (qp->fec.enabled) {
+            WriteFecLogLine(ch.l3Prot == 0xFD ? "rx_nack_sender" : "rx_ack_sender",
+                            m_node ? m_node->GetId() : UINT32_MAX, qp->m_flow_id, UINT32_MAX,
+                            "control", seq, static_cast<uint32_t>(qp->snd_una), 0, 0, 0, 0, 0, 0,
+                            0, 0, 0, false, false, true, qp->fec.outstanding_repair_pkts,
+                            ch.l3Prot == 0xFD ? "sender_received_nack" : "sender_received_ack");
+        }
+        if (qp->fec.enabled && ch.l3Prot == 0xFD && hasAckFit && ackFit.GetFecEnabled()) {
+            RewindFecGroupForNack(m_node, qp, ackFit);
+            dev->TriggerTransmit();
+            return 0;
+        }
+        if (qp->fec.enabled && qp->fec.retransmit_resume_valid &&
+            qp->snd_una >= qp->fec.active_group.data_end_seq) {
+            ClearFecRetransmitResumeState(qp);
+        }
+        PruneAckedFecGroups(qp);
         if (qp->irn.m_enabled) {
             // handle NACK
             NS_ASSERT(ch.l3Prot == 0xFD);
@@ -814,7 +1319,8 @@ uint16_t RdmaHw::EtherToPpp(uint16_t proto) {
 }
 
 void RdmaHw::RecoverQueue(Ptr<RdmaQueuePair> qp) { 
-    qp->snd_nxt = qp->snd_una; 
+    qp->snd_nxt = qp->snd_una;
+    ResetFecStateForRecovery(qp);
 }
 
 void RdmaHw::QpComplete(Ptr<RdmaQueuePair> qp) {
@@ -861,12 +1367,41 @@ void RdmaHw::RedistributeQp() {
 }
 
 Ptr<Packet> RdmaHw::GetNxtPacket(Ptr<RdmaQueuePair> qp) {
+    EnsureActiveFecGroup(qp);
+    bool use_fec = ShouldUseFec(qp) && qp->fec.active_group_valid;
+
     uint32_t payload_size = qp->GetBytesLeft();
     if (m_mtu < payload_size) {  // possibly last packet
         payload_size = m_mtu;
     }
     uint32_t seq = (uint32_t)qp->snd_nxt;
+    bool send_repair = false;
     bool proceed_snd_nxt = true;
+    bool ack_req = false;
+
+    if (use_fec) {
+        auto &group = qp->fec.active_group;
+        send_repair = group.repair_sent < group.n_snapshot;
+        if (send_repair) {
+            payload_size = std::min<uint32_t>(m_mtu, std::max<uint32_t>(1, payload_size));
+            seq = group.repair_seq_next;
+            proceed_snd_nxt = false;
+            ack_req = false;
+        } else {
+            uint32_t data_bytes_left = qp->GetBytesLeft();
+            if (m_mtu < data_bytes_left) {
+                data_bytes_left = m_mtu;
+            }
+            payload_size = data_bytes_left;
+            seq = static_cast<uint32_t>(qp->snd_nxt);
+            ack_req = (group.data_sent + 1 == group.m_snapshot) ||
+                      (seq + payload_size >= qp->m_size);
+        }
+    } else {
+        ack_req = (seq + payload_size >= qp->m_size) || (m_ack_interval == 1) ||
+                  (m_ack_interval > 1 && seq % m_ack_interval == 0 && seq != 0);
+    }
+
     qp->stat.txTotalPkts += 1;
     qp->stat.txTotalBytes += payload_size;
     Ptr<Packet> p = Create<Packet>(payload_size);
@@ -898,8 +1433,6 @@ Ptr<Packet> RdmaHw::GetNxtPacket(Ptr<RdmaQueuePair> qp) {
     //    printf("Generate a packet, FlowId:%u, Seq:%u\n", qp->m_flow_id, seq);
     //}
 
-    bool ack_req = (seq + payload_size >= qp->m_size) ||(m_ack_interval == 1) ||
-                   (m_ack_interval > 1 && seq % m_ack_interval == 0 && seq != 0);
     if (m_cc_mode == CC_MODE_GEMINI && ShouldDebugFlow(qp->m_flow_id)) {
         LogFlowDebugf(qp->m_flow_id, "Send data seq=%u size=%u snd_una=%lu cwnd=%lu",
                     seq, payload_size, qp->snd_una, qp->m_ccWin);
@@ -907,13 +1440,27 @@ Ptr<Packet> RdmaHw::GetNxtPacket(Ptr<RdmaQueuePair> qp) {
     // attach Stat Tag
     uint8_t packet_pos = UINT8_MAX;
     {
+        AttachCommonFlowTags(p, qp, ack_req);
         FlowIDNUMTag fint;
-        if (!p->PeekPacketTag(fint)) {
-            fint.SetId(qp->m_flow_id);
-            fint.SetFlowSize(qp->m_size);
-            fint.SetAckReq((uint8_t)ack_req);
-            p->AddPacketTag(fint);
+        p->PeekPacketTag(fint);
+        if (use_fec) {
+            if (send_repair) {
+                AttachFecRepairTag(fint, qp);
+                LogFecTxPacket(m_node, qp, qp->fec.active_group, "tx_repair", "repair", seq, 0,
+                               qp->fec.active_group.repair_sent, ack_req, "repair_first");
+            } else {
+                AttachFecDataTag(fint, qp);
+                LogFecTxPacket(m_node, qp, qp->fec.active_group, "tx_data", "data", seq,
+                               qp->fec.active_group.data_sent, 0, ack_req,
+                               ack_req ? "data_group_tail" : "data_group_body");
+            }
         }
+        // Write the updated tag back to the packet. RemovePacketTag deserializes the
+        // existing on-packet value into `fint`, so calling it here would overwrite the
+        // freshly attached FEC fields and prevent the receiver from entering the FEC path.
+        FlowIDNUMTag existingTag;
+        p->RemovePacketTag(existingTag);
+        p->AddPacketTag(fint);
         FlowStatTag fst;
         uint64_t size = qp->m_size;
         if (!p->PeekPacketTag(fst)) {
@@ -938,6 +1485,46 @@ Ptr<Packet> RdmaHw::GetNxtPacket(Ptr<RdmaQueuePair> qp) {
 
     // // update state
     if (proceed_snd_nxt) qp->snd_nxt += payload_size;
+    if (use_fec) {
+        auto &group = qp->fec.active_group;
+        if (send_repair) {
+            group.repair_sent++;
+            if (!group.repair_counted_inflight) {
+                qp->fec.outstanding_repair_pkts += group.n_snapshot;
+                group.repair_counted_inflight = true;
+            }
+            group.repair_seq_next = BuildFecRepairSeq(group.group_id, group.repair_sent);
+        } else {
+            group.data_sent++;
+            if (group.data_sent == 1) {
+                group.data_start_seq = seq;
+            }
+            if (group.data_bytes_remaining >= payload_size) {
+                group.data_bytes_remaining -= payload_size;
+            } else {
+                group.data_bytes_remaining = 0;
+            }
+            if (group.data_sent == group.m_snapshot) {
+                group.data_end_seq = seq + payload_size;
+                group.ack_requested = ack_req;
+                auto outstanding_it = FindOutstandingFecGroup(qp->fec, group.group_id);
+                if (outstanding_it == qp->fec.outstanding_groups.end()) {
+                    qp->fec.outstanding_groups.push_back(group);
+                } else {
+                    *outstanding_it = group;
+                }
+                WriteFecLogLine("tx_group_close", m_node ? m_node->GetId() : UINT32_MAX,
+                                qp->m_flow_id, group.group_id, "group", seq,
+                                static_cast<uint32_t>(qp->snd_una), group.data_start_seq,
+                                group.data_end_seq, group.m_snapshot, group.n_snapshot,
+                                group.data_sent, group.repair_sent, 0, 0, 0, false, ack_req,
+                                false, qp->fec.outstanding_repair_pkts,
+                                "all_data_sent_waiting_ack");
+                MaybeRestoreFecSendCursor(m_node, qp, group);
+                qp->fec.active_group_valid = false;
+            }
+        }
+    }
 
     qp->m_ipid++;
 

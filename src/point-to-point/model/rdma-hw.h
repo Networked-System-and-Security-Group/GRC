@@ -2,6 +2,7 @@
 #define RDMA_HW_H
 
 #include <ns3/custom-header.h>
+#include <ns3/flow-id-num-tag.h>
 #include <ns3/node.h>
 #include <ns3/rdma.h>
 #include <ns3/selective-packet-queue.h>
@@ -35,6 +36,7 @@ class RdmaHw : public Object {
     uint32_t m_chunk;
     uint32_t m_ack_interval;
     bool m_backto0;
+    bool m_fecEnabled;
     bool m_var_win, m_fast_react;
     bool m_rateBound;
     std::vector<RdmaInterfaceMgr> m_nic;  // list of running nic controlled by this RdmaHw
@@ -67,10 +69,10 @@ class RdmaHw : public Object {
 
     void AddQueuePair(uint64_t size, uint16_t pg, Ipv4Address _sip, Ipv4Address _dip,
                       uint16_t _sport, uint16_t _dport, uint32_t win, uint64_t baseRtt,
-                      int32_t flow_id);  // add a nw qp (new send)
+                      int32_t flow_id, uint32_t fec_n);  // add a nw qp (new send)
     void AddQueuePair(uint64_t size, uint16_t pg, Ipv4Address _sip, Ipv4Address _dip,
                       uint16_t _sport, uint16_t _dport, uint32_t win, uint64_t baseRtt) {
-        this->AddQueuePair(size, pg, _sip, _dip, _sport, _dport, win, baseRtt, -1);
+        this->AddQueuePair(size, pg, _sip, _dip, _sport, _dport, win, baseRtt, -1, 0);
     }
 
     /* RxQueuePair */
@@ -107,6 +109,8 @@ class RdmaHw : public Object {
     void ChangeRate(Ptr<RdmaQueuePair> qp, DataRate new_rate);
 
     void HandleTimeout(Ptr<RdmaQueuePair> qp, Time rto);
+    uint32_t GetFecDataPktsPerGroup() const;
+    bool IsFecEnabled() const;
 
     /* statistics */
     uint32_t cnp_by_ecn;
@@ -221,6 +225,27 @@ class RdmaHw : public Object {
     Time m_irn_rtoLow;
     Time m_irn_rtoHigh;
     uint32_t m_irn_bdp;
+
+   private:
+    bool ShouldUseFec(const Ptr<RdmaQueuePair> &qp) const;
+    bool IsFecRepairPacket(const FlowIDNUMTag &fit) const;
+    bool IsFecDataPacket(const FlowIDNUMTag &fit) const;
+    uint32_t BuildFecRepairSeq(uint32_t group_id, uint16_t repair_idx) const;
+    void EnsureActiveFecGroup(Ptr<RdmaQueuePair> qp);
+    RdmaRxQueuePair::FecRxGroupState &GetOrCreateFecRxGroup(Ptr<RdmaRxQueuePair> rxQp,
+                                                            const FlowIDNUMTag &fit);
+    void AttachCommonFlowTags(Ptr<Packet> p, Ptr<RdmaQueuePair> qp, bool ack_req) const;
+    void AttachFecRepairTag(FlowIDNUMTag &fit, Ptr<RdmaQueuePair> qp) const;
+    void AttachFecDataTag(FlowIDNUMTag &fit, Ptr<RdmaQueuePair> qp) const;
+    void SendAckOrNack(CustomHeader &ch, Ptr<RdmaRxQueuePair> rxQp, FlowIDNUMTag &fit,
+                       uint32_t payload_size, int seq_check_result, bool cnp_check);
+    int ReceiveFecRepair(Ptr<Packet> p, CustomHeader &ch, Ptr<RdmaRxQueuePair> rxQp,
+                         FlowIDNUMTag &fit);
+    int ReceiveFecData(Ptr<Packet> p, CustomHeader &ch, Ptr<RdmaRxQueuePair> rxQp,
+                       FlowIDNUMTag &fit, uint32_t payload_size);
+    bool TryAdvanceFecAck(Ptr<RdmaRxQueuePair> rxQp);
+    void PruneAckedFecGroups(Ptr<RdmaQueuePair> qp);
+    void ResetFecStateForRecovery(Ptr<RdmaQueuePair> qp);
 };
 
 } /* namespace ns3 */

@@ -86,6 +86,7 @@ uint32_t Settings::esw_num = 0;
 uint64_t Settings::cnt_finished_flows = 0;
 bool Settings::themis_enabled = false;
 uint32_t Settings::packet_payload = 1000;
+uint32_t Settings::tcp_queue_index = 1;
 
 uint32_t Settings::dropped_pkt_sw_ingress = 0;
 uint32_t Settings::dropped_pkt_sw_egress = 0;
@@ -209,11 +210,19 @@ namespace logfile {
     FILE* cnp_trigger_prob_log = nullptr;
     FILE* accumulated_bytes_log = nullptr;
     FILE* flow_debug_log = nullptr;
+    FILE* fec_log = nullptr;
+    bool fec_log_enabled = false;
 
     
 
     // 初始化函数实现
     void initialize_log() {
+        const std::string enableFecLog =
+            Settings::GetRawParam("ENABLE_FEC_LOG", Settings::GetRawParam("FEC_LOG", "FALSE"));
+        fec_log_enabled = (enableFecLog == "1" || enableFecLog == "TRUE" ||
+                           enableFecLog == "true" || enableFecLog == "on" ||
+                           enableFecLog == "ON");
+
         // 通用文件打开宏（减少重复代码）
         #define OPEN_FILE(var) {                                     \
             const std::string path = output_dir + "/" #var;         \
@@ -257,6 +266,13 @@ namespace logfile {
         fprintf(flow_debug_log, "#   grep 'FlowId:423,' flow_debug_log\n");
         fprintf(flow_debug_log, "#   grep 'FlowId:423, Receiver got data' flow_debug_log\n");
         fprintf(flow_debug_log, "#   grep 'FlowId:0, GEMINI' flow_debug_log\n");
+        if (fec_log_enabled) {
+            OPEN_FILE(fec_log);
+        } else {
+            OPEN_EMPTY_FILE(fec_log);
+        }
+        fprintf(fec_log,
+                "timestamp_ns,node_id,event,flow_id,group_id,role,seq,ack_seq,data_start_seq,data_end_seq,m,n,data_idx,repair_idx,data_received,repair_received,total_received,recoverable,ack_req,ack_triggered,outstanding_repair_pkts,reason\n");
 
         OPEN_EMPTY_FILE(cnp_output);
         OPEN_EMPTY_FILE(voq_output);

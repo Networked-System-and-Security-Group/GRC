@@ -30,6 +30,17 @@ What happens:
 
 This is the preferred path for fast WAN tuning because `wan-routing.cc` already uses raw params heavily.
 
+`WAIT_TCP_COMPLETION` is a recognized `remote.cc` config key that can also be injected with
+`--extra`. It defaults to `0`, so the simulator may stop as soon as all RDMA flows finish even if
+TCP flows remain. Set it to `1` to wait for both RDMA and TCP, subject to the existing fallback
+time limit:
+
+```bash
+python3 run.py \
+  --tcp_flow config/w-tcp-100.txt \
+  --extra WAIT_TCP_COMPLETION=1
+```
+
 ## Permanent Path: Add A Real Parameter
 
 The standard path is:

@@ -52,7 +52,7 @@ struct gs_my_ingress_metadata_t {
     bit<1>  gs_should_send_cnp;  // 是否应该发送CNP
     
     // CNP生成需要的mirror字段  
-    bit<10> gs_ing_mir_ses;      // Mirror session ID (MirrorId_t类型)
+    MirrorId_t gs_ing_mir_ses;   // Mirror session ID
     bit<8> gs_pkt_type;          // 包类型
 }
 // FIX: Struct definitions must end with a semicolon.
@@ -99,7 +99,7 @@ parser gs_IngressParser(packet_in gs_pkt,
         gs_meta.gs_ref_bytes = 0;
         gs_meta.gs_bytes_diff = 0;
         gs_meta.gs_should_send_cnp = 0;
-        gs_meta.gs_ing_mir_ses = (bit<10>)0;
+        gs_meta.gs_ing_mir_ses = (MirrorId_t)0;
         gs_meta.gs_pkt_type = 0;
 
 
@@ -264,7 +264,8 @@ control gs_Ingress(
 
 
     // ====== 新增：RTT测量相关寄存器和哈希 ======
-    const bit<32> GS_RTT_TABLE_SIZE = 1024;  // 简化：直接使用固定大小
+    const bit<32> GS_RTT_TABLE_SIZE = 65536;
+    const bit<32> GS_RTT_INDEX_MASK = GS_RTT_TABLE_SIZE - 1;
     const bit<32> GS_MAX_DC = 16;
     // ====== 明确指定寄存器的值和索引类型 ======
     Register<bit<32>, bit<32>>(GS_RTT_TABLE_SIZE) gs_rtt_timestamp_reg;
@@ -337,7 +338,7 @@ control gs_Ingress(
     // ====== 简化的CNP生成action ======
     action gs_generate_cnp() {
         gs_meta.gs_should_send_cnp = 1;
-        gs_meta.gs_ing_mir_ses = (bit<10>)GS_CNP_SES_ID;
+        gs_meta.gs_ing_mir_ses = (MirrorId_t)GS_CNP_SES_ID;
         gs_meta.gs_pkt_type = GS_PKT_TYPE_MIRROR;
     }
 
@@ -415,7 +416,7 @@ control gs_Ingress(
     @stage(4)
     action gs_calc_ackreq_indices() {
         // 为AckReq包计算专用的索引
-        gs_meta.gs_ackreq_entry_idx = gs_meta.gs_rtt_hash_val & 0x3FF; // 取低10位作为索引 (1024个条目)
+        gs_meta.gs_ackreq_entry_idx = gs_meta.gs_rtt_hash_val & GS_RTT_INDEX_MASK;
         gs_meta.gs_ackreq_dc_idx = (bit<32>)(gs_hdr.gs_ipv4.gs_dst_addr & 0xF); // DC索引保持简单
     }
     @stage(4)
@@ -433,7 +434,7 @@ control gs_Ingress(
     @stage(4)  
     action gs_calc_ack_indices() {
         // 为Ack包计算专用的索引
-        gs_meta.gs_ack_entry_idx = gs_meta.gs_rtt_hash_val & 0x3FF; // 取低10位作为索引 (1024个条目)
+        gs_meta.gs_ack_entry_idx = gs_meta.gs_rtt_hash_val & GS_RTT_INDEX_MASK;
         gs_meta.gs_ack_dc_idx = (bit<32>)(gs_hdr.gs_ipv4.gs_dst_addr & 0xF); // DC索引保持简单
     }
     @stage(4)

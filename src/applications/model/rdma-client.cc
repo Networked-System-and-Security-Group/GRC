@@ -93,6 +93,11 @@ RdmaClient::GetTypeId (void)
                    IntegerValue (-1),
                    MakeIntegerAccessor (&RdmaClient::m_flow_id),
                    MakeIntegerChecker<int32_t> ())
+    .AddAttribute ("FecParityPkts",
+                   "Default bound FEC parity packets for this flow",
+                   UintegerValue (0),
+                   MakeUintegerAccessor (&RdmaClient::m_fec_n),
+                   MakeUintegerChecker<uint32_t> ())
   ;
   return tid;
 }
@@ -100,6 +105,7 @@ RdmaClient::GetTypeId (void)
 RdmaClient::RdmaClient ()
 {
   NS_LOG_FUNCTION_NOARGS ();
+  m_fec_n = 0;
 }
 
 RdmaClient::~RdmaClient ()
@@ -140,7 +146,8 @@ void RdmaClient::StartApplication (void)
   // get RDMA driver and add up queue pair
   Ptr<Node> node = GetNode();
   Ptr<RdmaDriver> rdma = node->GetObject<RdmaDriver>();
-  rdma->AddQueuePair(m_size, m_pg, m_sip, m_dip, m_sport, m_dport, m_win, m_baseRtt, m_flow_id);
+  rdma->AddQueuePair(m_size, m_pg, m_sip, m_dip, m_sport, m_dport, m_win, m_baseRtt, m_flow_id,
+                     m_fec_n);
 }
 
 void RdmaClient::StopApplication ()
