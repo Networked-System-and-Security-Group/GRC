@@ -66,7 +66,8 @@ def translate_bandwidth(bw_str):
 def poisson(lam):
     return int(-math.log(1 - random.random()) * lam)
 
-def generate_flows(src_hosts, dst_hosts, cdf_file, host_rate, duration, base_time=2.0, restrict=True):
+def generate_flows(src_hosts, dst_hosts, cdf_file, host_rate, duration, base_time=2.0,
+                   restrict=True, end_time=None):
     '''
     Generate flows between src_hosts and dst_hosts based on a CDF file and a specified send rate.
     '''
@@ -80,33 +81,40 @@ def generate_flows(src_hosts, dst_hosts, cdf_file, host_rate, duration, base_tim
 
     avg_interval = 1 / (rate_per_host / 8 / avg_size)
 
+    flow_end_time = base_time + duration if end_time is None else min(base_time + duration, end_time)
+    effective_duration = max(0.0, flow_end_time - base_time)
+    if effective_duration <= 0:
+        return []
+
     for src in src_hosts:
         current_time = base_time + poisson(avg_interval*1e9)/1e9
-        while current_time < base_time + duration:
+        while current_time < flow_end_time:
             # Randomly choose a destination from the entire dst_hosts pool
             dst = random.choice([h for h in dst_hosts if h != src])
             flows.append(Flow(src, dst, max(1, int(custom_rand.rand())), current_time))
             current_time += poisson(avg_interval*1e9)/1e9
 
     flows.sort(key=lambda f: f.t)
-    actual_rate = sum([f.size for f in flows]) / duration * 8
+    actual_rate = sum([f.size for f in flows]) / effective_duration * 8
     target_rate = rate_per_host * len(src_hosts)
     
     # Relax restriction for very short bursts or small number of flows to avoid infinite recursion
-    if (0.9 * target_rate <= actual_rate <= 1.1 * target_rate) or not restrict or duration < 0.07:
-        if duration >= 0.07: 
+    if (0.9 * target_rate <= actual_rate <= 1.1 * target_rate) or not restrict or effective_duration < 0.07:
+        if effective_duration >= 0.07:
             src_print = str(src_hosts[:3]) + "..." if len(src_hosts) > 3 else str(src_hosts)
             # dst_hosts might be very large now (all other switches), so just print count
             dst_print = f"[Total {len(dst_hosts)} hosts]"
             print(f'{src_print} -> {dst_print}')
-            print(f'time: {base_time}-{base_time+duration}, avg_interval: {avg_interval*1000:.3f}ms, avg_size: {avg_size}, rate_per_host: {rate_per_host/1e9:.3f}G')
+            print(f'time: {base_time}-{flow_end_time}, avg_interval: {avg_interval*1000:.3f}ms, avg_size: {avg_size}, rate_per_host: {rate_per_host/1e9:.3f}G')
             print(f'Actual Rate: {actual_rate/1e9:.3f} Gbps, Target Rate: {target_rate/1e9:.3f} Gbps')
         return flows
     else:
-        return generate_flows(src_hosts, dst_hosts, cdf_file, host_rate, duration, base_time, restrict=True)
+        return generate_flows(src_hosts, dst_hosts, cdf_file, host_rate, duration,
+                              base_time, restrict=True, end_time=end_time)
 
 def generate_dynamic_flows(as_list, cdf_file, total_rate, duration, 
-                           slice_duration=0.02, slice_rate='100G', base_time=2.0):
+                           slice_duration=0.02, slice_rate='100G', base_time=2.0,
+                           end_time=None):
     flows = []
     total_rate_f = translate_bandwidth(total_rate)
     slice_rate_f = translate_bandwidth(slice_rate)
@@ -116,11 +124,14 @@ def generate_dynamic_flows(as_list, cdf_file, total_rate, duration,
         
     avg_interval = duration / slice_count
 
+    dynamic_end_time = base_time + duration if end_time is None else min(base_time + duration, end_time)
     for src_as in as_list:
         cur_time = base_time + poisson(avg_interval * 1e9) / 1e9
-        while cur_time < base_time + duration:
+        while cur_time < dynamic_end_time:
             dst_as = random.choice([as_item for as_item in as_list if as_item != src_as])
-            flows += generate_flows(src_as, dst_as, cdf_file, f'{slice_rate_f/len(src_as)/1e9}G', slice_duration , cur_time, restrict=False)
+            flows += generate_flows(src_as, dst_as, cdf_file,
+                                    f'{slice_rate_f/len(src_as)/1e9}G', slice_duration,
+                                    cur_time, restrict=False, end_time=dynamic_end_time)
             cur_time += poisson(avg_interval * 1e9) / 1e9
     return flows
 
@@ -142,6 +153,14 @@ if __name__ == '__main__':
                         help='WAN TCP 输出文件名（相对于 config 目录；为空时按 w-tcp-<rate>.txt 命名）')
     parser.add_argument('--wan-only', action='store_true',
                         help='只生成 WAN TCP 文件，不生成 w-dynamic-* 文件')
+    parser.add_argument('--flow-duration-ms', type=float, default=70.0,
+                        help='普通 RDMA 流量生成窗口长度（毫秒，默认 70）')
+    parser.add_argument('--flow-base-time', type=float, default=2.0,
+                        help='普通 RDMA 流量生成窗口起始时间（秒，默认 2.0）')
+    parser.add_argument('--flow-output', type=str, default='',
+                        help='普通 RDMA 输出文件名（相对于 config 目录；为空时按 w-dynamic-<background>-<dynamic> 命名）')
+    parser.add_argument('--flow-only', action='store_true',
+                        help='只生成普通 RDMA 文件，不生成 WAN TCP 文件')
 
     args = parser.parse_args()
 
@@ -154,6 +173,11 @@ if __name__ == '__main__':
     wan_base_time = args.wan_base_time
     if wan_duration_s <= 0:
         parser.error('--wan-duration-ms 必须大于 0')
+    flow_duration_s = args.flow_duration_ms / 1000.0
+    flow_base_time = args.flow_base_time
+    flow_end_time = flow_base_time + flow_duration_s
+    if flow_duration_s <= 0:
+        parser.error('--flow-duration-ms 必须大于 0')
 
     base_dir = op.join(op.dirname(__file__), '../traffic_gen')
 
@@ -203,12 +227,16 @@ if __name__ == '__main__':
         for as1 in as_list:
             for as2 in as_list:
                 if as1 == as2:
-                    flows += generate_flows(as1, as2, cdf_path, f'{intra_load}G', 0.07)
+                    flows += generate_flows(as1, as2, cdf_path, f'{intra_load}G', flow_duration_s,
+                                            base_time=flow_base_time, end_time=flow_end_time)
                 else:
-                    flows += generate_flows(as1, as2, cdf_path, f'{per_host_inter_load}G', 0.07)
+                    flows += generate_flows(as1, as2, cdf_path, f'{per_host_inter_load}G', flow_duration_s,
+                                            base_time=flow_base_time, end_time=flow_end_time)
 
         if dynamic_load > 0:
-            flows += generate_dynamic_flows(as_list, cdf_path, f'{dynamic_load}G', 0.07, slice_duration=0.03, slice_rate='100G')
+            flows += generate_dynamic_flows(as_list, cdf_path, f'{dynamic_load}G', flow_duration_s,
+                                            slice_duration=0.03, slice_rate='100G',
+                                            base_time=flow_base_time, end_time=flow_end_time)
     # ---------------------------------------------------------------------------------
     # 修改后的 WAN 流量生成逻辑
     # ---------------------------------------------------------------------------------
@@ -225,36 +253,37 @@ if __name__ == '__main__':
     active_wan_switches = [hosts for hosts in wan_as_list if len(hosts) > 0]
     num_wan_switches = len(active_wan_switches)
 
-    print(f"\n[WAN Traffic Generation]")
-    print(f"Configuration: {num_wan_switches} Active WAN Switches.")
-    print(f"Target Rate per Switch Pair: {target_pair_bw/1e9} Gbps.")
+    if not args.flow_only:
+        print(f"\n[WAN Traffic Generation]")
+        print(f"Configuration: {num_wan_switches} Active WAN Switches.")
+        print(f"Target Rate per Switch Pair: {target_pair_bw/1e9} Gbps.")
 
-    # 遍历每个源 Switch
-    for i, src_hosts in enumerate(active_wan_switches):
-        # 1. 收集所有其他 Switch 的 Host 作为目标池
-        #    这样做的目的是让流量随机分布到其他所有 Switch，从而满足"到另外四个都是200G"的统计结果
-        other_hosts_pool = []
-        for j, other_hosts in enumerate(active_wan_switches):
-            if i != j:
-                other_hosts_pool.extend(other_hosts)
-        
-        if len(src_hosts) > 0 and len(other_hosts_pool) > 0:
-            # 2. 应用用户指定的公式
-            # 单机速率 = WAN对之间速率 * WAN Switch数量 / 该Switch下的Host数量
-            # 例如：200G * 5 / 20 = 50G
-            # 这样总出口流量 = 50G * 20 = 1000G。分摊给其他4个Switch，平均每个约250G。
-            per_host_rate_val = (target_pair_bw * num_wan_switches) / len(src_hosts)
-            per_host_rate_str = f"{per_host_rate_val/1e9}G"
+        # 遍历每个源 Switch
+        for i, src_hosts in enumerate(active_wan_switches):
+            # 1. 收集所有其他 Switch 的 Host 作为目标池
+            #    这样做的目的是让流量随机分布到其他所有 Switch，从而满足"到另外四个都是200G"的统计结果
+            other_hosts_pool = []
+            for j, other_hosts in enumerate(active_wan_switches):
+                if i != j:
+                    other_hosts_pool.extend(other_hosts)
             
-            # 3. 生成流量 (src -> 所有其他 hosts)
-            wan_flows += generate_flows(
-                src_hosts, 
-                other_hosts_pool, 
-                cdf_path, 
-                per_host_rate_str, 
-                duration=wan_duration_s, 
-                base_time=wan_base_time
-            )
+            if len(src_hosts) > 0 and len(other_hosts_pool) > 0:
+                # 2. 应用用户指定的公式
+                # 单机速率 = WAN对之间速率 * WAN Switch数量 / 该Switch下的Host数量
+                # 例如：200G * 5 / 20 = 50G
+                # 这样总出口流量 = 50G * 20 = 1000G。分摊给其他4个Switch，平均每个约250G。
+                per_host_rate_val = (target_pair_bw * num_wan_switches) / len(src_hosts)
+                per_host_rate_str = f"{per_host_rate_val/1e9}G"
+
+                # 3. 生成流量 (src -> 所有其他 hosts)
+                wan_flows += generate_flows(
+                    src_hosts,
+                    other_hosts_pool,
+                    cdf_path,
+                    per_host_rate_str,
+                    duration=wan_duration_s,
+                    base_time=wan_base_time
+                )
 
     # ---------------------------------------------------------------------------------
     # 保存结果
@@ -264,7 +293,8 @@ if __name__ == '__main__':
     wan_flows.sort(key=lambda x : x.t)
 
     # 输出到文件 (DC 背景流)
-    saved_path = op.join(op.dirname(__file__), f'{flow_set}-dynamic-{int(background_inter_load)}-{int(dynamic_load)}.txt')
+    saved_path = op.join(op.dirname(__file__), args.flow_output or
+                         f'{flow_set}-dynamic-{int(background_inter_load)}-{int(dynamic_load)}.txt')
     if not args.wan_only:
         print(f'\nOriginal Flow count: {len(flows)}, Saved to: {saved_path}')
         with open(saved_path, 'w') as ofile:
@@ -276,8 +306,9 @@ if __name__ == '__main__':
     wan_rate_lbl = wan_pair_rate_str.replace('G', '').replace('M', '')
     wan_filename = args.wan_output or f'{flow_set}-tcp-{wan_rate_lbl}.txt'
     wan_saved_path = op.join(op.dirname(__file__), wan_filename)
-    print(f'WAN Flow count: {len(wan_flows)}, Saved to: {wan_saved_path}')
-    with open(wan_saved_path, 'w') as ofile:
-        ofile.write(f"{len(wan_flows)}\n")
-        for f in wan_flows:
-            ofile.write(str(f) + '\n')
+    if not args.flow_only:
+        print(f'WAN Flow count: {len(wan_flows)}, Saved to: {wan_saved_path}')
+        with open(wan_saved_path, 'w') as ofile:
+            ofile.write(f"{len(wan_flows)}\n")
+            for f in wan_flows:
+                ofile.write(str(f) + '\n')
