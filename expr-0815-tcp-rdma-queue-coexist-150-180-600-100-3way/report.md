@@ -36,6 +36,47 @@
 
 ## 3. 结束条件、登记与配置验收
 
+### 3.1 三组实验的实际运行命令
+
+实验目录入口是：
+
+```bash
+cd /home/niuzihan26/gscc/RDMA-WAN-Optimization
+bash expr-0815-tcp-rdma-queue-coexist-150-180-600-100-3way/run.sh
+```
+
+该入口先由 `register.sh` 固定实验 ID 和配置，再由
+`launch_registered.sh` 以 detached 方式启动三个 `waf` 子进程。三组最终运行的
+仿真核心命令分别是（输出被重定向到对应的 `config.log`）：
+
+```bash
+./waf --run 'scratch/remote /home/niuzihan26/gscc/RDMA-WAN-Optimization/mix/output/[357]-0815-1408-rdma150-180-tcp600-100-q1/config.txt'
+./waf --run 'scratch/remote /home/niuzihan26/gscc/RDMA-WAN-Optimization/mix/output/[358]-0815-1415-rdma150-180-tcp600-100-q3/config.txt'
+./waf --run 'scratch/remote /home/niuzihan26/gscc/RDMA-WAN-Optimization/mix/output/[359]-0815-1415-rdma150-180-tcp600-100-no-tcp/config.txt'
+```
+
+其中 357 使用 `TCP_QUEUE_INDEX=1`，358 使用 `TCP_QUEUE_INDEX=3`，359 不配置
+`TCP_FLOW_FILE`。以上命令来自 `launch_registered.sh` 实际执行的子命令；注册阶段
+的 `register-*.log` 也记录了相同的 `./waf --run 'scratch/remote ...'` 命令。
+
+### 3.2 RED 早期丢包是否启用
+
+没有启用 WAN RED 早期丢包。三份最终 `config.txt` 都没有设置
+`WAN_RED_ENABLE`，而 `WanRouting::LoadRedConfig()` 的默认值为 `FALSE`。运行时
+证据如下：
+
+| 实验 | `wan_log` 中 `red_enabled` | `red_drop_cnt` 累计 | `drop_log` 的 `type=2`（RED） |
+|---|---:|---:|---:|
+| 357/q1 | 全部为 `0` | `0` | `0` |
+| 358/q3 | 全部为 `0` | `0` | `0` |
+| 359/无 TCP | 全部为 `0` | `0` | `0` |
+
+配置中的 `KMIN_MAP`、`KMAX_MAP` 和 `PMAX_MAP` 是交换机 MMU 的 ECN/CN 标记阈值
+和概率，并不是 WAN RED 丢包开关。三组确实有 `drop_log` 记录，但其 `type` 全部
+为 `0`，对应 `SwitchNode::DoSwitchSend()` 的普通 ingress admission（队列/共享
+buffer 准入失败），不是 RED 早期丢包；三组对应记录数分别为 `904,979`、
+`1,049,806` 和 `210,911`。
+
 三份配置均显式设置：
 
 ```text
