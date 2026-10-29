@@ -34,10 +34,14 @@ const gs_mirror_type_t GS_MIRROR_TYPE_E2E = 2;
 const int GS_HOST_IF_NUM = 32;
 // rixin: session id 0被保留了，使用1
 const int GS_CNP_SES_ID = 1;
+const bit<32> GS_ACTIVE_DC_ID = 0;
 // rixin: 造成拥塞的跨DC流的最大个数(concurrent)
 const int GS_MAX_NUM_CONGESTION_FLOW = 10000;// 修正: 添加所有缺失的常量定义
 const bit<8> ROCE_V2_ACK_OPCODE = 17;   // 0x11
 const bit<8> ROCE_V2_CNP_OPCODE = 129;  // 0x81
+const bit<16> GS_CNP_IPV4_TOTAL_LEN = 60;
+const bit<16> GS_CNP_UDP_LENGTH = 40;
+const bit<8> GS_CNP_BECN = 8w0x40;
 
 // 自定义数据包类型常量
 const gs_pkt_type_t PKT_TYPE_NORMAL_DATA = 0;
@@ -48,14 +52,13 @@ const gs_pkt_type_t PKT_TYPE_ACKREQ      = 2;
 const bit<32> RTT_TABLE_SIZE = 1024;
 const bit<16> MAX_DST_DCS    = 16;
 
-// GSCC 算法参数
-const bit<48> CNP_THRESHOLD_K    = 400000; // 400KB
-const bit<32> MIN_CNP_INTERVAL   = 50;     // 50us, 假设时间戳单位是微秒
-const PortId_t RECIRC_PORT       = 68;     // Tofino上一个常用的循环端口
+// GSCC Algorithm 3 RED defaults from the paper.
+const bit<32> GS_RED_KMIN_BYTES = 32w100000;
+const bit<32> GS_RED_KMAX_BYTES = 32w8000000;
+const bit<5> GS_RED_PMAX_5BIT = 5w16;
+const bit<8> GS_ROCE_DATA_OPCODE_MAX = 8w12;
 
-// 速率控制参数
-const bit<32> RATE_CONTROL_REG_SIZE = 16;  // 速率控制寄存器大小
-const bit<32> BYTES_DIFF_THRESHOLD = 400000; // 字节差值阈值 (400KB)
+const bit<32> RATE_CONTROL_REG_SIZE = 16;
 
 /*************************************************************************
  *********************** H E A D E R S  *********************************
@@ -118,6 +121,15 @@ header gs_bth_h {
     bit<24> gs_psn;
 }
 
+header gs_cnp_padding_h {
+    bit<64> gs_reserved1;
+    bit<64> gs_reserved2;
+}
+
+header gs_icrc_h {
+    bit<32> gs_value;
+}
+
 header gs_arp_h {
     bit<16> gs_hw_type;
     bit<16> gs_proto_type;
@@ -136,7 +148,6 @@ header gs_mirror_bridged_metadata_h {
 
 header gs_mirror_h {
     gs_pkt_type_t  gs_pkt_type;
-    bit<8> gs_is_last_recir_pkt;
 }
 
 struct gs_my_ingress_headers_t {
@@ -154,9 +165,12 @@ struct gs_my_egress_headers_t {
     gs_mirror_h gs_mirror_md;
     gs_ethernet_h gs_ethernet;
     gs_ipv4_h gs_ipv4;
+    gs_arp_h gs_arp;
     gs_tcp_h gs_tcp;
     gs_udp_h gs_udp;
     gs_bth_h gs_bth;
+    gs_cnp_padding_h gs_cnp_padding;
+    gs_icrc_h gs_icrc;
 }
 
 struct gs_empty_header_t {}

@@ -32,6 +32,13 @@
 #include <traffic_mgr/traffic_mgr_port_intf.h>
 #include <traffic_mgr/traffic_mgr_q_intf.h>
 
+#ifndef EVENT_ID_MAX
+#define EVENT_ID_MAX 256
+#endif
+#ifndef PKTBUF_SIZE
+#define PKTBUF_SIZE 2048
+#endif
+
 // for channel
 //#include <stdio.h>
 //#include <stdlib.h>
@@ -49,8 +56,6 @@
 #include <linux/tcp.h>
 #include <sys/socket.h>
 //#include <time.h>
-
-#include "../config.h"
 
 #define ARRLEN(arr) sizeof(arr)/sizeof(arr[0])
 #if __TOFINO_MODE__ == 0

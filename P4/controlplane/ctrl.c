@@ -1,5 +1,4 @@
 #include "headers.h"
-#include "switch_config.h"
 #include <pthread.h>
 #include <time.h>
 #include <math.h>
@@ -20,30 +19,37 @@ bf_rt_session_hdl *session = NULL;
 
 // ================ GSCC Rate Control相关常量 ================
 #define MAX_DC_COUNT 16
-#define GSCC_EPOCH_DURATION_US 100
-#define GSCC_RTT_THRESHOLD_US 20
-#define GSCC_AI_STEP_FACTOR 0.1
-#define GSCC_MD_FACTOR 0.5
-#define GSCC_RATE_LIMIT_FACTOR 1.2
-#define GSCC_DECAY_FACTOR 0.9
-#define GSCC_EWMA_ALPHA 0.8
+#define GSCC_EPOCH_DURATION_US 1000U
+#define GSCC_LINK_RATE_BPS 100000000000ULL
+#define GSCC_BASE_RATE_BPS (GSCC_LINK_RATE_BPS / 4)
+#define GSCC_WEIGHT 1.0L
+#define GSCC_INV_DELTA_BYTES 6000000.0L
+#define GSCC_BETA 0.3L
+#define GSCC_RATE_LIMIT_FACTOR 1.2L
+#define GSCC_UPPER_DECAY_FACTOR 0.8L
+#define BITS_PER_BYTE 8ULL
+#define BITS_PER_SECOND 1000000ULL
+#define REF_BYTES_DENOMINATOR (BITS_PER_BYTE * BITS_PER_SECOND)
+#define RATE_NUMERATOR_BPS_US (GSCC_INV_DELTA_BYTES * BITS_PER_BYTE * BITS_PER_SECOND)
 
 // ================ 每个DC的统计信息 ================
 typedef struct {
     uint32_t dc_id;
-    uint32_t rtt_sum;
-    uint32_t rtt_count;
     uint32_t min_rtt_us;
     uint32_t current_rtt_us;
-    uint32_t predicted_rtt_us;
-    double rtt_diff_ewma;
     uint32_t real_bytes;
-    uint32_t ref_rate_bps;
+    uint64_t ref_rate_bps;
     uint32_t ref_bytes;
+    uint64_t ref_bytes_remainder;
     uint32_t last_real_bytes;
-    uint32_t actual_rate_bps;
-    bool is_congested;
-    bool was_congested;
+    uint64_t actual_rate_bps;
+    uint32_t last_pkt_count;
+    uint32_t last_cnp_count;
+    uint32_t packet_count_epoch;
+    uint32_t cnp_count_epoch;
+    uint64_t direction_duration_us;
+    int8_t rate_direction;
+    uint8_t velocity;
     uint64_t last_update_time_us;
 } dc_stats_t;
 
@@ -62,11 +68,15 @@ static const bf_rt_table_hdl *real_bytes_reg_table = NULL;
 static register_info_t real_bytes_reg_info;
 static const bf_rt_table_hdl *ref_bytes_reg_table = NULL;
 static register_info_t ref_bytes_reg_info;
+static const bf_rt_table_hdl *pkt_count_reg_table = NULL;
+static register_info_t pkt_count_reg_info;
+static const bf_rt_table_hdl *cnp_count_reg_table = NULL;
+static register_info_t cnp_count_reg_info;
 
 /*
  * @brief 设置一个寄存器，获取其表句柄、key/data句柄和字段ID (增强错误处理)
  */
-void register_setup(const bf_rt_info_hdl *bfrt_info_hdl,
+static void register_setup(const bf_rt_info_hdl *bfrt_info_hdl,
                     const char *reg_name,
                     const char *value_field_name,
                     const bf_rt_table_hdl **reg_table_hdl_ptr,
@@ -115,17 +125,17 @@ void register_setup(const bf_rt_info_hdl *bfrt_info_hdl,
 /*
  * @brief 从硬件读取指定的寄存器条目 (增强错误处理和深度调试)
  */
-void register_read(const bf_rt_target_t *dev_tgt_ptr,
+static void register_read(const bf_rt_target_t *dev_tgt_ptr,
                    const bf_rt_session_hdl *session_hdl,
                    const bf_rt_table_hdl *reg,
                    register_info_t *reg_info,
                    register_entry_t *reg_entry) {
     bf_status_t bf_status;
-    bf_rt_entry_read_flag_e read_flag = ENTRY_READ_FROM_HW;
+    const uint64_t flags = ENTRY_READ_FROM_HW;
 
     // Reset key and data handles
-    bf_rt_table_key_reset(reg, reg_info->key);
-    bf_rt_table_data_reset(reg, reg_info->data);
+    bf_rt_table_key_reset(reg, &reg_info->key);
+    bf_rt_table_data_reset(reg, &reg_info->data);
     fprintf(stderr, "[DEBUG/register_read] after reset key=%p data=%p\n", (void*)reg_info->key, (void*)reg_info->data);
 
     // Set register index key
@@ -139,9 +149,7 @@ void register_read(const bf_rt_target_t *dev_tgt_ptr,
 
     // Perform HW read
     bf_status = bf_rt_table_entry_get(reg, session_hdl, dev_tgt_ptr,
-                                      reg_info->key,
-                                      reg_info->data,   /* 单层指针 */
-                                      read_flag);
+                                      flags, reg_info->key, reg_info->data);
     if (bf_status != BF_SUCCESS) {
         fprintf(stderr, "ERROR: register_read: bf_rt_table_entry_get failed (index: %u)\n", reg_entry->register_index);
         exit(1);
@@ -180,7 +188,7 @@ void register_read(const bf_rt_target_t *dev_tgt_ptr,
 /*
  * @brief 向硬件写入指定的寄存器条目 (增强错误处理和深度调试)
  */
-void register_write(const bf_rt_target_t *dev_tgt_ptr,
+static void register_write(const bf_rt_target_t *dev_tgt_ptr,
                     const bf_rt_session_hdl *session_hdl,
                     const bf_rt_table_hdl *reg,
                     register_info_t *reg_info,
@@ -195,8 +203,8 @@ void register_write(const bf_rt_target_t *dev_tgt_ptr,
     }
     // --- End of Enhanced Debugging ---
 
-    bf_rt_table_key_reset(reg, reg_info->key);
-    bf_rt_table_data_reset(reg, reg_info->data);
+    bf_rt_table_key_reset(reg, &reg_info->key);
+    bf_rt_table_data_reset(reg, &reg_info->data);
 
     bf_status = bf_rt_key_field_set_value(reg_info->key, reg_info->kid_register_index, reg_entry->register_index);
     if (bf_status != BF_SUCCESS) {
@@ -206,13 +214,15 @@ void register_write(const bf_rt_target_t *dev_tgt_ptr,
     
     bf_status = bf_rt_data_field_set_value(reg_info->data, reg_info->did_value, reg_entry->value);
     if (bf_status != BF_SUCCESS) {
-        fprintf(stderr, "ERROR: register_write: bf_rt_data_field_set_value failed (index: %u, value: %lu)\n", reg_entry->register_index, reg_entry->value);
+        fprintf(stderr, "ERROR: register_write: bf_rt_data_field_set_value failed (index: %u, value: %" PRIu64 ")\n", reg_entry->register_index, (uint64_t)reg_entry->value);
         exit(1);
     }
     
-    bf_status = bf_rt_table_entry_mod(reg, session_hdl, dev_tgt_ptr, reg_info->key, reg_info->data);
+    bf_status = bf_rt_table_entry_mod(reg, session_hdl, dev_tgt_ptr, flags,
+                                      reg_info->key, reg_info->data);
     if (bf_status != BF_SUCCESS) {
-        bf_status = bf_rt_table_entry_add(reg, session_hdl, dev_tgt_ptr, flags, reg_info->key, reg_info->data);
+        bf_status = bf_rt_table_entry_add(reg, session_hdl, dev_tgt_ptr, flags,
+                                          reg_info->key, reg_info->data);
     }
     if (bf_status != BF_SUCCESS) {
         fprintf(stderr, "ERROR: register_write: bf_rt_table_entry_mod/add failed (index: %u)\n", reg_entry->register_index);
@@ -237,49 +247,129 @@ static void update_rtt_stats(dc_stats_t *dc, uint32_t rtt_sum, uint32_t rtt_coun
     if (rtt_count == 0) {
         return;
     }
-    uint32_t current_avg_rtt = rtt_sum / rtt_count;
-    dc->current_rtt_us = current_avg_rtt;
-    if (dc->min_rtt_us == 0 || current_avg_rtt < dc->min_rtt_us) {
-        dc->min_rtt_us = current_avg_rtt;
+    uint64_t avg_rtt_ns = rtt_sum / rtt_count;
+    uint32_t current_avg_rtt_us = (uint32_t)((avg_rtt_ns + 500) / 1000);
+    dc->current_rtt_us = current_avg_rtt_us;
+    if (dc->min_rtt_us == 0 || current_avg_rtt_us < dc->min_rtt_us) {
+        dc->min_rtt_us = current_avg_rtt_us;
     }
-    int32_t rtt_diff = (int32_t)current_avg_rtt - (int32_t)dc->min_rtt_us;
-    dc->rtt_diff_ewma = GSCC_EWMA_ALPHA * rtt_diff + (1.0 - GSCC_EWMA_ALPHA) * dc->rtt_diff_ewma;
-    dc->predicted_rtt_us = dc->min_rtt_us + (uint32_t)dc->rtt_diff_ewma;
-    dc->was_congested = dc->is_congested;
-    dc->is_congested = (current_avg_rtt > dc->min_rtt_us + GSCC_RTT_THRESHOLD_US);
-    printf("[DC %u] RTT: curr=%u, min=%u, diff_ewma=%.2f, congested=%s\n",
-           dc->dc_id, dc->current_rtt_us, dc->min_rtt_us, dc->rtt_diff_ewma,
-           dc->is_congested ? "YES" : "NO");
+    printf("[DC %u] RTT: avg=%u us, base=%u us\n",
+           dc->dc_id, dc->current_rtt_us, dc->min_rtt_us);
+}
+
+static uint64_t rate_to_u64(long double rate_bps) {
+    if (!(rate_bps > 0.0L)) {
+        return 0;
+    }
+    if (rate_bps >= (long double)UINT64_MAX) {
+        return UINT64_MAX;
+    }
+    return (uint64_t)rate_bps;
+}
+
+static uint32_t counter_delta_u32(uint32_t current, uint32_t previous) {
+    return current - previous;
+}
+
+static uint8_t update_rate_velocity(dc_stats_t *dc, int direction,
+                                    uint64_t base_rtt_us, uint64_t epoch_duration_us) {
+    if (direction == 0 || base_rtt_us == 0) {
+        dc->rate_direction = 0;
+        dc->direction_duration_us = 0;
+        dc->velocity = 1;
+        return 1;
+    }
+    if (dc->rate_direction != direction) {
+        dc->rate_direction = (int8_t)direction;
+        dc->direction_duration_us = epoch_duration_us;
+    } else if (dc->direction_duration_us < base_rtt_us * 10) {
+        dc->direction_duration_us += epoch_duration_us;
+        if (dc->direction_duration_us > base_rtt_us * 10) {
+            dc->direction_duration_us = base_rtt_us * 10;
+        }
+    }
+    if (dc->direction_duration_us >= base_rtt_us * 10) {
+        dc->velocity = 4;
+    } else if (dc->direction_duration_us >= base_rtt_us * 5) {
+        dc->velocity = 2;
+    } else {
+        dc->velocity = 1;
+    }
+    return dc->velocity;
 }
 
 static void calculate_reference_rate(dc_stats_t *dc, uint64_t epoch_duration_us) {
-    uint32_t old_ref_rate = dc->ref_rate_bps;
-    if (!dc->is_congested) {
-        uint32_t ai_step = (uint32_t)(GSCC_AI_STEP_FACTOR * dc->min_rtt_us * 1000000.0 / epoch_duration_us);
-        dc->ref_rate_bps += ai_step;
-        printf("[DC %u] AI: +%u bps\n", dc->dc_id, ai_step);
+    long double ref_rate = dc->ref_rate_bps;
+    long double queue_delay_us = 0.0L;
+    long double target_rate = 0.0L;
+    long double step = 0.0L;
+    long double epochs_per_rtt = 1.0L;
+    uint8_t velocity = 1;
+
+    if (dc->min_rtt_us != 0 && dc->current_rtt_us != 0) {
+        uint64_t base_rtt_us = dc->min_rtt_us;
+        queue_delay_us = dc->current_rtt_us > base_rtt_us
+            ? (long double)(dc->current_rtt_us - base_rtt_us)
+            : 0.0L;
+        epochs_per_rtt = (long double)base_rtt_us / (long double)epoch_duration_us;
+        if (epochs_per_rtt < 1.0L) {
+            epochs_per_rtt = 1.0L;
+        }
+        if (queue_delay_us == 0.0L) {
+            target_rate = HUGE_VALL;
+        } else {
+            target_rate = GSCC_WEIGHT * RATE_NUMERATOR_BPS_US / queue_delay_us;
+        }
+
+        int direction = target_rate > ref_rate ? 1 : (target_rate < ref_rate ? -1 : 0);
+        velocity = update_rate_velocity(dc, direction, base_rtt_us, epoch_duration_us);
+        step = (long double)velocity * GSCC_WEIGHT * RATE_NUMERATOR_BPS_US /
+               (epochs_per_rtt * (long double)base_rtt_us);
+        long double beta_epoch = 1.0L - powl(1.0L - GSCC_BETA, 1.0L / epochs_per_rtt);
+
+        if (target_rate > ref_rate) {
+            ref_rate += step;
+        } else {
+            long double minimum_decrease = (ref_rate - target_rate) * beta_epoch;
+            if (minimum_decrease > step) {
+                step = minimum_decrease;
+            }
+            ref_rate = step >= ref_rate ? 0.0L : ref_rate - step;
+        }
+
+        printf("[DC %u] RateCalc: queue=%" PRIu64 " us target=%.0Lf bps step=%.0Lf bps betaEpoch=%.6Lf v=%u\n",
+               dc->dc_id, (uint64_t)queue_delay_us, target_rate, step,
+               beta_epoch, velocity);
     } else {
-        dc->ref_rate_bps = (uint32_t)(dc->ref_rate_bps * GSCC_MD_FACTOR);
-        printf("[DC %u] MD: x%.2f -> %u bps\n", dc->dc_id, GSCC_MD_FACTOR, dc->ref_rate_bps);
+        printf("[DC %u] RateCalc: waiting for a valid RTT sample\n", dc->dc_id);
     }
-    uint32_t max_allowed_rate = (uint32_t)(dc->actual_rate_bps * GSCC_RATE_LIMIT_FACTOR);
-    if (dc->ref_rate_bps > max_allowed_rate && dc->actual_rate_bps > 0) {
-        dc->ref_rate_bps = (uint32_t)(dc->ref_rate_bps * GSCC_DECAY_FACTOR);
-        printf("[DC %u] Rate limiting: decay to %u bps (max_allowed=%u)\n", 
-               dc->dc_id, dc->ref_rate_bps, max_allowed_rate);
+
+    long double upper_rate = (long double)dc->actual_rate_bps * GSCC_RATE_LIMIT_FACTOR;
+    if (upper_rate < (long double)GSCC_BASE_RATE_BPS) {
+        upper_rate = (long double)GSCC_BASE_RATE_BPS;
     }
-    if (dc->ref_rate_bps < 1000) {
-        dc->ref_rate_bps = 1000;
+    if (ref_rate > upper_rate) {
+        ref_rate = upper_rate + (ref_rate - upper_rate) * GSCC_UPPER_DECAY_FACTOR;
     }
-    printf("[DC %u] Reference rate: %u -> %u bps\n", dc->dc_id, old_ref_rate, dc->ref_rate_bps);
+    dc->ref_rate_bps = rate_to_u64(ref_rate);
+    printf("[DC %u] Rate: ref=%" PRIu64 " actual=%" PRIu64 " upper=%.0Lf bps\n",
+           dc->dc_id, dc->ref_rate_bps, dc->actual_rate_bps, upper_rate);
 }
 
 static void update_reference_bytes(dc_stats_t *dc, uint64_t epoch_duration_us) {
-    dc->ref_bytes += (uint32_t)(dc->ref_rate_bps * epoch_duration_us / 1000000.0);
-    printf("[DC %u] Reference bytes updated: %u (+%u for %lu us)\n",
-           dc->dc_id, dc->ref_bytes, 
-           (uint32_t)(dc->ref_rate_bps * epoch_duration_us / 1000000.0),
-           epoch_duration_us);
+    uint32_t bytes_diff = dc->real_bytes - dc->ref_bytes;
+    if ((bytes_diff & 0x80000000U) != 0) {
+        dc->ref_bytes = dc->real_bytes;
+        dc->ref_bytes_remainder = 0;
+        bytes_diff = 0;
+    }
+
+    uint64_t byte_numerator = dc->ref_rate_bps * epoch_duration_us + dc->ref_bytes_remainder;
+    uint64_t bytes_to_add = byte_numerator / REF_BYTES_DENOMINATOR;
+    dc->ref_bytes_remainder = byte_numerator % REF_BYTES_DENOMINATOR;
+    dc->ref_bytes += (uint32_t)bytes_to_add;
+    printf("[DC %u] Budget: backlog=%u ref=%u (+%" PRIu64 " bytes for %" PRIu64 " us)\n",
+           dc->dc_id, bytes_diff, dc->ref_bytes, bytes_to_add, epoch_duration_us);
 }
 
 // ================ P4寄存器读写函数 ================
@@ -303,6 +393,17 @@ static void read_real_bytes_from_p4(uint32_t dc_id, uint32_t *real_bytes) {
     *real_bytes = (uint32_t)entry.value;
 }
 
+static void read_rate_counters_from_p4(uint32_t dc_id,
+                                       uint32_t *packet_count,
+                                       uint32_t *cnp_count) {
+    register_entry_t packet_entry = { .register_index = dc_id };
+    register_entry_t cnp_entry = { .register_index = dc_id };
+    register_read(dev_tgt, session, pkt_count_reg_table, &pkt_count_reg_info, &packet_entry);
+    register_read(dev_tgt, session, cnp_count_reg_table, &cnp_count_reg_info, &cnp_entry);
+    *packet_count = (uint32_t)packet_entry.value;
+    *cnp_count = (uint32_t)cnp_entry.value;
+}
+
 static void reset_rtt_registers_for_dc(uint32_t dc_id) {
     register_entry_t entry = { .register_index = dc_id, .value = 0 };
     register_write(dev_tgt, session, rtt_sum_reg_table, &rtt_sum_reg_info, &entry);
@@ -323,7 +424,7 @@ static void process_dc_control(uint32_t dc_id, uint64_t current_time_us) {
     if (epoch_duration_us == 0) epoch_duration_us = GSCC_EPOCH_DURATION_US;
     
     // 这是您看到的最后一条打印信息
-    printf("\n=== Processing DC %u (epoch: %lu us) ===\n", dc_id, epoch_duration_us);
+    printf("\n=== Processing DC %u (epoch: %" PRIu64 " us) ===\n", dc_id, epoch_duration_us);
 
     // --- 步骤 1: 从P4读取RTT统计信息 ---
     fprintf(stderr, "[DEBUG] DC %u: Step 1 - Reading RTT stats from P4...\n", dc_id);
@@ -354,19 +455,30 @@ static void process_dc_control(uint32_t dc_id, uint64_t current_time_us) {
     }
     read_real_bytes_from_p4(dc_id, &current_real_bytes);
     fprintf(stderr, "[DEBUG] DC %u: P4 Read Complete. current_real_bytes = %u\n", dc_id, current_real_bytes);
+    dc->real_bytes = current_real_bytes;
+
+    uint32_t current_packet_count, current_cnp_count;
+    read_rate_counters_from_p4(dc_id, &current_packet_count, &current_cnp_count);
+    dc->packet_count_epoch = counter_delta_u32(current_packet_count, dc->last_pkt_count);
+    dc->cnp_count_epoch = counter_delta_u32(current_cnp_count, dc->last_cnp_count);
+    dc->last_pkt_count = current_packet_count;
+    dc->last_cnp_count = current_cnp_count;
 
     // --- 步骤 5: 计算实际速率 ---
     fprintf(stderr, "[DEBUG] DC %u: Step 5 - Calculating actual rate (last_real_bytes = %u)...\n", dc_id, dc->last_real_bytes);
     uint32_t bytes_sent = current_real_bytes - dc->last_real_bytes;
-    dc->actual_rate_bps = (uint32_t)(bytes_sent * 1000000.0 / epoch_duration_us);
+    uint64_t measured_rate_bps = (uint64_t)bytes_sent * REF_BYTES_DENOMINATOR / epoch_duration_us;
+    dc->actual_rate_bps = measured_rate_bps;
     dc->last_real_bytes = current_real_bytes;
-    printf("[DC %u] Actual rate: %u bps (%u bytes in %lu us)\n",
+    printf("[DC %u] Actual rate: %" PRIu64 " bps (%u bytes in %" PRIu64 " us)\n",
            dc_id, dc->actual_rate_bps, bytes_sent, epoch_duration_us);
+    printf("[DC %u] Feedback counters: packets=%u CNPs=%u\n",
+           dc_id, dc->packet_count_epoch, dc->cnp_count_epoch);
 
     // --- 步骤 6: 计算新的参考速率 ---
     fprintf(stderr, "[DEBUG] DC %u: Step 6 - Calculating new reference rate...\n", dc_id);
     calculate_reference_rate(dc, epoch_duration_us);
-    fprintf(stderr, "[DEBUG] DC %u: New reference rate calculated: %u bps.\n", dc_id, dc->ref_rate_bps);
+    fprintf(stderr, "[DEBUG] DC %u: New reference rate calculated: %" PRIu64 " bps.\n", dc_id, dc->ref_rate_bps);
 
     // --- 步骤 7: 更新参考字节数 ---
     fprintf(stderr, "[DEBUG] DC %u: Step 7 - Updating reference bytes...\n", dc_id);
@@ -416,6 +528,8 @@ static bf_status_t setup_p4_register_tables(void) {
     register_setup(bfrt_info, "gs_Ingress.gs_rtt_count_reg", data_field_name, &rtt_count_reg_table, &rtt_count_reg_info);
     register_setup(bfrt_info, "gs_Ingress.gs_real_bytes_reg", data_field_name, &real_bytes_reg_table, &real_bytes_reg_info);
     register_setup(bfrt_info, "gs_Ingress.gs_ref_bytes_reg", data_field_name, &ref_bytes_reg_table, &ref_bytes_reg_info);
+    register_setup(bfrt_info, "gs_Ingress.gs_pkt_count_reg", data_field_name, &pkt_count_reg_table, &pkt_count_reg_info);
+    register_setup(bfrt_info, "gs_Ingress.gs_cnp_count_reg", data_field_name, &cnp_count_reg_table, &cnp_count_reg_info);
     printf("P4 register tables setup successfully\n");
     return BF_SUCCESS;
 }
@@ -428,7 +542,7 @@ bf_status_t gscc_control_init(bf_rt_target_t *target, const bf_rt_info_hdl *info
     memset(dc_stats, 0, sizeof(dc_stats));
     for (int i = 0; i < MAX_DC_COUNT; i++) {
         dc_stats[i].dc_id = i;
-        dc_stats[i].ref_rate_bps = 1000000;
+        dc_stats[i].ref_rate_bps = GSCC_BASE_RATE_BPS;
     }
     bf_status_t status = setup_p4_register_tables();
     if (status != BF_SUCCESS) {
@@ -438,7 +552,8 @@ bf_status_t gscc_control_init(bf_rt_target_t *target, const bf_rt_info_hdl *info
     
     // 增加额外的检查，确保所有表句柄都有效
     if (rtt_sum_reg_table == NULL || rtt_count_reg_table == NULL ||
-        real_bytes_reg_table == NULL || ref_bytes_reg_table == NULL) {
+        real_bytes_reg_table == NULL || ref_bytes_reg_table == NULL ||
+        pkt_count_reg_table == NULL || cnp_count_reg_table == NULL) {
         fprintf(stderr, "ERROR: One or more register table handles are NULL after setup. This confirms a mismatch with the loaded P4 program.\n");
         return BF_UNEXPECTED;
     }
@@ -503,20 +618,22 @@ bf_status_t gscc_set_dc_rate(uint32_t dc_id, uint32_t rate_bps) {
 void gscc_print_status(void) {
     printf("\n========== GSCC Control Status ==========\n");
     printf("Control running: %s\n", control_running ? "YES" : "NO");
-    printf("Epoch duration: %d us\n", GSCC_EPOCH_DURATION_US);
-    printf("RTT threshold: %d us\n", GSCC_RTT_THRESHOLD_US);
+    printf("Epoch duration: %u us\n", GSCC_EPOCH_DURATION_US);
+    printf("Link/base rate: %" PRIu64 "/%" PRIu64 " bps\n",
+           GSCC_LINK_RATE_BPS, (uint64_t)GSCC_BASE_RATE_BPS);
     pthread_mutex_lock(&stats_mutex);
     for (int i = 0; i < MAX_DC_COUNT; i++) {
         dc_stats_t *dc = &dc_stats[i];
         if (dc->last_update_time_us > 0) {
             printf("\n--- DC %d ---\n", i);
-            printf("  RTT: curr=%u, min=%u, diff_ewma=%.2f\n", 
-                   dc->current_rtt_us, dc->min_rtt_us, dc->rtt_diff_ewma);
-            printf("  Rate: ref=%u, actual=%u bps\n", 
+            printf("  RTT: curr=%u us, base=%u us\n",
+                   dc->current_rtt_us, dc->min_rtt_us);
+            printf("  Rate: ref=%" PRIu64 ", actual=%" PRIu64 " bps\n",
                    dc->ref_rate_bps, dc->actual_rate_bps);
             printf("  Bytes: ref=%u, real=%u\n", 
                    dc->ref_bytes, dc->real_bytes);
-            printf("  Congested: %s\n", dc->is_congested ? "YES" : "NO");
+            printf("  Epoch feedback: packets=%u CNPs=%u, velocity=%u\n",
+                   dc->packet_count_epoch, dc->cnp_count_epoch, dc->velocity);
         }
     }
     pthread_mutex_unlock(&stats_mutex);
@@ -529,7 +646,7 @@ static void switchd_setup(bf_switchd_context_t *ctx, const char *prog) {
     char conf_file[256];
     
     ctx->install_dir = strdup(getenv("SDE_INSTALL"));
-    snprintf(conf_file, sizeof(conf_file), "%s/share/p4/targets/tofino/%s.conf",
+    snprintf(conf_file, sizeof(conf_file), "%s/share/p4/targets/tofino2/%s.conf",
              ctx->install_dir, prog);
     ctx->conf_file = strdup(conf_file);
     ctx->running_in_background = true;
@@ -542,6 +659,38 @@ static void switchd_setup(bf_switchd_context_t *ctx, const char *prog) {
         exit(1);
     }
     printf("bf_switchd initialized successfully!\n");
+}
+
+static void configure_cnp_mirror(const bf_rt_target_t *target) {
+    const uint16_t mirror_session_id = 1;
+    const bf_dev_port_t mirror_dev_port = 392;
+    p4_pd_sess_hdl_t pd_session;
+    p4_pd_dev_target_t pd_target = {target->dev_id, target->pipe_id};
+    p4_pd_mirror_session_info_t mirror_info = {
+        .type = PD_MIRROR_TYPE_NORM,
+        .dir = PD_DIR_INGRESS,
+        .id = mirror_session_id,
+        .egr_port = mirror_dev_port,
+        .egr_port_v = true,
+        .max_pkt_len = 55
+    };
+    p4_pd_status_t status = p4_pd_client_init(&pd_session);
+    if (status != BF_SUCCESS) {
+        fprintf(stderr, "ERROR: p4_pd_client_init failed: %d\n", status);
+        exit(EXIT_FAILURE);
+    }
+
+    status = p4_pd_mirror_session_create(pd_session, pd_target, &mirror_info);
+    if (status != BF_SUCCESS) {
+        status = p4_pd_mirror_session_update(pd_session, pd_target, &mirror_info, true);
+    }
+    if (status != BF_SUCCESS) {
+        fprintf(stderr, "ERROR: failed to configure CNP mirror session %u on dev port %u: %d\n",
+                mirror_session_id, mirror_dev_port, status);
+        exit(EXIT_FAILURE);
+    }
+    printf("Configured ingress CNP mirror session %u to dev port %u (max packet length %u)\n",
+           mirror_session_id, mirror_dev_port, 55);
 }
 
 static void bfrt_setup(bf_rt_target_t *dev_tgt_ptr,
@@ -605,6 +754,7 @@ int main(void) {
     sleep(2);
     
     bfrt_setup(dev_tgt, &bfrt_info, prog_name, &session);
+    configure_cnp_mirror(dev_tgt);
     
     if (gscc_control_init(dev_tgt, bfrt_info, session) != BF_SUCCESS) {
         fprintf(stderr, "Failed to initialize GSCC control. Please check P4 program and compilation.\n");
