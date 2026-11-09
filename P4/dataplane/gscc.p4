@@ -27,10 +27,15 @@ struct gs_my_ingress_metadata_t {
     bit<32> gs_temp_hash_result;
     // 解释：新增一个标志位，在Parser中设置，用于简化apply块中的条件判断，以规避编译器内部错误。
     bit<1> is_ip_tcp_udp;
+    bit<1> gs_is_roce;
     // FIX: Add new metadata fields for staged RTT calculation.
     bit<32> gs_rtt_hash_val;
     bit<32> gs_rtt_entry_idx;
     bit<32> gs_rtt_dc_idx;
+    bit<32> gs_rtt_tuple_ip_low;
+    bit<32> gs_rtt_tuple_ip_high;
+    bit<16> gs_rtt_tuple_port_low;
+    bit<16> gs_rtt_tuple_port_high;
     // FIX: Add a temporary field to simplify register write actions.
     bit<32> gs_temp_seq_id_hash;
     // FIX: Add fields for pre-calculated RTT values to avoid binary operations in register writes
@@ -41,7 +46,11 @@ struct gs_my_ingress_metadata_t {
     bit<32> gs_ackreq_entry_idx;  // AckReq专用的entry索引
     bit<32> gs_ackreq_dc_idx;     // AckReq专用的DC索引
     bit<32> gs_ack_entry_idx;     // Ack专用的entry索引
-    bit<32> gs_ack_dc_idx;        // Ack专用的DC索引
+    bit<32> gs_ack_dc_idx;
+    bit<32> gs_psn_m1;   // ACK 的 PSN - 1
+    bit<32> gs_psn_now;  // 当前包的 PSN
+    bit<1>  gs_is_ackreq;// 是否要求确认
+    bit<8>  gs_opcode_md;// BTH opcode 副本
     
     // 速率控制相关字段
     bit<32> gs_dst_dc_id;        // 目标DC ID
@@ -50,6 +59,13 @@ struct gs_my_ingress_metadata_t {
     bit<32> gs_ref_bytes;        // 参考字节数
     bit<32> gs_bytes_diff;       // 字节差值
     bit<1>  gs_should_send_cnp;  // 是否应该发送CNP
+    bit<32> gs_red_sample_hash;
+    bit<5> gs_red_threshold5;
+    bit<1> gs_red_backlog_negative;
+    bit<16> gs_red_backlog_class_hi;
+    bit<15> gs_red_backlog_class_lo;
+    bit<32> gs_packet_count;
+    bit<32> gs_cnp_count;
     
     // CNP生成需要的mirror字段  
     MirrorId_t gs_ing_mir_ses;   // Mirror session ID
@@ -79,10 +95,15 @@ parser gs_IngressParser(packet_in gs_pkt,
         gs_meta.gs_flow_index0 = 0;
         gs_meta.gs_temp_hash_result = 0;
         gs_meta.is_ip_tcp_udp = 0; // Initialize flag
+        gs_meta.gs_is_roce = 0;
         // FIX: Initialize new RTT metadata fields.
         gs_meta.gs_rtt_hash_val = 0;
         gs_meta.gs_rtt_entry_idx = 0;
         gs_meta.gs_rtt_dc_idx = 0;
+        gs_meta.gs_rtt_tuple_ip_low = 0;
+        gs_meta.gs_rtt_tuple_ip_high = 0;
+        gs_meta.gs_rtt_tuple_port_low = 0;
+        gs_meta.gs_rtt_tuple_port_high = 0;
         gs_meta.gs_temp_seq_id_hash = 0;
         gs_meta.gs_calculated_rtt = 0;
         gs_meta.gs_new_rtt_sum = 0;
@@ -99,6 +120,13 @@ parser gs_IngressParser(packet_in gs_pkt,
         gs_meta.gs_ref_bytes = 0;
         gs_meta.gs_bytes_diff = 0;
         gs_meta.gs_should_send_cnp = 0;
+        gs_meta.gs_red_sample_hash = 0;
+        gs_meta.gs_red_threshold5 = 0;
+        gs_meta.gs_red_backlog_negative = 0;
+        gs_meta.gs_red_backlog_class_hi = 0;
+        gs_meta.gs_red_backlog_class_lo = 0;
+        gs_meta.gs_packet_count = 0;
+        gs_meta.gs_cnp_count = 0;
         gs_meta.gs_ing_mir_ses = (MirrorId_t)0;
         gs_meta.gs_pkt_type = 0;
 
@@ -151,6 +179,11 @@ parser gs_IngressParser(packet_in gs_pkt,
 
     state gs_parse_bth {
         gs_pkt.extract(gs_hdr.gs_bth);
+        gs_meta.gs_is_roce = 1;
+        // 把 BTH 里后面要用的字段搬到 metadata。放 parser 里做不占用 ingress stage。
+        gs_meta.gs_psn_now   = (bit<32>)gs_hdr.gs_bth.gs_psn;
+        gs_meta.gs_is_ackreq = gs_hdr.gs_bth.gs_ack_req;
+        gs_meta.gs_opcode_md = gs_hdr.gs_bth.gs_opcode;
         transition accept;
     }
 }
@@ -180,6 +213,10 @@ control gs_Ingress(
             @defaultonly NoAction;
         }
         size = GS_HOST_IF_NUM;
+        const entries = {
+            32w0x0a630101: gs_forward(9w392);
+            32w0x0a630201: gs_forward(9w400);
+        }
     }
 
     table gs_arp_table {
@@ -191,9 +228,11 @@ control gs_Ingress(
             @defaultonly NoAction;
         }
         size = GS_HOST_IF_NUM;
+        const entries = {
+            32w0x0a630101: gs_forward(9w392);
+            32w0x0a630201: gs_forward(9w400);
+        }
     }
-
-    // ECN检测和mirror逻辑已删除，专注RTT测量
 
     // ====== 定义register，明确指定值和索引类型 ======
     Register<bit<32>, bit<32>>(REGISTER_SIZE) gs_flow_timestamp_reg;
@@ -202,6 +241,7 @@ control gs_Ingress(
     Hash<bit<32>>(HashAlgorithm_t.CRC32) gs_flow_hasher;
     // FIX: Add a new hasher for RTT logic.
     Hash<bit<32>>(HashAlgorithm_t.CRC32) gs_rtt_hasher;
+    Hash<bit<32>>(HashAlgorithm_t.CRC32) gs_red_sample_hasher;
 
 
 
@@ -215,10 +255,10 @@ control gs_Ingress(
             (bit<32>)gs_meta.gs_l4_src_port,
             (bit<32>)gs_meta.gs_l4_dst_port
         });
-        
+
         // 速率控制初始化
         gs_meta.gs_packet_bytes = (bit<32>)gs_hdr.gs_ipv4.gs_total_len;
-        gs_meta.gs_dst_dc_id = (bit<32>)(gs_hdr.gs_ipv4.gs_dst_addr & 0xF); // 使用目标IP低4位作为DC ID
+        gs_meta.gs_dst_dc_id = GS_ACTIVE_DC_ID;
         gs_meta.gs_should_send_cnp = 0;
     }
     @stage(0)
@@ -234,16 +274,56 @@ control gs_Ingress(
         default_action = NoAction();
     }
 
+    @stage(0)
+    action gs_set_rtt_tuple_forward() {
+        gs_meta.gs_rtt_tuple_ip_low = gs_hdr.gs_ipv4.gs_src_addr;
+        gs_meta.gs_rtt_tuple_ip_high = gs_hdr.gs_ipv4.gs_dst_addr;
+        gs_meta.gs_rtt_tuple_port_low = gs_meta.gs_l4_src_port;
+        gs_meta.gs_rtt_tuple_port_high = gs_meta.gs_l4_dst_port;
+    }
+
+    @stage(0)
+    action gs_set_rtt_tuple_reverse() {
+        gs_meta.gs_rtt_tuple_ip_low = gs_hdr.gs_ipv4.gs_dst_addr;
+        gs_meta.gs_rtt_tuple_ip_high = gs_hdr.gs_ipv4.gs_src_addr;
+        gs_meta.gs_rtt_tuple_port_low = gs_meta.gs_l4_dst_port;
+        gs_meta.gs_rtt_tuple_port_high = gs_meta.gs_l4_src_port;
+    }
+
+    @stage(0)
+    table gs_canonicalize_rtt_tuple_table {
+        key = {
+            gs_hdr.gs_ipv4.gs_src_addr: exact;
+            gs_hdr.gs_ipv4.gs_dst_addr: exact;
+        }
+        actions = {
+            gs_set_rtt_tuple_forward;
+            gs_set_rtt_tuple_reverse;
+        }
+        size = 4;
+        const entries = {
+            (32w0x0a630101, 32w0x0a630201): gs_set_rtt_tuple_forward();
+            (32w0x0a630201, 32w0x0a630101): gs_set_rtt_tuple_reverse();
+        }
+        default_action = gs_set_rtt_tuple_forward();
+    }
+
     // ====== Stage 1：只计算索引 ======
     @stage(1)
     action gs_calc_flow_index() {
         gs_meta.gs_flow_index0 = gs_meta.gs_temp_hash_result & (REGISTER_SIZE - 1);
+        gs_meta.gs_red_sample_hash = gs_red_sample_hasher.get({
+            gs_meta.gs_temp_hash_result,
+            gs_meta.gs_pkt_timestamp
+        });
     }
     @stage(1)
     table gs_calc_flow_index_table {
-        actions = { gs_calc_flow_index; }
-        size = 1;
-        const default_action = gs_calc_flow_index();
+        key = { gs_hdr.gs_ipv4.isValid(): exact; }
+        actions = { gs_calc_flow_index; @defaultonly NoAction; }
+        size = 2;
+        const entries = { true: gs_calc_flow_index(); }
+        default_action = NoAction();
     }
 
     // ====== Stage 2：记录时间戳 ======
@@ -264,8 +344,10 @@ control gs_Ingress(
 
 
     // ====== 新增：RTT测量相关寄存器和哈希 ======
-    const bit<32> GS_RTT_TABLE_SIZE = 65536;
+    const bit<32> GS_RTT_TABLE_SIZE = 4096;
     const bit<32> GS_RTT_INDEX_MASK = GS_RTT_TABLE_SIZE - 1;
+    // 论文的桶数 = 表项数 / 16；掩码用于取哈希的低位作为桶号
+    const bit<32> GS_RTT_BUCKET_MASK = GS_RTT_TABLE_SIZE / 16 - 1;
     const bit<32> GS_MAX_DC = 16;
     // ====== 明确指定寄存器的值和索引类型 ======
     Register<bit<32>, bit<32>>(GS_RTT_TABLE_SIZE) gs_rtt_timestamp_reg;
@@ -276,7 +358,8 @@ control gs_Ingress(
     // ====== 速率控制寄存器 ======
     Register<bit<32>, bit<32>>(RATE_CONTROL_REG_SIZE) gs_real_bytes_reg;    // 实际发送字节数
     Register<bit<32>, bit<32>>(RATE_CONTROL_REG_SIZE) gs_ref_bytes_reg;     // 参考字节数
-    // gs_last_cnp_time_reg 暂时移除以简化逻辑
+    Register<bit<32>, bit<32>>(RATE_CONTROL_REG_SIZE) gs_pkt_count_reg;
+    Register<bit<32>, bit<32>>(RATE_CONTROL_REG_SIZE) gs_cnp_count_reg;
 
     // ====== 速率控制RegisterAction（紧跟寄存器定义，在action使用前）======
     RegisterAction<bit<32>, bit<32>, bit<32>>(gs_real_bytes_reg) gs_update_real_bytes_action = {
@@ -292,14 +375,19 @@ control gs_Ingress(
         }
     };
 
-    // 计算字节差值的RegisterAction：读取参考字节数并计算差值
-    RegisterAction<bit<32>, bit<32>, bit<32>>(gs_ref_bytes_reg) gs_calc_diff_action = {
-        void apply(inout bit<32> ref_bytes_val, out bit<32> bytes_diff) {
-            bytes_diff = gs_meta.gs_real_bytes - ref_bytes_val;
+    RegisterAction<bit<32>, bit<32>, bit<32>>(gs_pkt_count_reg) gs_update_pkt_count_action = {
+        void apply(inout bit<32> stored_count, out bit<32> new_count) {
+            stored_count = stored_count + 1;
+            new_count = stored_count;
         }
     };
 
-    // CNP时间间隔检查RegisterAction暂时移除以避免action中的复杂逻辑
+    RegisterAction<bit<32>, bit<32>, bit<32>>(gs_cnp_count_reg) gs_update_cnp_count_action = {
+        void apply(inout bit<32> stored_count, out bit<32> new_count) {
+            stored_count = stored_count + 1;
+            new_count = stored_count;
+        }
+    };
 
     // ====== Stage 2：速率控制 - 更新实际字节数（与记录时间戳共用stage）======
     @stage(2)
@@ -309,59 +397,121 @@ control gs_Ingress(
 
     @stage(2)
     table gs_update_real_bytes_table {
-        key = { gs_meta.is_ip_tcp_udp: exact; }
+        key = { gs_meta.gs_is_roce: exact; }
         actions = { gs_update_real_bytes; @defaultonly NoAction; }
         size = 2;
         const entries = {
-            1 : gs_update_real_bytes();  // 只有当is_ip_tcp_udp为1时才更新
+            1 : gs_update_real_bytes();
         }
         default_action = NoAction();
     }
 
-    // ====== Stage 3：速率控制 - 计算字节差值（与RTT hash共用stage）======
+    @stage(13)
+    action gs_update_packet_count() {
+        gs_meta.gs_packet_count = gs_update_pkt_count_action.execute(gs_meta.gs_dst_dc_id);
+    }
+
+    @stage(13)
+    table gs_update_packet_count_table {
+        key = { gs_meta.gs_is_roce: exact; }
+        actions = { gs_update_packet_count; @defaultonly NoAction; }
+        size = 2;
+        const entries = { 1: gs_update_packet_count(); }
+        default_action = NoAction();
+    }
+
+    // ====== Stage 3：读取参考字节预算 ======
     @stage(3)
-    action gs_calc_bytes_diff() {
-        gs_meta.gs_bytes_diff = gs_calc_diff_action.execute(gs_meta.gs_dst_dc_id);
+    action gs_read_ref_bytes() {
+        gs_meta.gs_ref_bytes = gs_read_ref_bytes_action.execute(gs_meta.gs_dst_dc_id);
     }
 
     @stage(3)
-    table gs_calc_bytes_diff_table {
-        key = { gs_meta.is_ip_tcp_udp: exact; }
-        actions = { gs_calc_bytes_diff; @defaultonly NoAction; }
+    table gs_read_ref_bytes_table {
+        key = { gs_meta.gs_is_roce: exact; }
+        actions = { gs_read_ref_bytes; @defaultonly NoAction; }
         size = 2;
         const entries = {
-            1 : gs_calc_bytes_diff();  // 只有当is_ip_tcp_udp为1时才计算
+            1 : gs_read_ref_bytes();
         }
         default_action = NoAction();
     }
 
-    // ====== 简化的CNP生成action ======
+    // ====== Algorithm 3: RED probability and CNP generation ======
+    @stage(11)
+    action gs_compute_red_probability() {
+        bit<32> red_excess = gs_meta.gs_bytes_diff - GS_RED_KMIN_BYTES;
+        bit<32> red_scaled = (red_excess << 4) + red_excess;
+        gs_meta.gs_red_threshold5 = (bit<5>)(red_scaled >> 23);
+    }
+
+    @stage(11)
+    action gs_set_red_probability_max() {
+        gs_meta.gs_red_threshold5 = GS_RED_PMAX_5BIT;
+    }
+
+    @stage(11)
+    table gs_red_probability_table {
+        key = {
+            gs_meta.gs_red_backlog_negative: exact;
+            gs_meta.gs_red_backlog_class_hi: range;
+            gs_meta.gs_red_backlog_class_lo: range;
+        }
+        actions = {
+            gs_compute_red_probability;
+            gs_set_red_probability_max;
+            @defaultonly NoAction;
+        }
+        size = 4;
+        const entries = {
+            (1w0, 16w3 .. 16w3, 15w1696 .. 15w32767): gs_compute_red_probability();
+            (1w0, 16w4 .. 16w243, 15w0 .. 15w32767): gs_compute_red_probability();
+            (1w0, 16w244 .. 16w32767, 15w0 .. 15w32767): gs_set_red_probability_max();
+        }
+        default_action = NoAction();
+    }
+
+    @stage(12)
     action gs_generate_cnp() {
         gs_meta.gs_should_send_cnp = 1;
         gs_meta.gs_ing_mir_ses = (MirrorId_t)GS_CNP_SES_ID;
         gs_meta.gs_pkt_type = GS_PKT_TYPE_MIRROR;
+        gs_meta.gs_cnp_count = gs_update_cnp_count_action.execute(GS_ACTIVE_DC_ID);
+        gs_hdr.gs_ipv4.gs_ecn = 2w0;
     }
 
-    action gs_no_cnp() {
-        gs_meta.gs_should_send_cnp = 0;
-    }
-
-    // 使用简单的table基于字节差值决定CNP
-    table gs_cnp_decision_table {
-        key = { 
-            gs_meta.gs_bytes_diff: ternary;
+    @stage(12)
+    table gs_generate_cnp_table {
+        key = {
+            gs_meta.gs_is_roce: exact;
+            gs_hdr.gs_bth.isValid(): exact;
+            gs_hdr.gs_bth.gs_opcode: range;
+            gs_hdr.gs_ipv4.gs_ecn: range;
+            gs_meta.gs_red_threshold5: range;
+            gs_meta.gs_red_sample_hash[7:3]: range;
         }
-        actions = { 
-            gs_generate_cnp;
-            gs_no_cnp;
-            @defaultonly NoAction;
-        }
-        size = 3;
+        actions = { gs_generate_cnp; @defaultonly NoAction; }
+        size = 32;
         const entries = {
-            // 当字节差值大于阈值时生成CNP（暂时简化，不检查时间间隔）
-            (BYTES_DIFF_THRESHOLD + 1) &&& 0x80000000 : gs_generate_cnp();
+            (1, true, 8w0 .. 8w12, 2w3 .. 2w3, 5w0 .. 5w16, 5w0 .. 5w31): gs_generate_cnp();
+            (1, true, 8w0 .. 8w12, 2w0 .. 2w2, 5w1 .. 5w1, 5w0 .. 5w0): gs_generate_cnp();
+            (1, true, 8w0 .. 8w12, 2w0 .. 2w2, 5w2 .. 5w2, 5w0 .. 5w1): gs_generate_cnp();
+            (1, true, 8w0 .. 8w12, 2w0 .. 2w2, 5w3 .. 5w3, 5w0 .. 5w2): gs_generate_cnp();
+            (1, true, 8w0 .. 8w12, 2w0 .. 2w2, 5w4 .. 5w4, 5w0 .. 5w3): gs_generate_cnp();
+            (1, true, 8w0 .. 8w12, 2w0 .. 2w2, 5w5 .. 5w5, 5w0 .. 5w4): gs_generate_cnp();
+            (1, true, 8w0 .. 8w12, 2w0 .. 2w2, 5w6 .. 5w6, 5w0 .. 5w5): gs_generate_cnp();
+            (1, true, 8w0 .. 8w12, 2w0 .. 2w2, 5w7 .. 5w7, 5w0 .. 5w6): gs_generate_cnp();
+            (1, true, 8w0 .. 8w12, 2w0 .. 2w2, 5w8 .. 5w8, 5w0 .. 5w7): gs_generate_cnp();
+            (1, true, 8w0 .. 8w12, 2w0 .. 2w2, 5w9 .. 5w9, 5w0 .. 5w8): gs_generate_cnp();
+            (1, true, 8w0 .. 8w12, 2w0 .. 2w2, 5w10 .. 5w10, 5w0 .. 5w9): gs_generate_cnp();
+            (1, true, 8w0 .. 8w12, 2w0 .. 2w2, 5w11 .. 5w11, 5w0 .. 5w10): gs_generate_cnp();
+            (1, true, 8w0 .. 8w12, 2w0 .. 2w2, 5w12 .. 5w12, 5w0 .. 5w11): gs_generate_cnp();
+            (1, true, 8w0 .. 8w12, 2w0 .. 2w2, 5w13 .. 5w13, 5w0 .. 5w12): gs_generate_cnp();
+            (1, true, 8w0 .. 8w12, 2w0 .. 2w2, 5w14 .. 5w14, 5w0 .. 5w13): gs_generate_cnp();
+            (1, true, 8w0 .. 8w12, 2w0 .. 2w2, 5w15 .. 5w15, 5w0 .. 5w14): gs_generate_cnp();
+            (1, true, 8w0 .. 8w12, 2w0 .. 2w2, 5w16 .. 5w16, 5w0 .. 5w15): gs_generate_cnp();
         }
-        default_action = gs_no_cnp();
+        default_action = NoAction();
     }
 
     // ====== RTT相关RegisterAction - 实现原子性读写操作 ======
@@ -398,11 +548,11 @@ control gs_Ingress(
     // ====== Stage 3：RTT哈希计算 ======
     @stage(3)
     action gs_calc_rtt_hash() {
+        // RoCEv2 的 ACK 和数据包不互为反向五元组（两者 dport 都是 4791，
+        // sport 是网卡算的哈希），所以只用 IP 对做桶哈希。
         gs_meta.gs_rtt_hash_val = gs_rtt_hasher.get({
-            gs_hdr.gs_ipv4.gs_src_addr,
-            gs_hdr.gs_ipv4.gs_dst_addr,
-            (bit<32>)gs_hdr.gs_udp.gs_src_port,
-            (bit<32>)gs_hdr.gs_udp.gs_dst_port
+            gs_meta.gs_rtt_tuple_ip_low,
+            gs_meta.gs_rtt_tuple_ip_high
         });
     }
     @stage(3)
@@ -415,9 +565,12 @@ control gs_Ingress(
     // ====== Stage 4：AckReq专用索引计算 ======
     @stage(4)
     action gs_calc_ackreq_indices() {
-        // 为AckReq包计算专用的索引
-        gs_meta.gs_ackreq_entry_idx = gs_meta.gs_rtt_hash_val & GS_RTT_INDEX_MASK;
-        gs_meta.gs_ackreq_dc_idx = (bit<32>)(gs_hdr.gs_ipv4.gs_dst_addr & 0xF); // DC索引保持简单
+        // 论文 Algorithm 1 第 1 行：index = hash(5Tuple) * 16 + hash(seq) mod 16
+        // 64 个桶 × 16 个槽 = 1024 项；序号用 PSN 低 4 位（连续包刚好铺满 16 槽）
+        gs_meta.gs_ackreq_entry_idx =
+            ((gs_meta.gs_rtt_hash_val & GS_RTT_BUCKET_MASK) << 4)
+            | (bit<32>)gs_hdr.gs_bth.gs_psn[3:0];
+        gs_meta.gs_ackreq_dc_idx = GS_ACTIVE_DC_ID;
     }
     @stage(4)
     table gs_calc_ackreq_indices_table {
@@ -433,9 +586,11 @@ control gs_Ingress(
     // ====== Stage 4：Ack专用索引计算（与AckReq共享stage但条件互斥）======
     @stage(4)  
     action gs_calc_ack_indices() {
-        // 为Ack包计算专用的索引
-        gs_meta.gs_ack_entry_idx = gs_meta.gs_rtt_hash_val & GS_RTT_INDEX_MASK;
-        gs_meta.gs_ack_dc_idx = (bit<32>)(gs_hdr.gs_ipv4.gs_dst_addr & 0xF); // DC索引保持简单
+        // 论文 Algorithm 1 第 1 行：index = hash(5Tuple) * 16 + hash(seq) mod 16
+        gs_meta.gs_ack_entry_idx =
+            ((gs_meta.gs_rtt_hash_val & GS_RTT_BUCKET_MASK) << 4)
+            | (bit<32>)gs_hdr.gs_bth.gs_psn[3:0];
+        gs_meta.gs_ack_dc_idx = GS_ACTIVE_DC_ID;
     }
     @stage(4)
     table gs_calc_ack_indices_table {
@@ -455,7 +610,7 @@ control gs_Ingress(
     }
     @stage(5)
     table gs_record_ackreq_timestamp_table {
-        key = { gs_hdr.gs_bth.gs_ack_req: exact; }
+        key = { gs_meta.gs_is_ackreq: exact; }
         actions = { gs_record_ackreq_timestamp; @defaultonly NoAction; }
         size = 2; // For values 0 and 1
         const entries = {
@@ -471,7 +626,7 @@ control gs_Ingress(
     }
     @stage(6)
     table gs_record_ackreq_id_table {
-        key = { gs_hdr.gs_bth.gs_ack_req: exact; }
+        key = { gs_meta.gs_is_ackreq: exact; }
         actions = { gs_record_ackreq_id; @defaultonly NoAction; }
         size = 2; // For values 0 and 1
         const entries = {
@@ -492,7 +647,7 @@ control gs_Ingress(
     }
     @stage(7)
     table gs_read_stored_timestamp_table {
-        key = { gs_hdr.gs_bth.gs_opcode: exact; }
+        key = { gs_meta.gs_opcode_md: exact; }
         actions = { 
             gs_read_stored_timestamp; 
             gs_no_rtt_read;
@@ -509,27 +664,23 @@ control gs_Ingress(
 
     // ====== Stage 8：只计算RTT差值 ======
     @stage(8)
-    action gs_calc_rtt() {
-        // 计算RTT：当前时间戳 - 存储的发送时间戳
-        gs_meta.gs_calculated_rtt = gs_meta.gs_pkt_timestamp - gs_meta.gs_rtt_send_ts;
+    action gs_read_stored_id() {
+        gs_meta.gs_rtt_stored_id = gs_read_id_action.execute(gs_meta.gs_ack_entry_idx);
     }
     @stage(8)
-    action gs_skip_rtt_calc() {
-        // 如果没有有效的发送时间戳，跳过RTT计算
-        gs_meta.gs_calculated_rtt = 0;
+    action gs_no_rtt_id_read() {
+        gs_meta.gs_rtt_stored_id = 0;
     }
     @stage(8)
-    table gs_calc_rtt_table {
-        key = { gs_meta.gs_rtt_send_ts: ternary; }
-        actions = { 
-            gs_calc_rtt; 
-            gs_skip_rtt_calc;
-        }
-        size = 2;
+    table gs_read_stored_id_table {
+        key = { gs_meta.gs_opcode_md: exact; }
+        actions = { gs_read_stored_id; gs_no_rtt_id_read; @defaultonly NoAction; }
+        size = 256;
         const entries = {
-            0 &&& 0 : gs_skip_rtt_calc();  // 如果发送时间戳为0，跳过计算
+            17 : gs_read_stored_id();
+            18 : gs_read_stored_id();
         }
-        default_action = gs_calc_rtt();
+        default_action = gs_no_rtt_id_read();
     }
 
     // ====== Stage 9：更新RTT总和 ======
@@ -538,23 +689,11 @@ control gs_Ingress(
         gs_meta.gs_new_rtt_sum = gs_update_sum_action.execute(gs_meta.gs_ack_dc_idx);
     }
     @stage(9)
-    action gs_skip_sum_update() {
-        // 如果RTT计算结果无效，跳过sum更新
-        gs_meta.gs_new_rtt_sum = 0;
-    }
-    @stage(9)
     table gs_update_rtt_sum_table {
-        key = { gs_meta.gs_calculated_rtt: ternary; }
-        actions = { 
-            gs_update_rtt_sum;
-            gs_skip_sum_update;
-            @defaultonly NoAction;
-        }
-        size = 3;
-        const entries = {
-            0 &&& 0 : gs_skip_sum_update();  // 如果计算的RTT为0，跳过更新
-            _ : gs_update_rtt_sum();         // 其他情况（非零RTT），执行更新
-        }
+        key = { gs_meta.gs_ack_dc_idx: exact; }
+        actions = { gs_update_rtt_sum; @defaultonly NoAction; }
+        size = 1;
+        const entries = { 32w0: gs_update_rtt_sum(); }
         default_action = NoAction();
     }
 
@@ -564,23 +703,11 @@ control gs_Ingress(
         gs_meta.gs_new_rtt_count = gs_update_count_action.execute(gs_meta.gs_ack_dc_idx);
     }
     @stage(10)
-    action gs_skip_count_update() {
-        // 如果RTT计算结果无效，跳过count更新
-        gs_meta.gs_new_rtt_count = 0;
-    }
-    @stage(10)
     table gs_update_rtt_count_table {
-        key = { gs_meta.gs_calculated_rtt: ternary; }
-        actions = { 
-            gs_update_rtt_count;
-            gs_skip_count_update;
-            @defaultonly NoAction;
-        }
-        size = 3;
-        const entries = {
-            0 &&& 0 : gs_skip_count_update();  // 如果计算的RTT为0，跳过更新
-            _ : gs_update_rtt_count();         // 其他情况（非零RTT），执行更新
-        }
+        key = { gs_meta.gs_ack_dc_idx: exact; }
+        actions = { gs_update_rtt_count; @defaultonly NoAction; }
+        size = 1;
+        const entries = { 32w0: gs_update_rtt_count(); }
         default_action = NoAction();
     }
 
@@ -593,15 +720,13 @@ control gs_Ingress(
             gs_arp_table.apply();
         }
 
-        // ====== GSCC速率控制算法说明（简化版）======
-        // 1. Stage 0: 初始化速率控制metadata (dst_dc_id, packet_bytes)
-        // 2. Stage 11: 更新实际字节数(realBytes)，读取参考字节数(refBytes)，计算差值
-        // 3. 基于字节差值决定CNP生成：当bytesDiff > 阈值K时生成CNP
-        // 4. CNP通过mirror机制发送到egress，在egress中进行地址交换和opcode设置
-        // 注意：CNP时间间隔检查暂时简化，避免action中的复杂条件判断
+        // Rate-control counters and CNP decisions are scoped to the active RoCE DC.
 
         // ====== 记录时间戳、哈希计算和速率控制（Stage 0）======
         gs_set_timestamp_and_calc_hash_table.apply();
+        if (gs_hdr.gs_ipv4.isValid()) {
+            gs_canonicalize_rtt_tuple_table.apply();
+        }
 
         // ====== 使用在Parser中设置的标志位来简化条件判断，以规避编译器内部错误 ======
         if (gs_meta.is_ip_tcp_udp == 1) {
@@ -609,10 +734,15 @@ control gs_Ingress(
             gs_calc_flow_index_table.apply();
             // 为了简化，总是调用记录时间戳表
             gs_record_timestamp_table.apply();
-            // ====== 速率控制：更新实际字节数（Stage 2）======
-            gs_update_real_bytes_table.apply();
-            // ====== 速率控制：计算字节差值（Stage 3）======
-            gs_calc_bytes_diff_table.apply();
+            if (gs_meta.gs_is_roce == 1) {
+                // Rate-control counters and CNP decisions are scoped to RoCE traffic.
+                gs_update_real_bytes_table.apply();
+                gs_read_ref_bytes_table.apply();
+                gs_meta.gs_bytes_diff = gs_meta.gs_real_bytes - gs_meta.gs_ref_bytes;
+                gs_meta.gs_red_backlog_negative = gs_meta.gs_bytes_diff[31:31];
+                gs_meta.gs_red_backlog_class_hi = gs_meta.gs_bytes_diff[30:15];
+                gs_meta.gs_red_backlog_class_lo = gs_meta.gs_bytes_diff[14:0];
+            }
         }
 
         // ====== RTT测量逻辑 - 共同预处理 ======
@@ -630,17 +760,21 @@ control gs_Ingress(
                 // Ack包：计算专用索引，读取之前存储的发送时间戳，计算RTT，并更新统计信息
                 gs_calc_ack_indices_table.apply();
                 gs_read_stored_timestamp_table.apply();
-                gs_calc_rtt_table.apply();
-                gs_update_rtt_sum_table.apply();
-                gs_update_rtt_count_table.apply();
+                gs_read_stored_id_table.apply();
+                if (gs_meta.gs_rtt_send_ts != 0) {
+                    if (gs_meta.gs_rtt_stored_id == gs_meta.gs_psn_now) {
+                        gs_meta.gs_calculated_rtt = gs_meta.gs_pkt_timestamp - gs_meta.gs_rtt_send_ts;
+                        gs_update_rtt_sum_table.apply();
+                        gs_update_rtt_count_table.apply();
+                    }
+                }
             }
         }
 
-        // ====== GSCC速率控制 - CNP决策（对所有IPv4包执行）======
-        if (gs_hdr.gs_ipv4.isValid()) {
-            // 基于字节差值决定是否生成CNP（简化版本，暂不检查时间间隔）
-            gs_cnp_decision_table.apply();
-        }
+        // Range matches classify signed backlog intervals without a wide ALU branch.
+        gs_red_probability_table.apply();
+        gs_generate_cnp_table.apply();
+        gs_update_packet_count_table.apply();
     }
 }
 
@@ -657,7 +791,7 @@ control gs_IngressDeparser(packet_out gs_pkt,
     apply {
         // 如果需要生成CNP，设置mirror
         if (gs_meta.gs_should_send_cnp == 1) {
-            gs_mirror.emit<gs_mirror_h>(gs_meta.gs_ing_mir_ses, {gs_meta.gs_pkt_type, 0});
+            gs_mirror.emit<gs_mirror_h>(gs_meta.gs_ing_mir_ses, {gs_meta.gs_pkt_type});
         }
         
         // 发出原始包头
@@ -672,7 +806,8 @@ control gs_IngressDeparser(packet_out gs_pkt,
 /******** G L O B A L  E G R E S S  M E T A D A T A *********/
 struct gs_my_egress_metadata_t {
     bit<1> gs_is_mirrored; // 用于CNP生成
-    bit<16> gs_udp_tmp_checksum;
+    bit<8> gs_cnp_dip_hash;
+    bit<32> gs_cnp_icrc_raw;
 }
 // FIX: Struct definitions must end with a semicolon.
 ;
@@ -685,14 +820,13 @@ parser gs_EgressParser(packet_in gs_pkt,
                        /* Intrinsic */
                        out egress_intrinsic_metadata_t gs_eg_intr_md)
 {
-    Checksum() gs_udp_csum;
-
     gs_TofinoEgressParser() gs_tofino_parser;
 
     state start {
         // FIX: Initialize all fields of the 'out' parameter to avoid uninitialized warnings.
         gs_meta.gs_is_mirrored = 0;
-        gs_meta.gs_udp_tmp_checksum = 0;
+        gs_meta.gs_cnp_dip_hash = 0;
+        gs_meta.gs_cnp_icrc_raw = 0;
 
         gs_tofino_parser.apply(gs_pkt, gs_eg_intr_md);
         transition gs_parse_metadata;
@@ -703,18 +837,47 @@ parser gs_EgressParser(packet_in gs_pkt,
         transition select(gs_mirror_md.gs_pkt_type) {
             GS_PKT_TYPE_MIRROR : gs_parse_mirror_md;
             GS_PKT_TYPE_NORMAL : gs_parse_bridged_md;
-            default : accept;
+            default : gs_parse_ethernet;   // 普通 RoCE 包没有 shim 头，也要解析以太网
         }
     }
 
     state gs_parse_bridged_md {
         gs_pkt.extract(gs_hdr.gs_bridged_md);
-        transition accept;
+        transition gs_parse_ethernet;
     }
 
     state gs_parse_mirror_md {
         gs_pkt.extract(gs_hdr.gs_mirror_md);
         gs_meta.gs_is_mirrored = 1;
+        transition gs_parse_ethernet;
+    }
+
+    state gs_parse_ethernet {
+        gs_pkt.extract(gs_hdr.gs_ethernet);
+        transition select(gs_hdr.gs_ethernet.gs_ether_type) {
+            GS_ETHERTYPE_IPV4: gs_parse_ipv4;
+            default: accept;
+        }
+    }
+
+    state gs_parse_ipv4 {
+        gs_pkt.extract(gs_hdr.gs_ipv4);
+        transition select(gs_hdr.gs_ipv4.gs_protocol) {
+            GS_IP_PROTOCOLS_UDP: gs_parse_udp;
+            default: accept;
+        }
+    }
+
+    state gs_parse_udp {
+        gs_pkt.extract(gs_hdr.gs_udp);
+        transition select(gs_hdr.gs_udp.gs_dst_port) {
+            GS_UDP_ROCE_DST_PORT: gs_parse_bth;
+            default: accept;
+        }
+    }
+
+    state gs_parse_bth {
+        gs_pkt.extract(gs_hdr.gs_bth);
         transition accept;
     }
 }
@@ -730,41 +893,164 @@ control gs_Egress(
     inout egress_intrinsic_metadata_for_deparser_t gs_eg_dprsr_md,
     inout egress_intrinsic_metadata_for_output_port_t gs_eg_oport_md)
 {
-    action gs_generate_cnp_full() {
-        // 交换MAC地址
-        gs_mac_addr_t gs_tmp_mac = gs_hdr.gs_ethernet.gs_dst_addr;
-        gs_hdr.gs_ethernet.gs_dst_addr = gs_hdr.gs_ethernet.gs_src_addr;
-        gs_hdr.gs_ethernet.gs_src_addr = gs_tmp_mac;
-        // 交换IP地址
-        gs_ipv4_addr_t gs_tmp_ip = gs_hdr.gs_ipv4.gs_dst_addr;
-        gs_hdr.gs_ipv4.gs_dst_addr = gs_hdr.gs_ipv4.gs_src_addr;
-        gs_hdr.gs_ipv4.gs_src_addr = gs_tmp_ip;
-        // 设置CNP相关字段
-        gs_hdr.gs_bth.gs_dst_qpn = (bit<24>)gs_hdr.gs_udp.gs_src_port;
-        gs_hdr.gs_bth.gs_opcode = ROCE_V2_CNP_OPCODE;
+    Hash<bit<8>>(HashAlgorithm_t.CRC8) gs_cnp_dip_hash_calc;
+    Hash<bit<32>>(HashAlgorithm_t.CRC32) gs_cnp_icrc_hash_calc;
+
+    @stage(0)
+    action gs_calculate_cnp_dip_hash() {
+        gs_meta.gs_cnp_dip_hash = gs_cnp_dip_hash_calc.get({gs_hdr.gs_ipv4.gs_dst_addr});
     }
-    action gs_generate_cnp_noop() {
-        // 什么都不做
-    }
-    table gs_cnp_generation_table {
+    @stage(0)
+    table gs_calculate_cnp_dip_hash_table {
         key = {
             gs_meta.gs_is_mirrored: exact;
             gs_hdr.gs_bth.isValid(): exact;
         }
-        actions = {
-            gs_generate_cnp_full;
-            gs_generate_cnp_noop;
-            @defaultonly NoAction;
-        }
+        actions = { gs_calculate_cnp_dip_hash; @defaultonly NoAction; }
         size = 4;
-        const entries = {
-            (1, true): gs_generate_cnp_full();
-            (1, false): gs_generate_cnp_noop();
-        }
+        const entries = { (1, true): gs_calculate_cnp_dip_hash(); }
         default_action = NoAction();
     }
+
+    @stage(1)
+    action gs_swap_cnp_ethernet_addresses() {
+        gs_mac_addr_t gs_tmp_mac = gs_hdr.gs_ethernet.gs_dst_addr;
+        gs_hdr.gs_ethernet.gs_dst_addr = gs_hdr.gs_ethernet.gs_src_addr;
+        gs_hdr.gs_ethernet.gs_src_addr = gs_tmp_mac;
+    }
+    @stage(1)
+    table gs_swap_cnp_ethernet_addresses_table {
+        key = {
+            gs_meta.gs_is_mirrored: exact;
+            gs_hdr.gs_bth.isValid(): exact;
+        }
+        actions = { gs_swap_cnp_ethernet_addresses; @defaultonly NoAction; }
+        size = 4;
+        const entries = { (1, true): gs_swap_cnp_ethernet_addresses(); }
+        default_action = NoAction();
+    }
+
+    @stage(2)
+    action gs_swap_cnp_ipv4_addresses() {
+        gs_ipv4_addr_t gs_tmp_ip = gs_hdr.gs_ipv4.gs_dst_addr;
+        gs_hdr.gs_ipv4.gs_dst_addr = gs_hdr.gs_ipv4.gs_src_addr;
+        gs_hdr.gs_ipv4.gs_src_addr = gs_tmp_ip;
+    }
+    @stage(2)
+    table gs_swap_cnp_ipv4_addresses_table {
+        key = {
+            gs_meta.gs_is_mirrored: exact;
+            gs_hdr.gs_bth.isValid(): exact;
+        }
+        actions = { gs_swap_cnp_ipv4_addresses; @defaultonly NoAction; }
+        size = 4;
+        const entries = { (1, true): gs_swap_cnp_ipv4_addresses(); }
+        default_action = NoAction();
+    }
+
+    @stage(3)
+    action gs_set_cnp_constant_fields() {
+        gs_hdr.gs_ipv4.gs_version = 4w4;
+        gs_hdr.gs_ipv4.gs_ihl = 4w5;
+        gs_hdr.gs_ipv4.gs_ecn = 2w0;
+        gs_hdr.gs_ipv4.gs_total_len = GS_CNP_IPV4_TOTAL_LEN;
+        gs_hdr.gs_ipv4.gs_flags = 3w0;
+        gs_hdr.gs_ipv4.gs_frag_offset = 13w0;
+        gs_hdr.gs_ipv4.gs_ttl = 8w64;
+        gs_hdr.gs_ipv4.gs_protocol = GS_IP_PROTOCOLS_UDP;
+        gs_hdr.gs_udp.gs_dst_port = GS_UDP_ROCE_DST_PORT;
+        gs_hdr.gs_udp.gs_hdr_length = GS_CNP_UDP_LENGTH;
+        gs_hdr.gs_udp.gs_checksum = 16w0;
+
+        gs_hdr.gs_bth.gs_dst_qpn[23:17] = 7w0;
+        gs_hdr.gs_bth.gs_opcode = ROCE_V2_CNP_OPCODE;
+        gs_hdr.gs_bth.gs_solicited_event = 1w0;
+        gs_hdr.gs_bth.gs_mig_req = 1w0;
+        gs_hdr.gs_bth.gs_pad_count = 2w0;
+        gs_hdr.gs_bth.gs_header_v = 4w0;
+        gs_hdr.gs_bth.gs_reserved1 = GS_CNP_BECN;
+        gs_hdr.gs_bth.gs_ack_req = 1w1;
+        gs_hdr.gs_bth.gs_reserved2 = 7w0;
+        gs_hdr.gs_bth.gs_psn = 24w0;
+
+        gs_hdr.gs_cnp_padding.setValid();
+        gs_hdr.gs_cnp_padding.gs_reserved1 = 64w0;
+        gs_hdr.gs_cnp_padding.gs_reserved2 = 64w0;
+        gs_hdr.gs_icrc.setValid();
+    }
+    @stage(3)
+    table gs_set_cnp_constant_fields_table {
+        key = {
+            gs_meta.gs_is_mirrored: exact;
+            gs_hdr.gs_bth.isValid(): exact;
+        }
+        actions = { gs_set_cnp_constant_fields; @defaultonly NoAction; }
+        size = 4;
+        const entries = { (1, true): gs_set_cnp_constant_fields(); }
+        default_action = NoAction();
+    }
+
+    @stage(4)
+    action gs_set_cnp_qpn() {
+        gs_hdr.gs_bth.gs_dst_qpn[16:3] = gs_hdr.gs_udp.gs_src_port[13:0];
+        gs_hdr.gs_bth.gs_dst_qpn[2:0] = gs_meta.gs_cnp_dip_hash[2:0];
+    }
+    @stage(4)
+    table gs_set_cnp_qpn_table {
+        key = {
+            gs_meta.gs_is_mirrored: exact;
+            gs_hdr.gs_bth.isValid(): exact;
+        }
+        actions = { gs_set_cnp_qpn; @defaultonly NoAction; }
+        size = 4;
+        const entries = { (1, true): gs_set_cnp_qpn(); }
+        default_action = NoAction();
+    }
+
     apply {
-        gs_cnp_generation_table.apply();
+        gs_calculate_cnp_dip_hash_table.apply();
+        gs_swap_cnp_ethernet_addresses_table.apply();
+        gs_swap_cnp_ipv4_addresses_table.apply();
+        gs_set_cnp_constant_fields_table.apply();
+        gs_set_cnp_qpn_table.apply();
+        if (gs_hdr.gs_icrc.isValid()) {
+            gs_meta.gs_cnp_icrc_raw = gs_cnp_icrc_hash_calc.get({
+                64w0xffffffffffffffff,
+                gs_hdr.gs_ipv4.gs_version,
+                gs_hdr.gs_ipv4.gs_ihl,
+                8w0xff,
+                gs_hdr.gs_ipv4.gs_total_len,
+                gs_hdr.gs_ipv4.gs_identification,
+                gs_hdr.gs_ipv4.gs_flags,
+                gs_hdr.gs_ipv4.gs_frag_offset,
+                8w0xff,
+                gs_hdr.gs_ipv4.gs_protocol,
+                16w0xffff,
+                gs_hdr.gs_ipv4.gs_src_addr,
+                gs_hdr.gs_ipv4.gs_dst_addr,
+                gs_hdr.gs_udp.gs_src_port,
+                gs_hdr.gs_udp.gs_dst_port,
+                gs_hdr.gs_udp.gs_hdr_length,
+                16w0xffff,
+                gs_hdr.gs_bth.gs_opcode,
+                gs_hdr.gs_bth.gs_solicited_event,
+                gs_hdr.gs_bth.gs_mig_req,
+                gs_hdr.gs_bth.gs_pad_count,
+                gs_hdr.gs_bth.gs_header_v,
+                gs_hdr.gs_bth.gs_parti_key,
+                8w0xff,
+                gs_hdr.gs_bth.gs_dst_qpn,
+                gs_hdr.gs_bth.gs_ack_req,
+                gs_hdr.gs_bth.gs_reserved2,
+                gs_hdr.gs_bth.gs_psn,
+                gs_hdr.gs_cnp_padding.gs_reserved1,
+                gs_hdr.gs_cnp_padding.gs_reserved2
+            });
+            gs_hdr.gs_icrc.gs_value[31:24] = gs_meta.gs_cnp_icrc_raw[7:0];
+            gs_hdr.gs_icrc.gs_value[23:16] = gs_meta.gs_cnp_icrc_raw[15:8];
+            gs_hdr.gs_icrc.gs_value[15:8] = gs_meta.gs_cnp_icrc_raw[23:16];
+            gs_hdr.gs_icrc.gs_value[7:0] = gs_meta.gs_cnp_icrc_raw[31:24];
+        }
     }
 }
 
@@ -776,9 +1062,33 @@ control gs_EgressDeparser(packet_out gs_pkt,
                           /* Intrinsic */
                           in    egress_intrinsic_metadata_for_deparser_t gs_eg_dprsr_md)
 {
+    Checksum() gs_ipv4_csum;
+
     apply {
-        // 简化deparser，直接发出包头，删除checksum计算节省资源
-        gs_pkt.emit(gs_hdr);
+        if (gs_hdr.gs_ipv4.isValid()) {
+            gs_hdr.gs_ipv4.gs_hdr_checksum = gs_ipv4_csum.update({
+                gs_hdr.gs_ipv4.gs_version,
+                gs_hdr.gs_ipv4.gs_ihl,
+                gs_hdr.gs_ipv4.gs_diffserv,
+                gs_hdr.gs_ipv4.gs_ecn,
+                gs_hdr.gs_ipv4.gs_total_len,
+                gs_hdr.gs_ipv4.gs_identification,
+                gs_hdr.gs_ipv4.gs_flags,
+                gs_hdr.gs_ipv4.gs_frag_offset,
+                gs_hdr.gs_ipv4.gs_ttl,
+                gs_hdr.gs_ipv4.gs_protocol,
+                gs_hdr.gs_ipv4.gs_src_addr,
+                gs_hdr.gs_ipv4.gs_dst_addr
+            });
+        }
+        gs_pkt.emit(gs_hdr.gs_ethernet);
+        gs_pkt.emit(gs_hdr.gs_ipv4);
+        gs_pkt.emit(gs_hdr.gs_arp);
+        gs_pkt.emit(gs_hdr.gs_tcp);
+        gs_pkt.emit(gs_hdr.gs_udp);
+        gs_pkt.emit(gs_hdr.gs_bth);
+        gs_pkt.emit(gs_hdr.gs_cnp_padding);
+        gs_pkt.emit(gs_hdr.gs_icrc);
     }
 }
 
