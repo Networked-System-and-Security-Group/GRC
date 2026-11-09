@@ -325,6 +325,8 @@ S,flow,cum_line,agg
 | 16384 (14b)| 100 | 100 | 100 | 100 | 100 | 100 | 100 | **99.97** |
 | 65536 (16b)| 100 | 100 | 100 | 100 | 100 | 99.86 | 100 | 99.99 |
 
+> ⚠️ 口径注：本表为 **±16 窗口版**（允许近似匹配）。若改用 Fix/论文的 **精确匹配**（`d==0`），256 槽时 q64≈92.6%、q128≈89–94%（实测见 **§11.4**）——match% 高不等于 RTT 准。
+
 每流 `fail_psn`（psn 槽碰撞次数，差分）：
 
 | 有效槽 | q32 | q64 | q128 |
@@ -421,3 +423,92 @@ S,flow,cum_line,agg
 2. **只有把窗口也放大到 ±S 才会有 RTT 偏差，且偏差 ∝ S**（10.1）；到 S=256/65536 一次错配≈几十 µs~ms、甚至超过 WAN RTT，故**绝不这么做**。
 3. 现设计窗口写死 **±16**：S=16 时等价“跨一代容错”（偏差≤~µs，可接受）；S=256/65536 时**±16 匹配不到任何异代**（同槽差值只能是 S 的倍数），退化为精确匹配——**窗口失效但无害**。
 4. **Fix 版 16 槽的局限**：高 BDP 单流下 `S=16 ≪ B`（如 100G/1ms/1KB 时 B≈12207），会大量覆盖→命中率低；这正是观测实验要把槽位扩到 8/16 位的原因（§3/§4 实测“128 流需 ≥14 bit/16384 槽”，与上表 100G/1ms 的 14 bit 一致）。**扩槽位是为了覆盖 BDP，不是为了放宽窗口。**
+
+### 10.4 中间档 S（16→32→64→128→256）逐档 RTT 偏差
+沿用 10.1 的“窗口=±S”口径，把 S 在 16 与 256 之间逐档列出（L=1KB，Δrtt = S·8L/R）：
+
+| S（槽数） | 槽位 bits | 25G | 100G | 400G |
+|---|---|---|---|---|
+| 16  | 4 | 5.24 µs | 1.31 µs | 0.33 µs |
+| 32  | 5 | 10.49 µs | 2.62 µs | 0.66 µs |
+| 64  | 6 | 20.97 µs | 5.24 µs | 1.31 µs |
+| 128 | 7 | 41.94 µs | 10.49 µs | 2.62 µs |
+| 256 | 8 | 83.89 µs | 20.97 µs | 5.24 µs |
+
+结论：在“窗口随 S 放大”这一（错误）假设下，S 从 16 每翻一倍，一次错配的 RTT 偏差就线性翻倍；到 S=256 已达 21 µs（100G）/84 µs（25G），是 S=16 的 16 倍。**这正是不能把窗口做成 ±S 的量化依据**——S 越大越不能用跨代窗口。真正要放大 S 的理由见 10.2（覆盖在飞包，避免覆盖→miss），见 §11 的实测 ok/total。
+
+## 11. 中间档 S（16→32→64→128→256）实测 ok/total（220+111 实跑，exact-match）
+
+> 与 §7.4 的关键区别：**§7.4 用的是 ±16 窗口版（会“近似匹配”）；本节用精确匹配 `stored_id==psn_now`（与 Fix/论文一致）**，所以大 S 下 match% 更低但 RTT 更准（见 11.4、§12）。两者都 single-bucket。
+
+### 11.1 方法（真实脚本 `/tmp/gscc_sweep.sh`、`/tmp/build_one.sh`、`/tmp/deploy_one.sh`）
+- 版本：single-bucket（`GS_RTT_BUCKET_MASK=0`，同 IP 对的所有流落 **1 个桶**），`index = psn[S-1:0]`，`GS_RTT_TABLE_SIZE = max(4096, 2^S)`；把 WIN2 判定由 `d∈{0,±16..}` 改为 **`d==0`（精确）**。
+- 档位：S = 16/32/64/128/256（slot bits 4/5/6/7/8）。
+- 每档：编译→cp 到 `/tmp/build-coal`→重启 `ctrl`（内部拉起 bf_switchd，日志 `bf_switchd 初始化成功` / `GSCC 控制面启动成功`）→ Q=1/2/4/8/16/32/64/128 依次 `ib_write_bw -d mlx5_0 -F -n 40000 -s 65536 10.99.2.1`（server `mlx5_2` 后台）。
+- 计数：每次打流后 sleep 6，读 `K-HIST(C-HW dc0)`；对累计值做 **Δ 差分**，`match% = Δrtt_ok / Δack_total`。所有 run `rc=0`、线速 ~11034 MiB/s、`fail_zero=0`（时间戳通路正常，失配全部是 `fail_psn` 槽碰撞）。
+
+### 11.2 实测 match%（ok/total），exact-match，单桶
+
+| S（槽） | bits | q1 | q2 | q4 | q8 | q16 | q32 | q64 | q128 |
+|---|---|---|---|---|---|---|---|---|---|
+| 16  | 4 | 98.42 | 99.78 | 99.61 | 90.81 | 91.90 | 90.83 | 83.89 | 37.84 |
+| 32  | 5 | 100 | 99.57 | 99.80 | 99.57 | 94.00 | 92.71 | 75.63 | 49.32 |
+| 64  | 6 | 100 | 100 | 99.87 | 99.70 | 98.27 | 98.81 | 81.87 | 40.61 |
+| 128 | 7 | 100 | 100 | 99.99 | 99.84 | 98.94 | 99.19 | 96.95 | 66.94 |
+| 256 | 8 | 100 | 100 | 99.99 | 100 | 99.88 | 98.23 | 92.58 | 88.59 |
+
+（Δack_total 各档量级一致：q1≈42.5k、q128≈7.3M；恒有 `rtt_ok + fail_psn = ack_total`、`fail_zero≈0`。原始逐点 `S,Q,ack,ok,fail_psn,fail_zero,rc,bw` 见 `expr-p4/ack/sweep_s16_256.csv`。）
+
+### 11.3 解读
+1. **q1**：16 槽 98.42%（≈1.6% 被覆盖丢失），≥32 槽 100% → 本床单流在飞的“采样包”只需十几槽，**≥32 槽即可全覆盖**。
+2. **q≤4**：各档 ≥99.6%；**q≤32** 时 128/256 槽仍 ≥99%。
+3. **分水岭在 q≥64**：q64 时 128 槽 96.95%、256 槽 92.6%；q128 急剧下滑：16 槽 37.8%、32 槽 49.3%、64 槽 40.6%、128 槽 66.9%、256 槽 ~89%。
+4. **q128 对 QP 起动相位极敏感**（128 条 QP 同时建立→PSN 同步→最坏碰撞）：256 槽实测 4 次为 88.6 / 90.0 / 89.2 / 93.6%，故 q128 应读作 **~89–94% 区间**，不是单点；q64 在 256 槽很稳（92.6/92.7/92.8%）。个别 q8/q64 点（如 S=16 q64=83.9 反而 > S=32 q64=75.6）也是相位/别名抖动，趋势以 q≤32 与 q128 下包络为准。
+5. **结论**：单桶（IP 对哈希）下 **S 越大 ok/total 越高**；≤32 流 128 槽已够；**128 流要 ~90% 需 256 槽（8bit），要 ~100% 仍需 ≥14bit（16384 槽）**（与 §7.6 一致）。
+
+### 11.4 与 §7.4 的口径差异（重要：match% 高≠RTT 准）
+§7.4 的 256 槽行（q64=99.68、q128=96.73）是 **±16 窗口版**；本表是 **精确匹配**。同一 256 槽、同一 `-n 40000 -s 65536`，直接对比（均为本次新跑）：
+
+| S=256 配置 | q64 | q128 |
+|---|---|---|
+| 精确 `d==0`（本表 / Fix / 论文） | **92.6–92.8%** | **88.6–93.6%** |
+| ±16 窗口（复跑复现 §7.4） | **96.5–99.9%** | **96.5–98.6%** |
+
+窗口把 match 拉高 **4–8 个百分点**，代价是“多出来的匹配”其偏差 `d∈[±1..16]` **并非零偏差**（把近似/聚合/相邻的 ACK 当原始包）→ RTT 被污染（100G 下 16 包≈1.3 µs；S 越大跨代误差越大，见 §10）。**这正是 §12 的“匹配 vs 丢弃”命题：论文选择丢弃。**
+## 12. “差一点的 ACK 要不要硬匹配？”——论文（GRC, ICNP'26）的答案
+
+问题：当 ACK 的 PSN 与槽里存的值不是精确相等、只“差一点”（例如同槽的相邻一代），我们该尝试把它匹配上（估一个 RTT），还是直接丢弃？
+
+论文的做法（Algorithm 1 "Update Delay Entry" + §III/§V）明确：**宁可丢弃，也不误配**。三条依据：
+
+**1) 写入侧：槽被“不同 packet”占用时不覆盖、不刷新（新采样直接放弃）**
+
+Algorithm 1（论文原文）：
+```
+1: index ← hash(newPkt.5Tuple)×16 + hash(newPkt.seq) mod 16
+2: if now − table[index].ts > Timeout then
+3:     table[index].ts ← now
+4:     table[index].identifier ← hash(newPkt)
+5: else if table[index].identifier = hash(newPkt) then
+6:     table[index].ts ← now        // 同一 packet 的重传副本：刷新时间戳
+7: end if                           // 不同 packet 且未超时：什么都不做（丢弃新包）
+```
+即：只有“空/超时”才写入；“同一 packet（identifier 相同，重传副本）”才刷新；**遇到不同 packet 就放弃这个新采样、绝不覆盖**。这样旧 packet 的 ACK 之后回来仍能对上自己的 identifier，不会被顶掉而同槽误配。
+
+**2) 读出侧：ACK 到达时用 compact identifier 核对，不符即丢弃该样本**
+
+论文：“Each sampled packet is hashed to an entry containing a timestamp and a **compact identifier derived from its 5-tuple and sequence number**, which **distinguishes different packets mapped to the same entry**. Upon ACK arrival, the monitor retrieves the corresponding entry to compute RTT …” —— identifier 不符（槽已被别的包占用）就不算样本、不更新 RTT。
+
+§V：“While entry collisions can be frequent, **packet identifiers prevent erroneous matches**. With the 24-bit identifier …, the probability of an erroneous match is **below 0.03% per epoch** … further mitigated by **averaging RTT samples within each epoch**.”
+
+**3) 即便已算出 RTT，异常小的也丢弃**
+
+“A rarer case is spurious retransmission … This may produce an unrealistically small RTT sample. To avoid this, GRC **discards RTT samples that are more than one RTO below the current RTT estimate**.”
+
+**为什么是“丢弃”而不是“硬匹配”？** RTT 直接喂给速率环：Algorithm 2 `queueDelay ← newRTT − baseRTT`、`targetRate ← w/(δ·queueDelay)`。一个被误配（偏小）的 RTT 会让 queueDelay→0、targetRate 爆炸 → refRate 冲高 → 反而制造丢包；而丢一个样本只是少一个平均点。论文靠“采样量（1024 表项/6-DC 即每 epoch 数十个样本）+ epoch 内平均”保覆盖，不靠“抢救每个 ACK”。结论：**精度优先，模糊即丢**。
+
+**对两条实现路线的判决**
+- **Fix（精确匹配 `stored_id == psn_now`，不同即 miss、不更新）＝ 与论文完全一致。** ✅
+- **实验版 ±1/±16 窗口“接受 d∈{0,±16}”＝ 恰好是论文反对的方向**（把不同 packet 当同一个），会引入跨代误配；与“宁可丢也不误配”相反。❌ 这也是 §10 的结论：窗口只能停留在 S=16 的“一代容错”，S 放大后必须退回精确匹配。
+
+**保真度提醒（建议改）**：论文 identifier = `hash(5-tuple + seq)`（含流标识）；我们 P4 的 `stored_id` 只存了 **PSN**。当多条 QP 共用同一 IP-对桶（sport 不同但被忽略）且 PSN 相同时，PSN-only identifier 仍可能跨 QP 误配——且这种误配会计入 `rtt_ok`、**不被计为 fail，属“静默错误”**。要完全对齐论文，identifier 应并入流标识（如 sport 低位 / QP 号）；否则在“多 QP 同 IP 对”场景下需把这部分当已知近似。
