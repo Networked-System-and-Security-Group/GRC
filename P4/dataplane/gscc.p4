@@ -5,6 +5,7 @@
 
 // Assuming these files contain the necessary header and constant definitions
 #include "header.p4"
+#include "testbed.p4"
 #include "util.p4"
 
 #define REGISTER_SIZE 1024
@@ -214,8 +215,8 @@ control gs_Ingress(
         }
         size = GS_HOST_IF_NUM;
         const entries = {
-            32w0x0a630101: gs_forward(9w392);
-            32w0x0a630201: gs_forward(9w400);
+            GSCC_CLIENT_IPV4: gs_forward(GSCC_CLIENT_PORT);
+            GSCC_SERVER_IPV4: gs_forward(GSCC_SERVER_PORT);
         }
     }
 
@@ -229,8 +230,8 @@ control gs_Ingress(
         }
         size = GS_HOST_IF_NUM;
         const entries = {
-            32w0x0a630101: gs_forward(9w392);
-            32w0x0a630201: gs_forward(9w400);
+            GSCC_CLIENT_IPV4: gs_forward(GSCC_CLIENT_PORT);
+            GSCC_SERVER_IPV4: gs_forward(GSCC_SERVER_PORT);
         }
     }
 
@@ -302,8 +303,8 @@ control gs_Ingress(
         }
         size = 4;
         const entries = {
-            (32w0x0a630101, 32w0x0a630201): gs_set_rtt_tuple_forward();
-            (32w0x0a630201, 32w0x0a630101): gs_set_rtt_tuple_reverse();
+            (GSCC_CLIENT_IPV4, GSCC_SERVER_IPV4): gs_set_rtt_tuple_forward();
+            (GSCC_SERVER_IPV4, GSCC_CLIENT_IPV4): gs_set_rtt_tuple_reverse();
         }
         default_action = gs_set_rtt_tuple_forward();
     }

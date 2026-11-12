@@ -1,0 +1,10 @@
+/controlplane/ctrl
+/dataplane/testbed.p4
+/dataplane/build/
+/experiments/testbed.local.json
+/experiments/readiness.json
+/experiments/builds/
+/experiments/results/
+/experiments/archive/
+__pycache__/
+*.pyc

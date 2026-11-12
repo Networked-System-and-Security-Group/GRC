@@ -1,0 +1,94 @@
+# Unlimited: fixed messages per QP. Rate: duration 5 s. 238 points.
+# n is Write operations, not MTU packets. Every run cold-starts the switch.
+p4:
+- tag: b256-s16-w0-v2
+  buckets: 256
+  slots: 16
+  window: 0
+  desc: 精确匹配基线：256 桶 × 16 槽
+  sweeps:
+  - unlimited
+  - rate
+- tag: b256-s16-w16-v2
+  buckets: 256
+  slots: 16
+  window: 16
+  desc: 窗口 ±16（= 1 代槽）
+  sweeps:
+  - unlimited
+  - rate
+- tag: b256-s16-w32-v2
+  buckets: 256
+  slots: 16
+  window: 32
+  desc: 窗口 ±32（= 2 代槽）
+  sweeps:
+  - unlimited
+- tag: b256-s16-w64-v2
+  buckets: 256
+  slots: 16
+  window: 64
+  desc: 窗口 ±64（= 4 代槽）
+  sweeps:
+  - unlimited
+- tag: b256-s32-w0-v2
+  buckets: 256
+  slots: 32
+  window: 0
+  desc: 精确匹配 32 槽
+  sweeps:
+  - unlimited
+- tag: b256-s64-w0-v2
+  buckets: 256
+  slots: 64
+  window: 0
+  desc: 精确匹配 64 槽
+  sweeps:
+  - unlimited
+- tag: b256-s128-w0-v2
+  buckets: 256
+  slots: 128
+  window: 0
+  desc: 精确匹配 128 槽
+  sweeps:
+  - unlimited
+sweeps:
+  unlimited:
+    iters:
+    - 40000
+    - 400000
+    flows:
+    - 1
+    - 2
+    - 4
+    - 8
+    - 16
+    - 32
+    - 64
+    size: 65536
+  rate:
+    rates_gbps:
+    - 0.2
+    - 0.5
+    - 1
+    - 2
+    - 5
+    - 10
+    - 20
+    - 40
+    - 60
+    - 80
+    flows:
+    - 1
+    - 2
+    - 4
+    - 8
+    - 16
+    - 32
+    - 64
+    size: 65536
+    duration_s: 5
+env:
+  csv: results/duration-measurements.csv
+  rawdir: results/duration-raw
+  settle_s: 1

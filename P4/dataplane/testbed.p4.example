@@ -1,0 +1,5 @@
+// Documentation addresses only. Copy to testbed.p4 and set your own topology.
+#define GSCC_CLIENT_IPV4 32w0xc0000201
+#define GSCC_SERVER_IPV4 32w0xc0000202
+#define GSCC_CLIENT_PORT 9w0
+#define GSCC_SERVER_PORT 9w8

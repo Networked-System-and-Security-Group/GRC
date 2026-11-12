@@ -3,7 +3,7 @@
  *  GSCC / GRC 控制面  ——  作为 bf_switchd 运行
  * ============================================================================
  *
- *  来源：/home/micraow/research/GRC_sort/GRC/P4/controlplane/ctrl.c
+ *  Derived from the GSCC control plane.
  *
  *  本文件相对原版的全部改动（每一处都在注释里标了 [FIX-n]）：
  *
@@ -41,14 +41,13 @@
  *        -ldriver -lbf_switchd_lib -lpipe_mgr -ltraffic_mgr -lpthread -lm
  *
  *  运行：
- *    GSCC_CONF=/root/gscc-p4/build-hw2/gscc.conf \
- *    SDE_INSTALL=/sde/bf-sde-9.7.1/install \
+ *    GSCC_CONF="$YOUR_SWITCHD_CONF" \
+ *    SDE_INSTALL="$YOUR_SDE_INSTALL" \
  *    ./ctrl
  * ============================================================================
  */
 
 #include "headers.h"
-#include "switch_config.h"
 
 #include <pthread.h>
 #include <signal.h>
@@ -976,23 +975,24 @@ void gscc_print_status(void) {
 
 /* ================ [FIX-13] 端口 bring-up ================ */
 /*
- * bf_switchd 的板级自动 port-add 用的是平台默认的速度/FEC，
- * 我们的 100G 面板口（dev_port 392 / 400，都在 pipe 3）需要
- * 100G + RS FEC 才能起来。
- *
- * 端口列表用环境变量 GSCC_PORTS 覆盖，默认 "392,400"。
+ * Add the operator-specified ports using the experiment's 100G RS-FEC setup.
  */
 static void port_setup(void) {
-    const char *env = getenv("GSCC_PORTS");
-    const char *ports_str = (env != NULL && env[0] != '\0') ? env : "392,400";
+    const char *ports_str = getenv("GSCC_PORTS");
+    if (ports_str == NULL || ports_str[0] == '\0') {
+        fprintf(stderr, "Set GSCC_PORTS to the comma-separated Tofino device ports\n");
+        exit(1);
+    }
     char *dup = strdup(ports_str);
     char *tok = strtok(dup, ",");
 
     while (tok != NULL) {
-        long dp = strtol(tok, NULL, 10);
-        if (dp <= 0) {
-            tok = strtok(NULL, ",");
-            continue;
+        char *end;
+        long dp = strtol(tok, &end, 10);
+        if (end == tok || *end != '\0' || dp < 0 || dp >= 512) {
+            fprintf(stderr, "Invalid Tofino device port: %s\n", tok);
+            free(dup);
+            exit(1);
         }
         bf_status_t sts = bf_pal_port_add(dev_tgt->dev_id, (bf_dev_port_t)dp,
                                           BF_SPEED_100G,
