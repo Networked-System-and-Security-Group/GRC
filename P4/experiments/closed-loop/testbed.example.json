@@ -1,0 +1,15 @@
+{
+  "switch_ssh": "",
+  "traffic_ssh": "",
+  "switch_work": "",
+  "traffic_work": "",
+  "sde": "",
+  "sde_install": "",
+  "switchd_conf": "",
+  "bfrt_python": "",
+  "bfrt_pythonpath": [],
+  "endpoints": {
+    "client": {"device": "", "interface": "", "ip": "", "switch_port": null},
+    "server": {"device": "", "interface": "", "ip": "", "switch_port": null}
+  }
+}

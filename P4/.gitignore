@@ -6,5 +6,9 @@
 /experiments/builds/
 /experiments/results/
 /experiments/archive/
+/experiments/closed-loop/testbed.local.json
+/experiments/closed-loop/p4/testbed.p4
+/experiments/closed-loop/builds/
+/experiments/closed-loop/results/
 __pycache__/
 *.pyc

@@ -1,4 +1,7 @@
-# GSCC ACK/PSN experiments
+# GSCC ACK/PSN window baseline
+
+For experiments where the identifier-based sampler drives feedback, use the
+[closed-loop implementation](closed-loop/) with its own controller and runner.
 
 This directory contains the instrumented Tofino2 data plane and controller,
 a parameter matrix, a Python runner, and a C shim that holds the RDMA QPs at

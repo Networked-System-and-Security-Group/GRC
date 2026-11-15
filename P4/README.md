@@ -2,7 +2,7 @@
 
 - [dataplane/](dataplane/): the GSCC data plane with exact PSN matching.
 - [controlplane/](controlplane/): the controller for that data plane.
-- [experiments/](experiments/): the separately instrumented ACK/PSN experiment and its runner. Its P4 program and controller must be built and used together.
+- [experiments/](experiments/): hardware experiment code. The [PSN window baseline](experiments/) and the [identifier-based closed loop](experiments/closed-loop/) each have their own matching P4 program, controller, and runner.
 
 ## Build the algorithm implementation
 
