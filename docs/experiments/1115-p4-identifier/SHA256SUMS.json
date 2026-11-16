@@ -1,0 +1,19 @@
+{
+  "audited_trials.csv": "e4ade4e638b92ff54aa9f94d9dfd131d4bd49bc27be9f988b3ee8978b1c31de1",
+  "commands.sh": "3b82076c418487ccca3dab78b26a0901f007305d6fc75001426943d076443096",
+  "completion.json": "d23c0f1af4f56e60f1a05c2fa18a3869fefd3d2efc1c30941aa85ba028904f4d",
+  "detailed-report.zh-CN.md": "fb2ebe00e2e12e42c909107cdc7dadeb8ea4af26f51670ac9697726d17d0ec7f",
+  "figures/flow_hit_zh.pdf": "00e8c3e232ff77eb21519b190917db02a27ba14f2aa77fb6a47e1252ec0ddb5c",
+  "figures/flow_hit_zh.png": "beac68ca48765d55103c114d19153e1046d0a064695196decf88f202dbb28423",
+  "figures/flow_hit_zh.svg": "ca460c3b473913a04dffa85e7d7b679050642b7eef74ebb0c897a8aa7c10201e",
+  "figures/legacy_exact_zh.pdf": "9727ca06ecdc5e5141200af70abf14bf3c908f11e98ace244cf0c73f1f1c94f3",
+  "figures/legacy_exact_zh.png": "1f6116abc7edcf1e675805461a287ed1b48a25e470b42d644cdb497268aa2807",
+  "figures/legacy_exact_zh.svg": "df4ff711b3e697786f7bc0898bee829d59c5291cb32cc96640270cf4d41022e2",
+  "figures/mechanism_comparison_zh.pdf": "6bf685c7e5069c8be37b29ef6c7be074befc997fe3f7b83b43fb2ca48a50fe34",
+  "figures/mechanism_comparison_zh.png": "18100a90d1201becb983f38d173ae35a6ba184bf6405aaffa935aea538b4f9f5",
+  "figures/mechanism_comparison_zh.svg": "393e973a9214aafddba98ee2b48ab44100dd3a9de33c2629dce53bf5538dc362",
+  "profile.json": "2419e129b9ffa675242b17b2c4aa170c07ab0a2a77fe042b2f1242e76fe66c96",
+  "rejected.json": "5d9e16aabfdcc4a86e86ef4a0698ef283249ea768cb8ddfd22a772f3bc9461c9",
+  "report.md": "167bf4a77973b6c046d375b541b779f73646539956314a8a8afc1a0a3416398c",
+  "summary.csv": "beab80baa28f1113e236cf7d23bbed1f94c86545258c90d93977f3b21a88410d"
+}

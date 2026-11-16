@@ -1,0 +1,16 @@
+{
+  "valid_trials": 294,
+  "invalid_attempts": 9,
+  "cells": 98,
+  "expected_cells": 98,
+  "repetition_counts": {
+    "3": 98
+  },
+  "background_trials": 255,
+  "script_bundles": [
+    "1dc815059aa1360eb4e409415b76aecc07ef80e6875d0631c50ce7b5090b43e4"
+  ],
+  "qualified_builds": 7,
+  "source_archives_verified": true,
+  "plan_membership_verified": true
+}

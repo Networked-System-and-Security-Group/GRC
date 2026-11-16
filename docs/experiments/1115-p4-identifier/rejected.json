@@ -1,0 +1,73 @@
+[
+  {
+    "path": "expr-p4-identifier-seqhash/results/paper-identifier-repeat-20261115/raw/paper-s128-w0-r1/ffcd5d352390426ab62f8c7282939f8c/trial.json",
+    "issues": [
+      "NIC/switch counts disagree: mlx5_0/hw_counters/rp_cnp_handled"
+    ]
+  },
+  {
+    "path": "expr-p4-identifier-seqhash/results/paper-identifier-repeat-20261115/raw/paper-s16-w0-r1/4cdc6f390a434c7d9a6102c29773ef0b/trial.json",
+    "issues": [
+      "Host/IPv6/physical background counts disagree: mlx5_2/tx_packets",
+      "NIC/switch counts disagree: mlx5_2/physical/tx_packets_phy",
+      "NIC/switch counts disagree: mlx5_0/physical/rx_packets_phy"
+    ]
+  },
+  {
+    "path": "expr-p4-identifier-seqhash/results/paper-identifier-repeat-20261115/raw/paper-s16-w32-r1/4129c7999f814868bc1ce725ea50409d/trial.json",
+    "issues": [
+      "Host/IPv6/physical background counts disagree: mlx5_0/tx_packets",
+      "Host/IPv6/physical background counts disagree: mlx5_2/tx_packets",
+      "NIC/switch counts disagree: mlx5_0/hw_counters/rp_cnp_handled",
+      "NIC/switch counts disagree: mlx5_0/physical/tx_packets_phy",
+      "NIC/switch counts disagree: mlx5_2/physical/tx_packets_phy"
+    ]
+  },
+  {
+    "path": "expr-p4-identifier-seqhash/results/paper-identifier-repeat-20261115/raw/paper-s16-w32-r1/45c74a56f56f460988aecee435618a87/trial.json",
+    "issues": [
+      "NIC/switch counts disagree: mlx5_0/hw_counters/rp_cnp_handled"
+    ]
+  },
+  {
+    "path": "expr-p4-identifier-seqhash/results/paper-identifier-repeat-20261115/raw/paper-s16-w32-r1/847ad64c0b1c4f4f819892ac43caddc1/trial.json",
+    "issues": [
+      "Host/IPv6/physical background counts disagree: mlx5_0/tx_packets",
+      "Host/IPv6/physical background counts disagree: mlx5_2/tx_packets",
+      "NIC/switch counts disagree: mlx5_0/physical/tx_packets_phy",
+      "NIC/switch counts disagree: mlx5_2/physical/tx_packets_phy"
+    ]
+  },
+  {
+    "path": "expr-p4-identifier-seqhash/results/paper-identifier-repeat-20261115/raw/paper-s32-w0-r1/281d46cd137149d7b68acdc9e6f38d6d/trial.json",
+    "issues": [
+      "NIC/switch counts disagree: mlx5_0/hw_counters/rp_cnp_handled"
+    ]
+  },
+  {
+    "path": "expr-p4-identifier-seqhash/results/paper-identifier-repeat-20261115/raw/paper-s32-w0-r1/6bc04b0784e545e38982886bac6f0c4f/trial.json",
+    "issues": [
+      "Host/IPv6/physical background counts disagree: mlx5_0/tx_packets",
+      "Host/IPv6/physical background counts disagree: mlx5_2/tx_packets",
+      "NIC/switch counts disagree: mlx5_0/physical/tx_packets_phy",
+      "NIC/switch counts disagree: mlx5_2/physical/tx_packets_phy"
+    ]
+  },
+  {
+    "path": "expr-p4-identifier-seqhash/results/paper-identifier-repeat-20261115/raw/paper-s64-w0-r1/bbb1f26cf4e54727b09620d77c9cd64d/trial.json",
+    "issues": [
+      "NIC/switch counts disagree: mlx5_0/hw_counters/rp_cnp_handled"
+    ]
+  },
+  {
+    "path": "expr-p4-identifier-seqhash/results/paper-identifier-repeat-20261115/raw/paper-s64-w0-r1/e1190cf605c547a2894ff62a7a160647/trial.json",
+    "issues": [
+      "traffic process/parse failed",
+      "missing/foreign exact CNP map",
+      "installed CNP map differs from endpoint QPs",
+      "observed Write count differs from expected (background/retry/loss/setup packets)",
+      "no positive ACK or AckReq samples",
+      "NIC/switch counts disagree: mlx5_2/hw_counters/rx_write_requests"
+    ]
+  }
+]
