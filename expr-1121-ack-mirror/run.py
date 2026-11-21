@@ -35,7 +35,8 @@ def run(case, seed):
                           "delay": f"{delay_us}us", "loss": 0.0})
     flows = [(src, dst, pg, size * base.MIB, start) for src, dst, pg, _, start in flows]
     base.run(name, seed, tag=f"am1121-{case}", inputs=(topo, flows), overrides=(
-        f"WAN_ACK_MIRROR={int(enabled)}", f"GSCC_ACK_TS={'TRUE' if timestamp else 'FALSE'}"))
+        f"WAN_ACK_MIRROR={int(enabled)}", f"GSCC_ACK_TS={'TRUE' if timestamp else 'FALSE'}",
+        "EARLIEST_STOP_SECONDS=2.010" if size == 2 else "EARLIEST_STOP_SECONDS=2.100"))
 
 
 if __name__ == "__main__":

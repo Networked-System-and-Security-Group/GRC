@@ -565,7 +565,10 @@ void stop_simulation_middle() {
     bool rdma_done = (Settings::cnt_finished_flows >= target_flow_num);
     bool tcp_done = (tcp_finished_flows >= tcp_flow_num);
     bool time_over = (Simulator::Now() > Seconds(flowgen_stop_time + simulator_extra_time));
-    bool required_flows_done = rdma_done && (!wait_tcp_completion || tcp_done);
+    // Let measurement-only traffic drain after the last transport flow if requested.
+    static const Time earliest_stop = Seconds(std::stod(Settings::GetRawParam("EARLIEST_STOP_SECONDS", "0")));
+    bool required_flows_done = rdma_done && (!wait_tcp_completion || tcp_done) &&
+                               Simulator::Now() >= earliest_stop;
     if (required_flows_done || time_over) {
         const char* stop_reason = required_flows_done
                                       ? (wait_tcp_completion ? "RDMA and TCP completed"
