@@ -5,7 +5,6 @@ import subprocess
 import os
 import time
 from xmlrpc.client import boolean
-import numpy as np
 import copy
 import shutil
 import random

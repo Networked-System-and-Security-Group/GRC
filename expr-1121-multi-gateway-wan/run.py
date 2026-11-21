@@ -125,10 +125,10 @@ def run(name, seed, inputs_only=False, *, overrides=(), tag=None, inputs=None):
         args += ["--extra", "WAN_TRACE_RTT_MATCH=1"]
     for override in overrides:
         args += ["--extra", override]
-    output = subprocess.run(args, check=True, text=True, stdout=subprocess.PIPE,
-                            stderr=subprocess.STDOUT).stdout
+    process = subprocess.run(args, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    output = process.stdout
     match = re.search(r"(/[^\n']+/mix/output/\[\d+\][^\n']+)/config\.txt", output)
-    if not match or "Simulator is enforced to be finished" not in output:
+    if process.returncode or not match or "Simulator is enforced to be finished" not in output:
         raise RuntimeError(output[-6000:])
     print(f"{name},seed={seed},{match.group(1)}", flush=True)
 
