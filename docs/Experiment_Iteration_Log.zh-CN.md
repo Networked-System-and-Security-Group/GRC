@@ -2,6 +2,7 @@
 
 | 实验 | 目的 | 内容 | 结论 | 索引 |
 |---|---|---|---|---|
+| `expr-1121-ack-mirror`（服务器 107–119，已完成） | 测双网关 ACK 镜像恢复、开销和更新时机 | CERNET 派生拓扑，比较同网关和跨网关回程、镜像开关、2 µs/1.2 ms 镜像延迟 | 短流全跨网关样本从 0 恢复到 60，副本字节约占数据载荷 0.152%；长流慢镜像少采 51 个样本，且推迟 1–2 轮更新 | [详细报告](../expr-1121-ack-mirror/report.md) |
 | `expr-1121-multi-gateway-wan`（94–107，已完成） | 验证跨网关 ACK 配对、双网关共享瓶颈、WAN 多路径三个审稿场景 | 基于 CERNET 固定数据和 ACK 路径，对照回程归属、同 DC 网关数量及直达路背景负载 | 60 个已写表候选在同网关、半数跨网关和全部跨网关下分别得到 60/30/0 个样本；双网关提高瓶颈吞吐并加深队列；仅直达路拥塞时，经天津的吞吐下降约 37% | [详细报告](experiments/1121-multi-gateway-wan/report.md) |
 | `expr-0810-tcp-rdma-queue-coexist`（335/336） | 比较 TCP q1 与 TCP/RDMA 共用 q3 的共存效果 | 在 `cernet_topo`、相同 RDMA/TCP 负载和固定随机种子下，统计 RDMA/TCP FCT、slowdown、CNP、buffer、链路和丢包 | 336 共用 q3 的 RDMA 平均 FCT/slowdown 较低约 2.11%/4.41%，TCP 已完成流平均 FCT 略高 0.22%；两组均有 8 条 TCP 流未完成，不能据此推广为普遍优劣 | [`expr-0810-tcp-rdma-queue-coexist/report.md`](../expr-0810-tcp-rdma-queue-coexist/report.md) |
 | `expr-0810-tcp-rdma-queue-coexist`（337/338） | 在较高 `w-dynamic-150-200` 负载下复比较 TCP q1 隔离与 q3 共用 | 使用 `w-dynamic-150-200` + `w-tcp-300`，统计 38,156 条 RDMA 和 10,989 条 TCP 的 FCT、slowdown、丢包、CNP、buffer 与链路 | 338 共用 q3 的 RDMA 平均 FCT/slowdown 较低 9.28%/12.63%，ingress 丢包减少 34.76%；两组各有 9 条 TCP 流未完成，且 DCI egress 峰值增加 90.96%，结论限定于单次固定种子 | [`expr-0810-tcp-rdma-queue-coexist/report.md`](../expr-0810-tcp-rdma-queue-coexist/report.md#11-第二轮实验w-dynamic-150-200337338) |

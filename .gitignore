@@ -35,4 +35,6 @@ expr*
 !/expr-1121-multi-gateway-wan/analyze.py
 !/expr-1121-multi-gateway-wan/report.md
 !/expr-1121-ack-mirror/
+/expr-1121-ack-mirror/tmux-*.log
+/expr-1121-ack-mirror/*.exit
 venv/*

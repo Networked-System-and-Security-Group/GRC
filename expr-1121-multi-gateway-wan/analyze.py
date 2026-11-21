@@ -166,42 +166,85 @@ def analyse(run_id):
     return result, traces
 
 
+def save_svg(fig, path):
+    fig.savefig(path, metadata={"Date": None})
+    path.write_text("\n".join(line.rstrip() for line in path.read_text().splitlines()) + "\n")
+    plt.close(fig)
+
+
 def plot(runs, output):
-    rate_runs = [(result, traces) for result, traces in runs if result["case"].startswith("rate-")]
-    if rate_runs:
-        figure, axes = plt.subplots(3, 1, figsize=(8, 7), sharex=True, layout="constrained")
-        for result, traces in rate_runs:
-            tag = result["case"]
-            axes[0].plot(traces["link"], label=tag)
-            axes[1].plot(traces["queue"], label=tag)
-            for key, value in traces.items():
-                if key.startswith("ref ") and tag in ("rate-one", "rate-two"):
-                    axes[2].plot(value, label=f"{tag} / {key}")
-        for axis, label in zip(axes, ("Link throughput (Gb/s)", "WAN queue (MiB)", "Reference rate (Gb/s)")):
-            axis.set(ylabel=label, xlim=(0, 115))
-            axis.axvline(15, color="grey", ls="--", lw=0.8)
-            axis.legend(fontsize=8, ncols=2)
-        axes[-1].set_xlabel("Time since first flow start (ms)")
-        figure.savefig(output / "shared-bottleneck.svg")
-        plt.close(figure)
-    path_runs = [(result, traces) for result, traces in runs if result["case"] in ("path-both", "path-busy")]
-    if path_runs:
-        figure, axes = plt.subplots(3, 1, figsize=(8, 7), sharex=True, layout="constrained")
-        for result, traces in path_runs:
-            tag = result["case"]
-            for key in ("short RDMA", "long RDMA", "background"):
-                if not traces[key].empty:
-                    axes[0].plot(traces[key], label=f"{tag} / {key}")
-            for key in ("short queue", "long queue", "long second hop queue", "destination access queue", "source access queue"):
-                axes[1].plot(traces[key], label=f"{tag} / {key}")
-            axes[2].plot(traces["ref 36"], label=tag)
-        for axis, label in zip(axes, ("Path throughput (Gb/s)", "Egress queue (MiB)", "Reference rate (Gb/s)")):
-            axis.set(ylabel=label, xlim=(0, 50))
-            axis.axvline(25, color="grey", ls="--", lw=0.8)
-            axis.legend(fontsize=8, ncols=2)
-        axes[-1].set_xlabel("Time since first flow start (ms)")
-        figure.savefig(output / "two-paths.svg")
-        plt.close(figure)
+    plt.rcParams.update({"font.family": ["Source Han Sans CN", "DejaVu Sans"], "svg.hashsalt": "cernet1121"})
+    colors = ("#0072B2", "#D55E00", "#009E73", "#CC79A7", "#49348E")
+    styles = ("-", "-", "--", ":", "-.")
+    scenarios = {
+        "rate-one": "同一 DC · 1 个网关",
+        "rate-two": "同一 DC · 2 个网关",
+        "rate-two-dc": "两个 DC · 各 1 个网关",
+        "rate-one-weighted": "同一 DC · 1 个网关（自适应权重）",
+        "rate-two-weighted": "同一 DC · 2 个网关（自适应权重）",
+    }
+    grouped = {result["case"]: (result, traces) for result, traces in runs}
+    if grouped.keys() & scenarios.keys():
+        fig, axes = plt.subplots(3, 1, figsize=(9.1, 8.9), sharex=True)
+        fig.subplots_adjust(left=.13, right=.97, top=.79, bottom=.10, hspace=.43)
+        fig.suptitle("多个网关共用一条 WAN 瓶颈链路", x=.13, ha="left", y=.984, fontsize=18)
+        fig.text(.13, .933, "CERNET 呼和浩特 → 北京  |  名义容量 200 Gb/s  |  两批流量各 4 条长流", fontsize=11)
+        for i, (case, label) in enumerate(scenarios.items()):
+            if case not in grouped:
+                continue
+            _, traces = grouped[case]
+            style = dict(color=colors[i], ls=styles[i], lw=1.65)
+            axes[0].plot(traces["link"], label=label, **style)
+            axes[1].plot(traces["queue"], **style)
+            if case == "rate-one":
+                axes[2].plot(traces["ref 147"], label="单网关组：唯一网关", **style)
+            if case == "rate-two":
+                axes[2].plot(traces["ref 147"], label="双网关组：第一网关", **style)
+                axes[2].plot(traces["ref 327"], color=colors[i], ls="--", lw=1.65,
+                             label="双网关组：第二网关")
+        fig.legend(*axes[0].get_legend_handles_labels(), loc="upper left", bbox_to_anchor=(.12, .91),
+                   ncol=2, frameon=False, fontsize=10)
+        for axis, title, unit in zip(axes, ("链路实际发出了多少数据", "链路发送前积压了多少数据",
+                                           "网关给自己负责的流量设定的参考速率（固定权重组）"),
+                                    ("吞吐（Gb/s）", "积压（MiB）", "参考速率（Gb/s）")):
+            axis.set(xlim=(0, 115), ylim=(0, None), ylabel=unit)
+            axis.set_title(title, loc="left", fontsize=11)
+            axis.grid(axis="y", alpha=.19)
+            axis.axvline(15, color="#777777", ls="--", lw=.9)
+        axes[0].axhline(200, color="#555555", lw=.7, alpha=.5)
+        axes[0].text(15.6, 17, "第二批流开始", fontsize=9, color="#555555")
+        axes[2].legend(loc="upper right", fontsize=9, frameon=False)
+        axes[2].set_xlabel("从第一批流开始算起的时间（ms）")
+        fig.text(.13, .025, "未注明的组固定权重为 1。发送时间取整使饱和吞吐读数略高于名义容量。", fontsize=9)
+        save_svg(fig, output / "shared-bottleneck.svg")
+    if {"path-both", "path-busy"} <= grouped.keys():
+        fig, axes = plt.subplots(3, 1, figsize=(9.1, 8.0), sharex=True)
+        fig.subplots_adjust(left=.13, right=.97, top=.81, bottom=.10, hspace=.43)
+        fig.suptitle("去同一目的地的两条路共用一个参考速率", x=.13, ha="left", y=.984, fontsize=18)
+        fig.text(.13, .927, "CERNET 北京 → 石家庄  |  只给直达路加背景流量", fontsize=11)
+        for case, label, ls in (("path-both", "无背景流量", "--"), ("path-busy", "有背景流量", "-")):
+            _, traces = grouped[case]
+            for key, route, color in (("short RDMA", "直达", colors[0]), ("long RDMA", "经天津", colors[1])):
+                axes[0].plot(traces[key], color=color, ls=ls, lw=1.7, label=f"{route} · {label}")
+            if case == "path-busy":
+                axes[1].plot(traces["short queue"], color=colors[0], lw=1.7, label="直达链路")
+                detour = traces["long queue"].combine(traces["long second hop queue"], max)
+                axes[1].plot(detour, color=colors[1], ls="--", lw=1.7, label="经天津两段中积压较大的一段")
+            axes[2].plot(traces["ref 36"], color=colors[4], ls=ls, lw=1.7, label=label)
+        fig.legend(*axes[0].get_legend_handles_labels(), loc="upper left", bbox_to_anchor=(.12, .903),
+                   ncol=2, frameon=False, fontsize=10)
+        for axis, title, unit in zip(axes, ("两条路上的实验流吞吐", "加入背景流后的骨干出端口积压",
+                                           "北京网关为去石家庄的所有实验流设定的参考速率"),
+                                    ("吞吐（Gb/s）", "积压（MiB）", "参考速率（Gb/s）")):
+            axis.set(xlim=(0, 50), ylim=(0, None), ylabel=unit)
+            axis.set_title(title, loc="left", fontsize=11)
+            axis.grid(axis="y", alpha=.19)
+            axis.axvline(25, color="#777777", ls="--", lw=.9)
+        axes[0].text(25.5, 6, "直达路加入背景流", fontsize=9, color="#555555")
+        axes[1].legend(loc="upper left", fontsize=9, frameon=False)
+        axes[2].legend(loc="upper left", fontsize=9, frameon=False)
+        axes[2].set_xlabel("从实验流开始算起的时间（ms）")
+        save_svg(fig, output / "two-paths.svg")
 
 
 if __name__ == "__main__":

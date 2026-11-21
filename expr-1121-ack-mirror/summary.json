@@ -1,0 +1,533 @@
+[
+  {
+    "id": 107,
+    "case": "same-off",
+    "finished": 4,
+    "logged_drops": 0,
+    "events": {
+      "write": 60,
+      "occupied": 152,
+      "sample": 60,
+      "miss": 152
+    },
+    "unique_written": 60,
+    "mirror_bytes": 0,
+    "mirror_pct_rdma_payload": 0.0,
+    "peak_mirror_direction_mbps_0p5ms": 0.0,
+    "sample_median_ms": 2.684369,
+    "mirror_delay_median_us": null,
+    "mirror_delay_max_us": null,
+    "mirror_sample_error_max_ns": null,
+    "legacy_without_arrival_stamp_extra_us": null,
+    "epochs_late": {},
+    "first_sample_ms": {
+      "147": 5.367977,
+      "327": 5.567996
+    },
+    "fct_ms_mean": 5.598664499999906,
+    "fct_ms_max": 5.662495999999795,
+    "first_finish_ms": 5.646808999999919,
+    "fct_ms_by_flow": [
+      5.646808999999919,
+      5.662495999999795,
+      5.542678999999939,
+      5.54267399999997
+    ],
+    "active_epochs_with_samples_8_20ms": 0,
+    "gateway_epochs_8_20ms": 6,
+    "mean_ref_gbps_per_gateway_8_20ms": 100.0,
+    "cnp": 13
+  },
+  {
+    "id": 108,
+    "case": "same-on",
+    "finished": 4,
+    "logged_drops": 0,
+    "events": {
+      "write": 60,
+      "occupied": 152,
+      "sample": 60,
+      "miss": 152,
+      "mirror_send": 152,
+      "mirror_miss": 152
+    },
+    "unique_written": 60,
+    "mirror_bytes": 9120,
+    "mirror_pct_rdma_payload": 0.1087188720703125,
+    "peak_mirror_direction_mbps_0p5ms": 74.88,
+    "sample_median_ms": 2.684369,
+    "mirror_delay_median_us": null,
+    "mirror_delay_max_us": null,
+    "mirror_sample_error_max_ns": null,
+    "legacy_without_arrival_stamp_extra_us": null,
+    "epochs_late": {},
+    "first_sample_ms": {
+      "147": 5.367977,
+      "327": 5.567996
+    },
+    "fct_ms_mean": 5.598664499999906,
+    "fct_ms_max": 5.662495999999795,
+    "first_finish_ms": 5.646808999999919,
+    "fct_ms_by_flow": [
+      5.646808999999919,
+      5.662495999999795,
+      5.542678999999939,
+      5.54267399999997
+    ],
+    "active_epochs_with_samples_8_20ms": 0,
+    "gateway_epochs_8_20ms": 6,
+    "mean_ref_gbps_per_gateway_8_20ms": 100.0,
+    "cnp": 13
+  },
+  {
+    "id": 109,
+    "case": "half-off",
+    "finished": 4,
+    "logged_drops": 0,
+    "events": {
+      "write": 60,
+      "occupied": 152,
+      "sample": 30,
+      "miss": 182
+    },
+    "unique_written": 60,
+    "mirror_bytes": 0,
+    "mirror_pct_rdma_payload": 0.0,
+    "peak_mirror_direction_mbps_0p5ms": 0.0,
+    "sample_median_ms": 2.684369,
+    "mirror_delay_median_us": null,
+    "mirror_delay_max_us": null,
+    "mirror_sample_error_max_ns": null,
+    "legacy_without_arrival_stamp_extra_us": null,
+    "epochs_late": {},
+    "first_sample_ms": {
+      "147": 5.367977,
+      "327": 5.567996
+    },
+    "fct_ms_mean": 5.598664499999906,
+    "fct_ms_max": 5.662495999999795,
+    "first_finish_ms": 5.646808999999919,
+    "fct_ms_by_flow": [
+      5.646808999999919,
+      5.662495999999795,
+      5.542678999999939,
+      5.54267399999997
+    ],
+    "active_epochs_with_samples_8_20ms": 0,
+    "gateway_epochs_8_20ms": 6,
+    "mean_ref_gbps_per_gateway_8_20ms": 100.0,
+    "cnp": 13
+  },
+  {
+    "id": 110,
+    "case": "half-on",
+    "finished": 4,
+    "logged_drops": 0,
+    "events": {
+      "write": 60,
+      "occupied": 152,
+      "sample": 30,
+      "miss": 182,
+      "mirror_send": 182,
+      "mirror_miss": 152,
+      "mirror_sample": 30
+    },
+    "unique_written": 60,
+    "mirror_bytes": 10920,
+    "mirror_pct_rdma_payload": 0.13017654418945312,
+    "peak_mirror_direction_mbps_0p5ms": 78.72,
+    "sample_median_ms": 2.684369,
+    "mirror_delay_median_us": 2.004,
+    "mirror_delay_max_us": 2.004,
+    "mirror_sample_error_max_ns": 0,
+    "legacy_without_arrival_stamp_extra_us": 2.004,
+    "epochs_late": {
+      "0": 30
+    },
+    "first_sample_ms": {
+      "147": 5.367977,
+      "327": 5.567996
+    },
+    "fct_ms_mean": 5.598664499999906,
+    "fct_ms_max": 5.662495999999795,
+    "first_finish_ms": 5.646808999999919,
+    "fct_ms_by_flow": [
+      5.646808999999919,
+      5.662495999999795,
+      5.542678999999939,
+      5.54267399999997
+    ],
+    "active_epochs_with_samples_8_20ms": 0,
+    "gateway_epochs_8_20ms": 6,
+    "mean_ref_gbps_per_gateway_8_20ms": 100.0,
+    "cnp": 13
+  },
+  {
+    "id": 111,
+    "case": "cross-off",
+    "finished": 4,
+    "logged_drops": 0,
+    "events": {
+      "write": 60,
+      "occupied": 152,
+      "miss": 212
+    },
+    "unique_written": 60,
+    "mirror_bytes": 0,
+    "mirror_pct_rdma_payload": 0.0,
+    "peak_mirror_direction_mbps_0p5ms": 0.0,
+    "sample_median_ms": null,
+    "mirror_delay_median_us": null,
+    "mirror_delay_max_us": null,
+    "mirror_sample_error_max_ns": null,
+    "legacy_without_arrival_stamp_extra_us": null,
+    "epochs_late": {},
+    "first_sample_ms": {},
+    "fct_ms_mean": 5.598664499999906,
+    "fct_ms_max": 5.662495999999795,
+    "first_finish_ms": 5.646808999999919,
+    "fct_ms_by_flow": [
+      5.646808999999919,
+      5.662495999999795,
+      5.542678999999939,
+      5.54267399999997
+    ],
+    "active_epochs_with_samples_8_20ms": 0,
+    "gateway_epochs_8_20ms": 6,
+    "mean_ref_gbps_per_gateway_8_20ms": 100.0,
+    "cnp": 13
+  },
+  {
+    "id": 112,
+    "case": "cross-on",
+    "finished": 4,
+    "logged_drops": 0,
+    "events": {
+      "write": 60,
+      "occupied": 152,
+      "miss": 212,
+      "mirror_send": 212,
+      "mirror_sample": 60,
+      "mirror_miss": 152
+    },
+    "unique_written": 60,
+    "mirror_bytes": 12720,
+    "mirror_pct_rdma_payload": 0.15163421630859375,
+    "peak_mirror_direction_mbps_0p5ms": 101.76,
+    "sample_median_ms": 2.684369,
+    "mirror_delay_median_us": 2.004,
+    "mirror_delay_max_us": 2.004,
+    "mirror_sample_error_max_ns": 0,
+    "legacy_without_arrival_stamp_extra_us": 2.004,
+    "epochs_late": {
+      "0": 60
+    },
+    "first_sample_ms": {
+      "147": 5.369981,
+      "327": 5.57
+    },
+    "fct_ms_mean": 5.598664499999906,
+    "fct_ms_max": 5.662495999999795,
+    "first_finish_ms": 5.646808999999919,
+    "fct_ms_by_flow": [
+      5.646808999999919,
+      5.662495999999795,
+      5.542678999999939,
+      5.54267399999997
+    ],
+    "active_epochs_with_samples_8_20ms": 0,
+    "gateway_epochs_8_20ms": 6,
+    "mean_ref_gbps_per_gateway_8_20ms": 100.0,
+    "cnp": 13
+  },
+  {
+    "id": 113,
+    "case": "cross-slow",
+    "finished": 4,
+    "logged_drops": 0,
+    "events": {
+      "write": 60,
+      "occupied": 152,
+      "miss": 212,
+      "mirror_send": 212,
+      "mirror_sample": 60,
+      "mirror_miss": 152
+    },
+    "unique_written": 60,
+    "mirror_bytes": 12720,
+    "mirror_pct_rdma_payload": 0.15163421630859375,
+    "peak_mirror_direction_mbps_0p5ms": 101.76,
+    "sample_median_ms": 2.684369,
+    "mirror_delay_median_us": 1200.004,
+    "mirror_delay_max_us": 1200.004,
+    "mirror_sample_error_max_ns": 0,
+    "legacy_without_arrival_stamp_extra_us": 1200.004,
+    "epochs_late": {
+      "1": 60
+    },
+    "first_sample_ms": {
+      "147": 6.567981,
+      "327": 6.768
+    },
+    "fct_ms_mean": 5.598664499999906,
+    "fct_ms_max": 5.662495999999795,
+    "first_finish_ms": 5.646808999999919,
+    "fct_ms_by_flow": [
+      5.646808999999919,
+      5.662495999999795,
+      5.542678999999939,
+      5.54267399999997
+    ],
+    "active_epochs_with_samples_8_20ms": 0,
+    "gateway_epochs_8_20ms": 6,
+    "mean_ref_gbps_per_gateway_8_20ms": 100.0,
+    "cnp": 13
+  },
+  {
+    "id": 114,
+    "case": "roundtrip-fast",
+    "finished": 4,
+    "logged_drops": 0,
+    "events": {
+      "write": 60,
+      "occupied": 152,
+      "miss": 212,
+      "mirror_send": 212,
+      "mirror_sample": 60,
+      "mirror_miss": 152
+    },
+    "unique_written": 60,
+    "mirror_bytes": 12720,
+    "mirror_pct_rdma_payload": 0.15163421630859375,
+    "peak_mirror_direction_mbps_0p5ms": 101.76,
+    "sample_median_ms": 5.360372,
+    "mirror_delay_median_us": 2.004,
+    "mirror_delay_max_us": 2.004,
+    "mirror_sample_error_max_ns": 0,
+    "legacy_without_arrival_stamp_extra_us": 2.004,
+    "epochs_late": {
+      "0": 60
+    },
+    "first_sample_ms": {
+      "147": 5.369981,
+      "327": 5.57
+    },
+    "fct_ms_mean": 5.598664499999906,
+    "fct_ms_max": 5.662495999999795,
+    "first_finish_ms": 5.646808999999919,
+    "fct_ms_by_flow": [
+      5.646808999999919,
+      5.662495999999795,
+      5.542678999999939,
+      5.54267399999997
+    ],
+    "active_epochs_with_samples_8_20ms": 0,
+    "gateway_epochs_8_20ms": 6,
+    "mean_ref_gbps_per_gateway_8_20ms": 100.0,
+    "cnp": 13
+  },
+  {
+    "id": 115,
+    "case": "roundtrip-slow",
+    "finished": 4,
+    "logged_drops": 0,
+    "events": {
+      "write": 60,
+      "occupied": 152,
+      "miss": 212,
+      "mirror_send": 212,
+      "mirror_sample": 60,
+      "mirror_miss": 152
+    },
+    "unique_written": 60,
+    "mirror_bytes": 12720,
+    "mirror_pct_rdma_payload": 0.15163421630859375,
+    "peak_mirror_direction_mbps_0p5ms": 101.76,
+    "sample_median_ms": 5.360372,
+    "mirror_delay_median_us": 1200.004,
+    "mirror_delay_max_us": 1200.004,
+    "mirror_sample_error_max_ns": 0,
+    "legacy_without_arrival_stamp_extra_us": 1200.004,
+    "epochs_late": {
+      "1": 60
+    },
+    "first_sample_ms": {
+      "147": 6.567981,
+      "327": 6.768
+    },
+    "fct_ms_mean": 5.598664499999906,
+    "fct_ms_max": 5.662495999999795,
+    "first_finish_ms": 5.646808999999919,
+    "fct_ms_by_flow": [
+      5.646808999999919,
+      5.662495999999795,
+      5.542678999999939,
+      5.54267399999997
+    ],
+    "active_epochs_with_samples_8_20ms": 0,
+    "gateway_epochs_8_20ms": 6,
+    "mean_ref_gbps_per_gateway_8_20ms": 100.0,
+    "cnp": 13
+  },
+  {
+    "id": 116,
+    "case": "long-same",
+    "finished": 4,
+    "logged_drops": 0,
+    "events": {
+      "write": 288,
+      "occupied": 13136,
+      "sample": 288,
+      "miss": 13136
+    },
+    "unique_written": 288,
+    "mirror_bytes": 0,
+    "mirror_pct_rdma_payload": 0.0,
+    "peak_mirror_direction_mbps_0p5ms": 0.0,
+    "sample_median_ms": 2.684364,
+    "mirror_delay_median_us": null,
+    "mirror_delay_max_us": null,
+    "mirror_sample_error_max_ns": null,
+    "legacy_without_arrival_stamp_extra_us": null,
+    "epochs_late": {},
+    "first_sample_ms": {
+      "147": 5.367977,
+      "327": 5.567996
+    },
+    "fct_ms_mean": 27.14218699999982,
+    "fct_ms_max": 30.914044999999835,
+    "first_finish_ms": 23.37166799999979,
+    "fct_ms_by_flow": [
+      26.154922999999997,
+      28.42811199999984,
+      30.914044999999835,
+      23.0716679999996
+    ],
+    "active_epochs_with_samples_8_20ms": 7,
+    "gateway_epochs_8_20ms": 24,
+    "mean_ref_gbps_per_gateway_8_20ms": 102.546556842,
+    "cnp": 406
+  },
+  {
+    "id": 117,
+    "case": "long-off",
+    "finished": 4,
+    "logged_drops": 0,
+    "events": {
+      "write": 64,
+      "occupied": 13360,
+      "miss": 13424
+    },
+    "unique_written": 64,
+    "mirror_bytes": 0,
+    "mirror_pct_rdma_payload": 0.0,
+    "peak_mirror_direction_mbps_0p5ms": 0.0,
+    "sample_median_ms": null,
+    "mirror_delay_median_us": null,
+    "mirror_delay_max_us": null,
+    "mirror_sample_error_max_ns": null,
+    "legacy_without_arrival_stamp_extra_us": null,
+    "epochs_late": {},
+    "first_sample_ms": {},
+    "fct_ms_mean": 27.551286749999846,
+    "fct_ms_max": 31.274408999999892,
+    "first_finish_ms": 23.77086499999992,
+    "fct_ms_by_flow": [
+      25.96437199999979,
+      29.49550099999998,
+      31.274408999999892,
+      23.47086499999973
+    ],
+    "active_epochs_with_samples_8_20ms": 0,
+    "gateway_epochs_8_20ms": 24,
+    "mean_ref_gbps_per_gateway_8_20ms": 100.0,
+    "cnp": 434
+  },
+  {
+    "id": 118,
+    "case": "long-on",
+    "finished": 4,
+    "logged_drops": 0,
+    "events": {
+      "write": 288,
+      "occupied": 13136,
+      "miss": 13424,
+      "mirror_send": 13424,
+      "mirror_sample": 288,
+      "mirror_miss": 13136
+    },
+    "unique_written": 288,
+    "mirror_bytes": 805440,
+    "mirror_pct_rdma_payload": 0.1500248908996582,
+    "peak_mirror_direction_mbps_0p5ms": 181.44,
+    "sample_median_ms": 2.684364,
+    "mirror_delay_median_us": 2.004,
+    "mirror_delay_max_us": 2.004,
+    "mirror_sample_error_max_ns": 0,
+    "legacy_without_arrival_stamp_extra_us": 2.004,
+    "epochs_late": {
+      "0": 288
+    },
+    "first_sample_ms": {
+      "147": 5.369981,
+      "327": 5.57
+    },
+    "fct_ms_mean": 27.14218699999982,
+    "fct_ms_max": 30.914044999999835,
+    "first_finish_ms": 23.37166799999979,
+    "fct_ms_by_flow": [
+      26.154922999999997,
+      28.42811199999984,
+      30.914044999999835,
+      23.0716679999996
+    ],
+    "active_epochs_with_samples_8_20ms": 7,
+    "gateway_epochs_8_20ms": 24,
+    "mean_ref_gbps_per_gateway_8_20ms": 102.546556842,
+    "cnp": 406
+  },
+  {
+    "id": 119,
+    "case": "long-slow",
+    "finished": 4,
+    "logged_drops": 0,
+    "events": {
+      "write": 237,
+      "occupied": 13187,
+      "miss": 13424,
+      "mirror_send": 13424,
+      "mirror_sample": 237,
+      "mirror_miss": 13187
+    },
+    "unique_written": 237,
+    "mirror_bytes": 805440,
+    "mirror_pct_rdma_payload": 0.1500248908996582,
+    "peak_mirror_direction_mbps_0p5ms": 181.44,
+    "sample_median_ms": 2.684364,
+    "mirror_delay_median_us": 1200.004,
+    "mirror_delay_max_us": 1200.004,
+    "mirror_sample_error_max_ns": 0,
+    "legacy_without_arrival_stamp_extra_us": 1200.004,
+    "epochs_late": {
+      "1": 199,
+      "2": 38
+    },
+    "first_sample_ms": {
+      "147": 6.567981,
+      "327": 6.768
+    },
+    "fct_ms_mean": 27.50376649999975,
+    "fct_ms_max": 31.000409999999867,
+    "first_finish_ms": 23.731510999999816,
+    "fct_ms_by_flow": [
+      25.45214299999987,
+      30.13100199999963,
+      31.000409999999867,
+      23.431510999999627
+    ],
+    "active_epochs_with_samples_8_20ms": 3,
+    "gateway_epochs_8_20ms": 24,
+    "mean_ref_gbps_per_gateway_8_20ms": 100.72758820333334,
+    "cnp": 420
+  }
+]
