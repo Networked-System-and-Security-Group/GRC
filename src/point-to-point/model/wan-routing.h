@@ -59,6 +59,7 @@ private:
     void HandleAckReceived(Ptr<Packet> p, CustomHeader& ch);
     bool m_gsccFair = false;
     bool m_ackTsMode = false;
+    int m_ackMirrorPort = -1;
 
     /************数据平面延迟检测*********/
     static const inline int rtt_table_size = 64 * 16;

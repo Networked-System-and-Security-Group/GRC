@@ -797,9 +797,11 @@ void SetSPFWanRouting() {
     std::map<uint32_t, std::map<uint32_t, uint64_t>> edges; 
 
     /* DCI 节点 */
-    for (const auto& [as_id, dci_id] : Settings::asId2DciId) {
-        nodes.insert(dci_id);
-        dci_nodes.insert(dci_id);
+    for (const auto& node : nodeInfos) {
+        if (node.node_type == NodeInfo::NodeType::DCI_SWITCH) {
+            nodes.insert(node.id);
+            dci_nodes.insert(node.id);
+        }
     }
 
     /* 普通 WAN 交换机节点 */
@@ -901,6 +903,52 @@ void SetSPFWanRouting() {
     }
 }
 
+map<uint64_t, uint64_t> pinnedWanDelay;
+
+void SetPinnedWanRoutes() {
+    if (!topo_json.contains("pinned_wan_paths")) return;
+    const auto& paths = topo_json.at("pinned_wan_paths");
+    NS_ABORT_MSG_UNLESS(paths.is_array(), "pinned_wan_paths must be an array");
+    for (const auto& entry : paths) {
+        const auto path = entry.get<vector<uint32_t>>();
+        NS_ABORT_MSG_UNLESS(path.size() >= 3, "Pinned WAN path needs at least three nodes");
+        const auto src = path.front();
+        const auto dst = path.back();
+        NS_ABORT_MSG_UNLESS(src < nodeInfos.size() && dst < nodeInfos.size() &&
+                                nodeInfos[src].node_type == NodeInfo::NodeType::HOST &&
+                                nodeInfos[dst].node_type == NodeInfo::NodeType::HOST &&
+                                nodeInfos[src].as_id != nodeInfos[dst].as_id,
+                            "Pinned WAN path must connect hosts in different sites");
+        const auto key = Settings::WanEndpointKey(nodeInfos[src].ip.Get(), nodeInfos[dst].ip.Get());
+        NS_ABORT_MSG_UNLESS(!pinnedWanDelay.count(key), "Duplicate pinned WAN path");
+        std::set<uint32_t> visited;
+        uint64_t delay = 0;
+        for (size_t pos = 0; pos < path.size(); ++pos) {
+            const auto node = path[pos];
+            NS_ABORT_MSG_UNLESS(node < nodeInfos.size() && visited.insert(node).second,
+                                "Invalid or repeated node in pinned WAN path");
+            if (pos == 0) continue;
+            const auto prev = path[pos - 1];
+            auto& neighbors = nbr2if[n.Get(prev)];
+            auto link = neighbors.find(n.Get(node));
+            NS_ABORT_MSG_UNLESS(link != neighbors.end() && link->second.up,
+                                "Pinned WAN path contains a missing link: " << prev << " -> " << node);
+            NS_ABORT_MSG_UNLESS(pos == 1 || nodeInfos[prev].node_type != NodeInfo::NodeType::HOST,
+                                "Pinned WAN path cannot transit a host");
+            if (pos == 1) {
+                NS_ABORT_MSG_UNLESS(neighbors.size() == 1, "Pinned WAN path needs a single-homed source host");
+            } else {
+                Settings::pinnedWanPorts[prev][key] = link->second.idx;
+            }
+            delay += link->second.delay;
+        }
+        pinnedWanDelay.emplace(key, delay);
+    }
+    for (const auto& [key, delay] : pinnedWanDelay) {
+        const auto reverse = Settings::WanEndpointKey(key, key >> 32);
+        NS_ABORT_MSG_UNLESS(pinnedWanDelay.count(reverse), "Pinned WAN path needs its reverse path");
+    }
+}
 
 
 /**
@@ -969,6 +1017,16 @@ void init_nodeinfo_links() {
         // 配置 DCI 交换机
         nodeInfos[dci_switch].basic_config(as_id, dci_switch, NodeInfo::NodeType::DCI_SWITCH);
         Settings::asId2DciId[as_id] = dci_switch;
+        if (as_topo.contains("extra_dci_switches")) {
+            for (const auto& extra : as_topo.at("extra_dci_switches")) {
+                const auto extraId = extra.get<uint32_t>();
+                NS_ABORT_MSG_UNLESS(extraId < nodeInfos.size() &&
+                                        nodeInfos[extraId].node_type == NodeInfo::NodeType::UNCONFIGURED,
+                                    "Invalid extra DCI id " << extraId);
+                nodeInfos[extraId].basic_config(as_id, extraId, NodeInfo::NodeType::DCI_SWITCH);
+                node_num++;
+            }
+        }
 
         // 配置交换机
         for (const auto &sw : as_topo["switches"]) {
@@ -1856,6 +1914,7 @@ int main(int argc, char *argv[]) {
     CalculateRoutes(n);
     SetRoutingEntries();
     SetSPFWanRouting();
+    SetPinnedWanRoutes();
     //init wan_routing
     //for (const auto& routing_entry : topo_json["wan_routing"]) {
     //    int srcSw = routing_entry["srcSw"].get<int>();
@@ -1924,6 +1983,12 @@ int main(int argc, char *argv[]) {
                 uint32_t dci1 = Settings::asId2DciId[as1];
                 uint32_t dci2 = Settings::asId2DciId[as2];
                 uint64_t rtt = (pairDelay[n.Get(i)][n.Get(dci1)] + static_cast<uint64_t>(as_delay[dci1][dci2]) + pairDelay[n.Get(dci2)][n.Get(j)]) * 2;
+                const auto key = Settings::WanEndpointKey(nodeInfos[i].ip.Get(), nodeInfos[j].ip.Get());
+                auto pinned = pinnedWanDelay.find(key);
+                if (pinned != pinnedWanDelay.end()) {
+                    rtt = pinned->second + pinnedWanDelay.at(Settings::WanEndpointKey(
+                                              nodeInfos[j].ip.Get(), nodeInfos[i].ip.Get()));
+                }
                 uint64_t bdp = rtt / 8 * 100;
                 pairBdp[n.Get(i)][n.Get(j)] = bdp;
                 pairBdp[n.Get(j)][n.Get(i)] = bdp;

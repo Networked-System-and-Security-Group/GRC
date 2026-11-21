@@ -432,6 +432,8 @@ void SwitchNode::SendToDevContinue(Ptr<Packet> p, CustomHeader &ch) {
 
 
 int SwitchNode::GetOutDev(Ptr<Packet> p, CustomHeader &ch) {
+    const int pinnedPort = Settings::GetPinnedWanPort(m_id, ch.sip, ch.dip);
+    if (pinnedPort >= 0) return pinnedPort;
     // look up entries
     if (Settings::nodeInfos[m_id].node_type == NodeInfo::NodeType::DC_SWITCH) {
         //如果是DC内的交换机，如果是目的地在同一AS内，直接查找路由表
@@ -542,12 +544,19 @@ void SwitchNode::DoSwitchSend(Ptr<Packet> p, CustomHeader &ch, uint32_t outDev, 
         //此时已经判断完了是否要DROP了
         CheckAndSendPfc(inDev, qIndex);
     }
-    Settings::record_flow_distribution(p, ch, this, outDev);
+    if (Settings::pinnedWanPorts.empty()) {
+        Settings::record_flow_distribution(p, ch, this, outDev);
+    }
     m_devices[outDev]->SwitchSend(qIndex, p, ch);
 }
 
 
 void SwitchNode::SwitchNotifyDequeue(uint32_t ifIndex, uint32_t qIndex, Ptr<Packet> p) {
+    if (!Settings::pinnedWanPorts.empty()) {
+        CustomHeader ch(CustomHeader::L2_Header | CustomHeader::L3_Header | CustomHeader::L4_Header);
+        p->PeekHeader(ch);
+        Settings::record_flow_distribution(p, ch, this, ifIndex);
+    }
     FlowIdTag t;
     p->PeekPacketTag(t);
     if (qIndex != 0) {

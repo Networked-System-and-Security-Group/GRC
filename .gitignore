@@ -28,4 +28,11 @@ Notes.md
 package.json
 package-lock.json
 expr*
+!/expr-1121-multi-gateway-wan/
+/expr-1121-multi-gateway-wan/*
+!/expr-1121-multi-gateway-wan/run.sh
+!/expr-1121-multi-gateway-wan/run.py
+!/expr-1121-multi-gateway-wan/analyze.py
+!/expr-1121-multi-gateway-wan/report.md
+!/expr-1121-ack-mirror/
 venv/*

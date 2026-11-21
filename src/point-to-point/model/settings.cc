@@ -76,6 +76,14 @@ Settings::WanCCMode Settings::wan_cc_mode = Settings::NONE;
 std::map<uint32_t, uint32_t> Settings::hostIp2IdMap;
 std::map<uint32_t, uint32_t> Settings::hostId2IpMap;
 std::unordered_map<uint32_t, uint32_t> Settings::asId2DciId;
+std::map<uint32_t, std::map<uint64_t, uint32_t>> Settings::pinnedWanPorts;
+
+int Settings::GetPinnedWanPort(uint32_t node, uint32_t sip, uint32_t dip) {
+    auto ports = pinnedWanPorts.find(node);
+    if (ports == pinnedWanPorts.end()) return -1;
+    auto port = ports->second.find(WanEndpointKey(sip, dip));
+    return port == ports->second.end() ? -1 : static_cast<int>(port->second);
+}
 std::unordered_map<uint32_t, std::unordered_map<uint32_t, std::vector<int>>> Settings::wan_routing;
 
 /* statistics */
@@ -203,6 +211,7 @@ namespace logfile {
 
     FILE* wan_log = nullptr;
     FILE* rtt_log = nullptr;
+    FILE* rtt_match_log = nullptr;
     FILE* drop_log = nullptr;
     FILE* buffer_monitor = nullptr;
     FILE* rate_monitor = nullptr;
@@ -242,6 +251,10 @@ namespace logfile {
         OPEN_FILE(wan_log);
         OPEN_FILE(rtt_log);
         fprintf(rtt_log, "timestamp_ns,switch_id,dst_as,next_hop,rtt1_ms,measured_rtt_ms,timeout_count\n");
+        if (Settings::GetRawParam("WAN_TRACE_RTT_MATCH", "0") == "1") {
+            OPEN_FILE(rtt_match_log);
+            fprintf(rtt_match_log, "timestamp_ns,switch_id,flow_id,seq,slot,status,sample_ns,bytes,original_arrival_ns,ack_stamp_ns\n");
+        }
         OPEN_FILE(drop_log);
         fprintf(drop_log, "timestamp_ns,switch_id,next_hop,flow_id,seq_num,type\n");
         OPEN_FILE(link_utilization);
@@ -249,7 +262,7 @@ namespace logfile {
         OPEN_FILE(buffer_monitor);
         fprintf(buffer_monitor, "timestamp_ns,switch_id,next_hop,ingress_bytes,egress_bytes\n");
         OPEN_FILE(rate_monitor);
-        fprintf(rate_monitor, "timestamp_ns,src_as,dst_as,real_rate,ref_rate,w,k\n");
+        fprintf(rate_monitor, "timestamp_ns,src_as,dst_as,real_rate,ref_rate,w,k,switch_id\n");
         OPEN_EMPTY_FILE(qp_rate_log);
         fprintf(qp_rate_log, "timestamp_ns,flow_id,rate,alpha,target_rate\n");
         OPEN_FILE(uno_cwnd_log);

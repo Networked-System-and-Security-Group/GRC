@@ -1,0 +1,445 @@
+[
+  {
+    "id": 94,
+    "case": "ack-local",
+    "completed": 4,
+    "flows": 4,
+    "logged_drops": 0,
+    "write": 60,
+    "occupied": 152,
+    "sample": 60,
+    "miss": 152,
+    "not_written": 152,
+    "unconsumed_records": 0,
+    "delay_ms_by_flow": {
+      "0": 2.684364,
+      "1": 2.684364,
+      "2": 2.684384,
+      "3": 2.684384
+    }
+  },
+  {
+    "id": 95,
+    "case": "ack-half",
+    "completed": 4,
+    "flows": 4,
+    "logged_drops": 0,
+    "write": 60,
+    "occupied": 152,
+    "sample": 30,
+    "miss": 182,
+    "not_written": 152,
+    "cross_with_live_record": 30,
+    "unconsumed_records": 30,
+    "delay_ms_by_flow": {
+      "0": 2.684364,
+      "2": 2.684384
+    }
+  },
+  {
+    "id": 96,
+    "case": "ack-cross",
+    "completed": 4,
+    "flows": 4,
+    "logged_drops": 0,
+    "write": 60,
+    "occupied": 152,
+    "miss": 212,
+    "cross_with_live_record": 60,
+    "not_written": 152,
+    "unconsumed_records": 60
+  },
+  {
+    "id": 97,
+    "case": "rate-one",
+    "completed": 8,
+    "flows": 8,
+    "logged_drops": 0,
+    "windows": {
+      "5-15": {
+        "throughput_gbps": 101.43969279999999,
+        "throughput_p10_gbps": 99.5650304,
+        "queue_mean_mib": 0.0,
+        "queue_peak_mib": 0.0,
+        "by_gateway_gbps": {
+          "send 147": 101.6216256
+        }
+      },
+      "22-45": {
+        "throughput_gbps": 130.05114991304345,
+        "throughput_p10_gbps": 115.430912,
+        "queue_mean_mib": 8.328755696614583e-05,
+        "queue_peak_mib": 0.0019989013671875,
+        "by_gateway_gbps": {
+          "send 147": 130.60303582608694
+        }
+      },
+      "60-100": {
+        "throughput_gbps": 155.9233264,
+        "throughput_p10_gbps": 97.14037760000001,
+        "queue_mean_mib": 8.006258150426353,
+        "queue_peak_mib": 32.58708953857422,
+        "by_gateway_gbps": {
+          "send 147": 155.22724479999997
+        }
+      }
+    },
+    "first_finish_ms": 171.82878300000004,
+    "peak_queue_mib": 33.654502868652344
+  },
+  {
+    "id": 98,
+    "case": "rate-two",
+    "completed": 8,
+    "flows": 8,
+    "logged_drops": 0,
+    "windows": {
+      "5-15": {
+        "throughput_gbps": 101.43969279999999,
+        "throughput_p10_gbps": 99.5650304,
+        "queue_mean_mib": 0.0,
+        "queue_peak_mib": 0.0,
+        "by_gateway_gbps": {
+          "send 147": 101.6216256,
+          "send 327": 0.0
+        }
+      },
+      "22-45": {
+        "throughput_gbps": 204.48794713043478,
+        "throughput_p10_gbps": 204.48576,
+        "queue_mean_mib": 19.20436159769694,
+        "queue_peak_mib": 33.353668212890625,
+        "by_gateway_gbps": {
+          "send 147": 108.12589634782607,
+          "send 327": 100.91055304347825
+        }
+      },
+      "60-100": {
+        "throughput_gbps": 190.96006240000003,
+        "throughput_p10_gbps": 160.813504,
+        "queue_mean_mib": 11.782597239424543,
+        "queue_peak_mib": 59.18647003173828,
+        "by_gateway_gbps": {
+          "send 147": 100.04375680000001,
+          "send 327": 103.63776800000001
+        }
+      }
+    },
+    "first_finish_ms": 151.56152200000017,
+    "peak_queue_mib": 59.18647003173828
+  },
+  {
+    "id": 99,
+    "case": "rate-two-dc",
+    "completed": 8,
+    "flows": 8,
+    "logged_drops": 0,
+    "windows": {
+      "5-15": {
+        "throughput_gbps": 101.43969279999999,
+        "throughput_p10_gbps": 99.5650304,
+        "queue_mean_mib": 0.0,
+        "queue_peak_mib": 0.0,
+        "by_gateway_gbps": {
+          "send 147": 101.6216256,
+          "send 184": 0.0
+        }
+      },
+      "22-45": {
+        "throughput_gbps": 204.48794713043478,
+        "throughput_p10_gbps": 204.48576,
+        "queue_mean_mib": 19.061731656392414,
+        "queue_peak_mib": 32.52912139892578,
+        "by_gateway_gbps": {
+          "send 147": 108.15797426086955,
+          "send 184": 101.26814886956521
+        }
+      },
+      "60-100": {
+        "throughput_gbps": 194.8680544,
+        "throughput_p10_gbps": 168.677696,
+        "queue_mean_mib": 15.974585928568025,
+        "queue_peak_mib": 54.00731658935547,
+        "by_gateway_gbps": {
+          "send 147": 101.2854272,
+          "send 184": 102.06388159999999
+        }
+      }
+    },
+    "first_finish_ms": 149.53381999999982,
+    "peak_queue_mib": 54.00731658935547
+  },
+  {
+    "id": 100,
+    "case": "rate-one-weighted",
+    "completed": 8,
+    "flows": 8,
+    "logged_drops": 0,
+    "windows": {
+      "5-15": {
+        "throughput_gbps": 103.54407680000001,
+        "throughput_p10_gbps": 99.5650304,
+        "queue_mean_mib": 0.0,
+        "queue_peak_mib": 0.0,
+        "by_gateway_gbps": {
+          "send 147": 103.94064
+        }
+      },
+      "22-45": {
+        "throughput_gbps": 174.40980034782604,
+        "throughput_p10_gbps": 136.558592,
+        "queue_mean_mib": 1.727134068806966,
+        "queue_peak_mib": 15.748344421386719,
+        "by_gateway_gbps": {
+          "send 147": 181.89452521739128
+        }
+      },
+      "60-100": {
+        "throughput_gbps": 132.88556160000002,
+        "throughput_p10_gbps": 79.8626304,
+        "queue_mean_mib": 11.760853092844894,
+        "queue_peak_mib": 85.87979888916016,
+        "by_gateway_gbps": {
+          "send 147": 114.9333216
+        }
+      }
+    },
+    "first_finish_ms": 164.54308500000002,
+    "peak_queue_mib": 94.18223571777344
+  },
+  {
+    "id": 101,
+    "case": "rate-two-weighted",
+    "completed": 8,
+    "flows": 8,
+    "logged_drops": 0,
+    "windows": {
+      "5-15": {
+        "throughput_gbps": 103.54407680000001,
+        "throughput_p10_gbps": 99.5650304,
+        "queue_mean_mib": 0.0,
+        "queue_peak_mib": 0.0,
+        "by_gateway_gbps": {
+          "send 147": 103.94064,
+          "send 327": 0.0
+        }
+      },
+      "22-45": {
+        "throughput_gbps": 204.48758260869562,
+        "throughput_p10_gbps": 204.48576,
+        "queue_mean_mib": 58.841992696126304,
+        "queue_peak_mib": 86.07569122314453,
+        "by_gateway_gbps": {
+          "send 147": 124.75720069565219,
+          "send 327": 103.59525565217393
+        }
+      },
+      "60-100": {
+        "throughput_gbps": 182.7938368,
+        "throughput_p10_gbps": 129.9788288,
+        "queue_mean_mib": 24.87727821164015,
+        "queue_peak_mib": 115.8573226928711,
+        "by_gateway_gbps": {
+          "send 147": 105.4939856,
+          "send 327": 102.5455424
+        }
+      }
+    },
+    "first_finish_ms": 145.85727700000018,
+    "peak_queue_mib": 122.86347198486328
+  },
+  {
+    "id": 102,
+    "case": "path-both",
+    "completed": 8,
+    "flows": 8,
+    "logged_drops": 0,
+    "peak_queues_mib": {
+      "short queue": 0.0019989013671875,
+      "long queue": 0.0019989013671875,
+      "long second hop queue": 0.0,
+      "destination access queue": 0.00099945068359375,
+      "source access queue": 0.00099945068359375
+    },
+    "first_finish_ms": 133.92779299999978,
+    "windows": {
+      "10-25": {
+        "short RDMA": 56.654041600000006,
+        "long RDMA": 58.21793706666667,
+        "background": 0.0,
+        "short queue": 0.00012493133544921875,
+        "long queue": 6.246566772460938e-05,
+        "long second hop queue": 0.0,
+        "destination access queue": 0.00012493133544921875,
+        "source access queue": 0.0,
+        "ref 36": 114.7764232235,
+        "cnp_to_long_path": 430
+      },
+      "30-42": {
+        "short RDMA": 65.933872,
+        "long RDMA": 64.82858133333333,
+        "background": 0.0,
+        "short queue": 0.00038440410907451925,
+        "long queue": 0.00023064246544471153,
+        "long second hop queue": 0.0,
+        "destination access queue": 0.0,
+        "source access queue": 0.0,
+        "ref 36": 130.69805983507692,
+        "cnp_to_long_path": 315
+      }
+    }
+  },
+  {
+    "id": 103,
+    "case": "path-busy",
+    "completed": 9,
+    "flows": 9,
+    "logged_drops": 0,
+    "peak_queues_mib": {
+      "short queue": 18.719711303710938,
+      "long queue": 0.0019989013671875,
+      "long second hop queue": 0.0,
+      "destination access queue": 0.00099945068359375,
+      "source access queue": 0.0
+    },
+    "first_finish_ms": 57.19994699999997,
+    "windows": {
+      "10-25": {
+        "short RDMA": 56.654041600000006,
+        "long RDMA": 58.21793706666667,
+        "background": 0.0,
+        "short queue": 0.00012493133544921875,
+        "long queue": 6.246566772460938e-05,
+        "long second hop queue": 0.0,
+        "destination access queue": 0.00012493133544921875,
+        "source access queue": 0.0,
+        "ref 36": 114.7764232235,
+        "cnp_to_long_path": 430
+      },
+      "30-42": {
+        "short RDMA": 44.04394666666667,
+        "long RDMA": 40.953744,
+        "background": 56.968581333333326,
+        "short queue": 16.24830040564904,
+        "long queue": 0.0,
+        "long second hop queue": 0.0,
+        "destination access queue": 0.0,
+        "source access queue": 0.0,
+        "ref 36": 85.7146603956923,
+        "cnp_to_long_path": 512
+      }
+    }
+  },
+  {
+    "id": 104,
+    "case": "path-short",
+    "completed": 2,
+    "flows": 2,
+    "logged_drops": 0,
+    "write": 30,
+    "occupied": 76,
+    "sample": 30,
+    "miss": 76,
+    "not_written": 76,
+    "unconsumed_records": 0,
+    "delay_ms_by_flow": {
+      "0": 1.936427,
+      "1": 1.936427
+    },
+    "peak_queues_mib": {
+      "short queue": 0.0,
+      "long queue": 0.0,
+      "long second hop queue": 0.0,
+      "destination access queue": 0.0,
+      "source access queue": 0.0
+    },
+    "first_finish_ms": 4.046719999999837
+  },
+  {
+    "id": 105,
+    "case": "path-long",
+    "completed": 2,
+    "flows": 2,
+    "logged_drops": 0,
+    "write": 30,
+    "occupied": 76,
+    "sample": 30,
+    "miss": 76,
+    "not_written": 76,
+    "unconsumed_records": 0,
+    "delay_ms_by_flow": {
+      "0": 1.936427,
+      "1": 2.47351
+    },
+    "peak_queues_mib": {
+      "short queue": 0.0,
+      "long queue": 0.0,
+      "long second hop queue": 0.0,
+      "destination access queue": 0.0,
+      "source access queue": 0.0
+    },
+    "first_finish_ms": 4.046719999999837
+  },
+  {
+    "id": 106,
+    "case": "path-short-warm",
+    "completed": 2,
+    "flows": 2,
+    "logged_drops": 0,
+    "write": 46,
+    "occupied": 1266,
+    "sample": 46,
+    "miss": 1266,
+    "not_written": 1266,
+    "unconsumed_records": 0,
+    "delay_ms_by_flow": {
+      "0": 1.936427,
+      "1": 1.936427
+    },
+    "peak_queues_mib": {
+      "short queue": 0.0,
+      "long queue": 0.0,
+      "long second hop queue": 0.0,
+      "destination access queue": 0.0,
+      "source access queue": 0.0
+    },
+    "first_finish_ms": 8.131579000000055,
+    "first_probe_update": {
+      "time_ms": 29.0,
+      "estimated_queue_ms": 0.01,
+      "ref_before_gbps": 100.04,
+      "ref_after_gbps": 102.712
+    }
+  },
+  {
+    "id": 107,
+    "case": "path-long-warm",
+    "completed": 2,
+    "flows": 2,
+    "logged_drops": 0,
+    "write": 46,
+    "occupied": 1266,
+    "sample": 46,
+    "miss": 1266,
+    "not_written": 1266,
+    "unconsumed_records": 0,
+    "delay_ms_by_flow": {
+      "0": 1.936427,
+      "1": 2.47351
+    },
+    "peak_queues_mib": {
+      "short queue": 0.0,
+      "long queue": 0.0,
+      "long second hop queue": 0.0,
+      "destination access queue": 0.0,
+      "source access queue": 0.0
+    },
+    "first_finish_ms": 8.131579000000055,
+    "first_probe_update": {
+      "time_ms": 30.0,
+      "estimated_queue_ms": 0.54,
+      "ref_before_gbps": 100.032,
+      "ref_after_gbps": 91.232
+    }
+  }
+]

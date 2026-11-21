@@ -206,6 +206,11 @@ class Settings {
     /* The map between hosts' IP and ID, initial when build topology */
     static std::unordered_map<uint32_t, uint32_t> asId2DciId;
     static std::unordered_map<uint32_t, std::unordered_map<uint32_t, std::vector<int>>> wan_routing;//从某一节点，前往对应as，需要走的下一跳的dev_id候选
+    static std::map<uint32_t, std::map<uint64_t, uint32_t>> pinnedWanPorts;
+    static int GetPinnedWanPort(uint32_t node, uint32_t sip, uint32_t dip);
+    static uint64_t WanEndpointKey(uint32_t sip, uint32_t dip) {
+        return (static_cast<uint64_t>(sip) << 32) | dip;
+    }
     static std::map<uint32_t, uint32_t> hostIp2IdMap;
     static std::map<uint32_t, uint32_t> hostId2IpMap;
     static std::map<uint32_t, std::vector<uint32_t>>TorSwitch_nodelist; //记录每个ToR交换机下的节点 ip列表
@@ -278,6 +283,7 @@ namespace logfile {
     extern FILE* pfc_file;
     extern FILE* wan_log;
     extern FILE* rtt_log;
+    extern FILE* rtt_match_log;
     extern FILE* flow_output;
     extern FILE* drop_log;
     extern FILE* link_utilization;

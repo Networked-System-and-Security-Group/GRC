@@ -1,6 +1,7 @@
 #include "wan-routing.h"
 #include "settings.h"
 #include "ns3/flow-id-num-tag.h"
+#include "ns3/abort.h"
 #include <assert.h>
 #include <inttypes.h>
 #include <ns3/cn-header.h>
@@ -10,6 +11,7 @@
 #include <ns3/qbb-net-device.h>
 
 #include <algorithm>
+#include <string_view>
 #include <cstdlib>
 #include <cmath>
 #include <limits>
@@ -80,6 +82,22 @@ public:
 
 private:
     uint64_t m_timestampNs = 0;
+};
+
+// The paired gateway uses the original arrival time for software RTT samples.
+class AckMirrorArrivalTag : public Tag {
+public:
+    static TypeId GetTypeId() {
+        static TypeId tid = TypeId("ns3::AckMirrorArrivalTag").SetParent<Tag>()
+                                .AddConstructor<AckMirrorArrivalTag>();
+        return tid;
+    }
+    TypeId GetInstanceTypeId() const override { return GetTypeId(); }
+    uint32_t GetSerializedSize() const override { return sizeof(arrivalNs); }
+    void Serialize(TagBuffer buffer) const override { buffer.WriteU64(arrivalNs); }
+    void Deserialize(TagBuffer buffer) override { arrivalNs = buffer.ReadU64(); }
+    void Print(std::ostream& os) const override { os << arrivalNs; }
+    uint64_t arrivalNs = 0;
 };
 
 bool IsEnabledRawParam(const std::string& value) {
@@ -342,6 +360,17 @@ void WanRouting::init() {
         printf("[Info] WanRouting on switch %u enables GSCC_FAIR mode\n", m_switch_id);
     }
     m_ackTsMode = IsEnabledRawParam(Settings::GetRawParam("GSCC_ACK_TS", kGsccAckTsDefault));
+    if (Settings::GetRawParam("WAN_ACK_MIRROR", "0") == "1") {
+        const auto localAs = Settings::nodeInfos[m_switch_id].as_id;
+        const auto& ports = Settings::if2id.at(Settings::nodeContainer.Get(m_switch_id));
+        for (const auto& [port, peer] : ports) {
+            const auto& node = Settings::nodeInfos[peer];
+            if (node.node_type == NodeInfo::NodeType::DCI_SWITCH && node.as_id == localAs) {
+                NS_ABORT_MSG_UNLESS(m_ackMirrorPort < 0, "ACK mirroring requires at most one directly connected peer");
+                m_ackMirrorPort = port;
+            }
+        }
+    }
     LoadRedConfig();
     for (const auto& [dst_as, next_hops] : Settings::wan_routing[m_switch_id]) {
         if (next_hops.empty()) {
@@ -428,7 +457,8 @@ void WanRouting::HandleUdpReceived(Ptr<Packet> p, CustomHeader& ch) {
         m_switchSendToDevCallback(p, ch);
         return;
     }
-    uint32_t out_port = it->second;
+    const int pinnedPort = Settings::GetPinnedWanPort(m_switch_id, ch.sip, ch.dip);
+    uint32_t out_port = pinnedPort >= 0 ? static_cast<uint32_t>(pinnedPort) : it->second;
 
     auto& dc_handler = m_dcHandler.at(dst_as);
     // per-epoch statistics
@@ -438,7 +468,8 @@ void WanRouting::HandleUdpReceived(Ptr<Packet> p, CustomHeader& ch) {
     assert(p->PeekPacketTag(fit));
     bool ack_req = (bool)fit.GetAckReq();
     if (ack_req) {
-        uint32_t hashed_seq = Hash5tupleSeq(ch.sip, ch.dip, ch.udp.sport, ch.udp.dport, ch.udp.pg, ch.udp.seq + p->GetSize() - ch.GetSerializedSize());
+        const uint32_t seq = ch.udp.seq + p->GetSize() - ch.GetSerializedSize();
+        uint32_t hashed_seq = Hash5tupleSeq(ch.sip, ch.dip, ch.udp.sport, ch.udp.dport, ch.udp.pg, seq);
         uint32_t index;
         if (Settings::GetRawParam("ENABLE_2LAYER_HASH", kEnable2LayerHashDefault) == "TRUE") {
             uint32_t flow_hash_value = (Hash5Tuple(ch.sip, ch.dip, ch.udp.sport, ch.udp.dport, ch.udp.pg));
@@ -448,11 +479,13 @@ void WanRouting::HandleUdpReceived(Ptr<Packet> p, CustomHeader& ch) {
         }
         //printf("[%ld]Udp passed, %u->%u, index:%u, hashed_seq:%u\n", 
         //    Simulator::Now().GetNanoSeconds(), cur_as, dst_as, index, hashed_seq);
+        const char* status = "occupied";
         if (rtt_table[index].hashed_seq == hashed_seq) {
             printf("[%ld]Repeated UDP Packet! %u->%u, index:%u, pkt[%u, %u], entry[%x, %ld]\n", 
                 Simulator::Now().GetNanoSeconds(), cur_as, dst_as, index, 
                 Settings::get_flowid(p), ch.udp.seq, hashed_seq, rtt_table[index].timestamp.GetNanoSeconds());
             rtt_table[index].timestamp = Simulator::Now();
+            status = "refresh";
         } else if (Simulator::Now() - rtt_table[index].timestamp > MilliSeconds(30)) {
             if (rtt_table[index].hashed_seq != 0) {
                 printf("[%ld]UDP Packet Timeout! %u->%u, hash:%x\n", 
@@ -461,6 +494,11 @@ void WanRouting::HandleUdpReceived(Ptr<Packet> p, CustomHeader& ch) {
             //printf("111\n")
             rtt_table[index].hashed_seq = hashed_seq;
             rtt_table[index].timestamp = Simulator::Now();
+            status = "write";
+        }
+        if (logfile::rtt_match_log) {
+            fprintf(logfile::rtt_match_log, "%lu,%u,%u,%u,%u,%s,0,0,0,0\n",
+                    Simulator::Now().GetNanoSeconds(), m_switch_id, fit.GetId(), seq, index, status);
         }
     }
     // 更新速率
@@ -491,6 +529,8 @@ void WanRouting::HandleUdpReceived(Ptr<Packet> p, CustomHeader& ch) {
 }
 
 void WanRouting::HandleAckReceived(Ptr<Packet> p, CustomHeader& ch) {
+    AckMirrorArrivalTag mirrorTag;
+    const bool mirrored = p->PeekPacketTag(mirrorTag);
     uint32_t src_as = Settings::nodeInfos[Settings::hostIp2IdMap[ch.sip]].as_id;
     uint32_t cur_as = Settings::nodeInfos[m_switch_id].as_id;
     if (src_as == cur_as) {
@@ -505,13 +545,12 @@ void WanRouting::HandleAckReceived(Ptr<Packet> p, CustomHeader& ch) {
     }
     auto rtIt = m_rtTable.find(src_as);
     if (rtIt == m_rtTable.end()) {
-        m_switchSendToDevCallback(p, ch);
+        if (!mirrored) m_switchSendToDevCallback(p, ch);
         return;
     }
-    uint32_t out_port = rtIt->second;
     auto dcIt = m_dcHandler.find(src_as);
     if (dcIt == m_dcHandler.end()) {
-        m_switchSendToDevCallback(p, ch);
+        if (!mirrored) m_switchSendToDevCallback(p, ch);
         return;
     }
     auto& dcHandler = dcIt->second;
@@ -519,7 +558,9 @@ void WanRouting::HandleAckReceived(Ptr<Packet> p, CustomHeader& ch) {
     // consume the GSCC ACK timestamp tag. Relay DCIs must leave it intact for the terminal.
     const bool is_terminal_dci = (cur_as == Settings::nodeInfos[Settings::hostIp2IdMap[ch.dip]].as_id);
     GSCCAckTag ackTag;
-    const bool hasAckTag = (m_ackTsMode && is_terminal_dci) && p->RemovePacketTag(ackTag);
+    const bool hasAckTag = (m_ackTsMode && is_terminal_dci) && p->PeekPacketTag(ackTag);
+    const auto now = Simulator::Now();
+    const auto originalArrival = mirrored ? NanoSeconds(mirrorTag.arrivalNs) : now;
 
     uint32_t hashed_seq = Hash5tupleSeq(ch.dip, ch.sip, ch.ack.dport, ch.ack.sport, ch.ack.pg, ch.ack.seq);
     uint32_t index;
@@ -531,8 +572,12 @@ void WanRouting::HandleAckReceived(Ptr<Packet> p, CustomHeader& ch) {
     }
     //printf("[%ld]Ack Passed! %u->%u, index:%u, hashed_seq:%u\n", 
     //    Simulator::Now().GetNanoSeconds(), cur_as, src_as, index, hashed_seq);
-    if (rtt_table[index].hashed_seq == hashed_seq) {
-        Time rtt = Simulator::Now() - rtt_table[index].timestamp;
+    const char* status = "miss";
+    Time sample = Seconds(0);
+    const auto written = rtt_table[index].timestamp;
+    if (rtt_table[index].hashed_seq != 0 && rtt_table[index].hashed_seq == hashed_seq &&
+        (!mirrored || (written <= originalArrival && now - written <= MilliSeconds(30)))) {
+        Time rtt = originalArrival - written;
         bool valid_rtt_sample = true;
         if (m_ackTsMode && is_terminal_dci) {
             assert(hasAckTag && ackTag.GetTimestampNs() > 0);
@@ -541,6 +586,8 @@ void WanRouting::HandleAckReceived(Ptr<Packet> p, CustomHeader& ch) {
                 Time one_way_delay = remote_ack_timestamp - rtt_table[index].timestamp;
                 rtt = dcHandler.record_one_way_delay(one_way_delay);
                 valid_rtt_sample = false;
+                status = "sample";
+                sample = one_way_delay;
             } else {
                 printf("[Warn][%ld] GSCCAckTag timestamp is older than source timestamp: switch %u, %u->%u, pkt[%u, %u], tag %lu, entry %ld\n",
                     Simulator::Now().GetNanoSeconds(),
@@ -552,6 +599,7 @@ void WanRouting::HandleAckReceived(Ptr<Packet> p, CustomHeader& ch) {
                     ackTag.GetTimestampNs(),
                     rtt_table[index].timestamp.GetNanoSeconds());
                 valid_rtt_sample = false;
+                status = "invalid";
             }
         }
         if (rtt < MicroSeconds(100)) {
@@ -570,12 +618,38 @@ void WanRouting::HandleAckReceived(Ptr<Packet> p, CustomHeader& ch) {
         }
         if (valid_rtt_sample) {
             dcHandler.record_rtt(rtt);
+            status = "sample";
+            sample = rtt;
         }
         rtt_table[index].timestamp = Seconds(0);
         rtt_table[index].hashed_seq = 0;
     }
-    //dcHandler.record_rtt(flow_hash_value, hashed_seq, src_as == 2 && cur_as == 0);
-    //printf("Switch %u, Seq %u ack passed, bucket:%u, index:%u\n", m_switch_id, ch.ack.seq, flow_hash_value, hashed_seq);
+    const bool sendMirror = is_terminal_dci && !mirrored && m_ackMirrorPort >= 0 &&
+                            std::string_view(status) == "miss";
+    if (logfile::rtt_match_log && is_terminal_dci) {
+        const char* event = status;
+        if (mirrored) {
+            event = std::string_view(status) == "sample" ? "mirror_sample" :
+                    std::string_view(status) == "invalid" ? "mirror_invalid" : "mirror_miss";
+        }
+        fprintf(logfile::rtt_match_log, "%lu,%u,%u,%u,%u,%s,%lu,%u,%lu,%lu\n",
+                now.GetNanoSeconds(), m_switch_id, Settings::get_flowid(p),
+                ch.ack.seq, index, event, sample.GetNanoSeconds(), p->GetSize(),
+                originalArrival.GetNanoSeconds(), ackTag.GetTimestampNs());
+        if (sendMirror) {
+            fprintf(logfile::rtt_match_log, "%lu,%u,%u,%u,%u,mirror_send,0,%u,%lu,%lu\n",
+                    now.GetNanoSeconds(), m_switch_id, Settings::get_flowid(p), ch.ack.seq,
+                    index, p->GetSize(), originalArrival.GetNanoSeconds(), ackTag.GetTimestampNs());
+        }
+    }
+    if (mirrored) return;
+    if (sendMirror) {
+        Ptr<Packet> copy = p->Copy();
+        mirrorTag.arrivalNs = now.GetNanoSeconds();
+        copy->AddPacketTag(mirrorTag);
+        m_switchSendCallback(copy, ch, m_ackMirrorPort, 0);
+    }
+    if (hasAckTag) p->RemovePacketTag(ackTag);
     m_switchSendToDevCallback(p, ch);
 }
 
@@ -645,9 +719,9 @@ void WanRouting::controlplane_logic() {
         }
 
         // Append w and k to rate_monitor so decision data is collocated with rates.
-        fprintf(logfile::rate_monitor, "%lu,%u,%u,%lu,%lu,%.6f,%.9g\n",
+        fprintf(logfile::rate_monitor, "%lu,%u,%u,%lu,%lu,%.6f,%.9g,%u\n",
             Simulator::Now().GetNanoSeconds(), Settings::nodeInfos[m_switch_id].as_id, dst_as,
-            dc_handler.get_normalize_cur_rate(), dc_handler.ref_rate, w_var, k_var);
+            dc_handler.get_normalize_cur_rate(), dc_handler.ref_rate, w_var, k_var, m_switch_id);
 
         // Per-epoch CNP trigger probability log (uses the same prob and w_var)
         fprintf(logfile::cnp_trigger_prob_log, "%lu,%u,%u,%u,%lu,%lu,%.6f,%.6f\n",
