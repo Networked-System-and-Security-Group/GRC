@@ -960,7 +960,9 @@ void WanRouting::DstDCHandler::update_ref_rate() {
     }
 
     // Get target_rate and target_state
-    const double delta = 1.0 / std::stod(Settings::GetRawParam("INV_DELTA", kInvDeltaDefault)); // 1/20MBps
+    const auto globalInvDelta = Settings::GetRawParam("INV_DELTA", kInvDeltaDefault);
+    const double delta = 1.0 / std::stod(Settings::GetRawParam(
+        "INV_DELTA_DCI_" + std::to_string(m_wanRouting->m_switch_id), globalInvDelta));
     const double beta = std::stod(Settings::GetRawParam("BETA", kBetaDefault));
     Time queue_delay = std::max(cur_rtt - min_rtt, MicroSeconds(10));
     int64_t target_rate = static_cast<int64_t>(w / delta / queue_delay.GetSeconds());

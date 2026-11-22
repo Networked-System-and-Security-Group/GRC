@@ -432,6 +432,10 @@ void SwitchNode::SendToDevContinue(Ptr<Packet> p, CustomHeader &ch) {
 
 
 int SwitchNode::GetOutDev(Ptr<Packet> p, CustomHeader &ch) {
+    if (ch.l3Prot == 0xFC) {
+        const int ackPort = Settings::GetPinnedWanAckPort(m_id, ch.sip, ch.dip);
+        if (ackPort >= 0) return ackPort;
+    }
     const int pinnedPort = Settings::GetPinnedWanPort(m_id, ch.sip, ch.dip);
     if (pinnedPort >= 0) return pinnedPort;
     // look up entries

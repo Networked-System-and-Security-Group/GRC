@@ -77,6 +77,14 @@ std::map<uint32_t, uint32_t> Settings::hostIp2IdMap;
 std::map<uint32_t, uint32_t> Settings::hostId2IpMap;
 std::unordered_map<uint32_t, uint32_t> Settings::asId2DciId;
 std::map<uint32_t, std::map<uint64_t, uint32_t>> Settings::pinnedWanPorts;
+std::map<uint32_t, std::map<uint64_t, uint32_t>> Settings::pinnedWanAckPorts;
+
+int Settings::GetPinnedWanAckPort(uint32_t node, uint32_t sip, uint32_t dip) {
+    auto ports = pinnedWanAckPorts.find(node);
+    if (ports == pinnedWanAckPorts.end()) return -1;
+    auto port = ports->second.find(WanEndpointKey(sip, dip));
+    return port == ports->second.end() ? -1 : static_cast<int>(port->second);
+}
 
 int Settings::GetPinnedWanPort(uint32_t node, uint32_t sip, uint32_t dip) {
     auto ports = pinnedWanPorts.find(node);

@@ -951,6 +951,33 @@ void SetPinnedWanRoutes() {
         const auto reverse = Settings::WanEndpointKey(key, key >> 32);
         NS_ABORT_MSG_UNLESS(pinnedWanDelay.count(reverse), "Pinned WAN path needs its reverse path");
     }
+
+    if (!topo_json.contains("pinned_wan_ack_paths")) return;
+    const auto& ackPaths = topo_json.at("pinned_wan_ack_paths");
+    NS_ABORT_MSG_UNLESS(ackPaths.is_array(), "pinned_wan_ack_paths must be an array");
+    for (const auto& entry : ackPaths) {
+        const auto path = entry.get<vector<uint32_t>>();
+        NS_ABORT_MSG_UNLESS(path.size() >= 3 && path.front() < nodeInfos.size() &&
+                            path.back() < nodeInfos.size(), "Invalid pinned ACK path");
+        const auto key = Settings::WanEndpointKey(nodeInfos[path.front()].ip.Get(),
+                                                    nodeInfos[path.back()].ip.Get());
+        NS_ABORT_MSG_UNLESS(pinnedWanDelay.count(key), "ACK path needs a pinned data path");
+        std::set<uint32_t> visited{path.front()};
+        uint64_t delay = 0;
+        for (size_t pos = 1; pos < path.size(); ++pos) {
+            const auto node = path[pos], prev = path[pos - 1];
+            NS_ABORT_MSG_UNLESS(node < nodeInfos.size() && visited.insert(node).second &&
+                                (pos == 1 || nodeInfos[prev].node_type != NodeInfo::NodeType::HOST),
+                                "Invalid ACK path hop");
+            const auto& neighbors = nbr2if[n.Get(prev)];
+            auto link = neighbors.find(n.Get(node));
+            NS_ABORT_MSG_UNLESS(link != neighbors.end() && link->second.up, "Missing ACK path link");
+            delay += link->second.delay;
+            if (pos > 1) NS_ABORT_MSG_UNLESS(Settings::pinnedWanAckPorts[prev].emplace(key, link->second.idx).second,
+                                            "Duplicate ACK path hop");
+        }
+        NS_ABORT_MSG_UNLESS(delay == pinnedWanDelay.at(key), "ACK override must preserve propagation delay");
+    }
 }
 
 

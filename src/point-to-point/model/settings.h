@@ -207,7 +207,9 @@ class Settings {
     static std::unordered_map<uint32_t, uint32_t> asId2DciId;
     static std::unordered_map<uint32_t, std::unordered_map<uint32_t, std::vector<int>>> wan_routing;//从某一节点，前往对应as，需要走的下一跳的dev_id候选
     static std::map<uint32_t, std::map<uint64_t, uint32_t>> pinnedWanPorts;
+    static std::map<uint32_t, std::map<uint64_t, uint32_t>> pinnedWanAckPorts;
     static int GetPinnedWanPort(uint32_t node, uint32_t sip, uint32_t dip);
+    static int GetPinnedWanAckPort(uint32_t node, uint32_t sip, uint32_t dip);
     static uint64_t WanEndpointKey(uint32_t sip, uint32_t dip) {
         return (static_cast<uint64_t>(sip) << 32) | dip;
     }
