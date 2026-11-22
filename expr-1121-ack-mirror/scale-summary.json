@@ -1,0 +1,108 @@
+[
+  {
+    "id": 120,
+    "case": "cross-on",
+    "flows": 27432,
+    "unfinished": 0,
+    "dc3_wan_flows": 1101,
+    "events": {
+      "mirror_miss": 40314,
+      "mirror_sample": 7427,
+      "mirror_send": 47741,
+      "miss": 47741,
+      "occupied": 40319,
+      "refresh": 11,
+      "write": 7427
+    },
+    "original_acks": 47741,
+    "original_ack_bytes": 2864460,
+    "sample_pct_of_ack": 15.556858884397059,
+    "mirror_link_unreceived_copies": 0,
+    "mirror_bytes": 2864460,
+    "dc3_wan_data_bytes_by_gateway": {
+      "147": 1027770189,
+      "327": 950303516
+    },
+    "mirror_pct_of_dc3_wan_data_bytes": 0.14481057974530834,
+    "mirror_peak_mbps_0p5ms_by_sending_gateway": {
+      "147": 312.96,
+      "327": 312.0
+    },
+    "mirror_extra_delay_median_us": 2.004,
+    "mirror_extra_delay_max_us": 2.007,
+    "mirror_samples_crossing_epoch": 15,
+    "active_gateway_destination_epochs": 872,
+    "active_gateway_destination_epochs_with_samples": 629,
+    "dc3_wan_fct_p50_ms": 5.7996740000003655,
+    "dc3_wan_fct_p99_ms": 19.001692000000237
+  },
+  {
+    "id": 121,
+    "case": "cross-off",
+    "flows": 27432,
+    "unfinished": 0,
+    "dc3_wan_flows": 1101,
+    "events": {
+      "miss": 47741,
+      "occupied": 43929,
+      "write": 3812
+    },
+    "original_acks": 47741,
+    "original_ack_bytes": 2864460,
+    "sample_pct_of_ack": 0.0,
+    "mirror_link_unreceived_copies": 0,
+    "mirror_bytes": 0,
+    "dc3_wan_data_bytes_by_gateway": {
+      "147": 1027770189,
+      "327": 949629652
+    },
+    "mirror_pct_of_dc3_wan_data_bytes": 0.0,
+    "mirror_peak_mbps_0p5ms_by_sending_gateway": {
+      "147": 0.0,
+      "327": 0.0
+    },
+    "mirror_extra_delay_median_us": null,
+    "mirror_extra_delay_max_us": null,
+    "mirror_samples_crossing_epoch": 0,
+    "active_gateway_destination_epochs": 851,
+    "active_gateway_destination_epochs_with_samples": 0,
+    "dc3_wan_fct_p50_ms": 5.759743000000039,
+    "dc3_wan_fct_p99_ms": 16.150876000000203
+  },
+  {
+    "id": 122,
+    "case": "same-on",
+    "flows": 27432,
+    "unfinished": 0,
+    "dc3_wan_flows": 1101,
+    "events": {
+      "mirror_miss": 40533,
+      "mirror_send": 40533,
+      "miss": 40533,
+      "occupied": 40533,
+      "sample": 7208,
+      "write": 7208
+    },
+    "original_acks": 47741,
+    "original_ack_bytes": 2864460,
+    "sample_pct_of_ack": 15.098133679646425,
+    "mirror_link_unreceived_copies": 0,
+    "mirror_bytes": 2431980,
+    "dc3_wan_data_bytes_by_gateway": {
+      "147": 1027770189,
+      "327": 949629652
+    },
+    "mirror_pct_of_dc3_wan_data_bytes": 0.12298878302579978,
+    "mirror_peak_mbps_0p5ms_by_sending_gateway": {
+      "147": 289.92,
+      "327": 301.44
+    },
+    "mirror_extra_delay_median_us": null,
+    "mirror_extra_delay_max_us": null,
+    "mirror_samples_crossing_epoch": 0,
+    "active_gateway_destination_epochs": 849,
+    "active_gateway_destination_epochs_with_samples": 605,
+    "dc3_wan_fct_p50_ms": 5.7620339999999715,
+    "dc3_wan_fct_p99_ms": 13.607216000000033
+  }
+]
