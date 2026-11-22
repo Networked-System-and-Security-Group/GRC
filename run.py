@@ -1,6 +1,7 @@
 #!/usr/bin/python3
 # -*- coding: utf-8 -*-
 from genericpath import exists
+from fcntl import flock, LOCK_EX
 import subprocess
 import os
 import time
@@ -210,6 +211,8 @@ def main():
     )
     parser.add_argument('--skip-build', dest='skip_build', type=int, default=0,
                         help="skip ./waf build before running (default: 0)")
+    parser.add_argument('--prepare-only', action='store_true',
+                        help="write the experiment config without launching the simulator")
 
     args = parser.parse_args()
 
@@ -218,16 +221,11 @@ def main():
         if opcode != 0:
             print("Error: Failed to compile")
             sys.exit(opcode)
-    config_index = 0
-    if not os.path.exists('./mix/index.txt'):
-        with open('./mix/index.txt', 'w') as file:
-            file.write('1')
-    with open('./mix/index.txt', 'r+') as file:
-        number = int(file.read().strip())
-        config_index = number
-        number += 1
+    with os.fdopen(os.open('./mix/index.txt', os.O_RDWR | os.O_CREAT, 0o666), 'r+') as file:
+        flock(file, LOCK_EX)
+        config_index = int(file.read().strip() or '1')
         file.seek(0)
-        file.write(str(number))
+        file.write(str(config_index + 1))
         file.truncate()
 
     def _slugify_msg(raw: str) -> str:
@@ -559,6 +557,8 @@ def main():
     if msg:
         with open('mix/history.txt', 'a') as file:
             file.write(f'{config_ID}: {msg}\n')
+    if args.prepare_only:
+        return
     # run program
     print("Running simulation...")
     output_log = config_name.replace(".txt", ".log")
